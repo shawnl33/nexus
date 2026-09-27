@@ -1,0 +1,74 @@
+
+
+Input:곡선예측틱수(Numeric), 곡선하(NumericRef), 곡선상(NumericRef), 곡선예측가격(NumericRef),곡선예측가격_변화(NumericRef), 곡선예측가격_방향(NumericRef);
+Var : 곡선예측X(0);
+
+
+
+Var:n(19),j(0),k(0),X(0),sumXY(0),sumX(0),sumY(0),sumX²(0), MinLRS(0),MinB(0),MinLRL(0),TF(0), sumX2(0);
+ Array:MinClose[100](0);
+
+
+
+
+k = k + 1;
+if DayIndex()%1 == 0 then {
+   for j = 98 downto 0 {
+       MinClose[j+1] = MinClose[j];
+   }
+
+   X = X + 1;
+   k = 0;
+}
+MinClose[0] = (L+H)/2;
+
+#==========================================================================#
+# 선형회귀방정식                                                           #
+#==========================================================================#
+#              n∑xy - (∑x)(∑y)                                          #
+# 기울기 a = ---------------------                                         #
+#                n∑x²- (∑x)²                                           #
+#                                                                          #
+#           = (n*sum(xy) - sum(x) * sum(y)) / (n*sum(x^2)-sum(x)^2)        #
+#                                                                          #
+#              (∑y)(∑x²)-(∑x)(∑xy)                                    #
+# 절편   b = ---------------------------                                   #
+#                n∑x²- (∑x)²                                           #
+#                                                                          #
+#          = (sum(y)*sum(x^2) - sum(x)*sum(xy)) / (n*sum(x^2) - sum(x)^2)  #
+#==========================================================================#
+
+sumXY = 0; sumX = 0; sumY = 0; sumX² = 0;
+
+For j = 0 To n-1 {
+    sumXY = sumXY + (X-j)*MinClose[j];
+    sumX  = sumX  + (X-j);
+    sumY  = sumY  + MinClose[j];
+    sumX²= sumX²+ (X-j)^2;
+}
+
+MinLRS = (n*sumXY - sumX*sumY)/(n*sumX²- sumX^2);     //선형회귀선 기울기 LRS
+MinB   = (sumY*sumX²-sumX*sumXY)/(n*sumX²- sumX^2);  //선형회귀선 절편 B
+
+MinLRL = MinLRS * X + MinB;
+
+
+곡선하 = MinLRL[k+1];
+곡선상 = MinLRL;
+
+곡선예측X = X + 곡선예측틱수;
+곡선예측가격 = MinLRS * 곡선예측X + MinB;
+
+
+
+Var: 이전기울기(0), 기울기변화(0), 변곡여부(0);
+이전기울기 = MinLRS;
+변곡여부 = (MinLRS * 이전기울기)*1000;
+기울기변화 = MinLRS - 이전기울기;
+
+
+곡선예측가격_변화 = Abs(곡선예측가격-곡선하);
+곡선예측가격_방향 = 곡선예측가격-곡선하;
+Value1 = 1;
+
+WSF_Htf_CurvePredict = Value1;
