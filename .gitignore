@@ -1,5 +1,5 @@
 build/
 .env
-.env:Zone.Identifier
+*:Zone.Identifier
 *.user
 .vscode/
