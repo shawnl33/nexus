@@ -25,6 +25,10 @@ vcpkg는 도입하지 않는다. 이 프로젝트는 Windows에서도 MSVC가 �
 |---|---|---|
 | SQLite3 (3.46.1로 검증) | 저장소 어댑터 | WAL, synchronous=FULL |
 | libzmq3-dev | IPC 어댑터 | ROUTER/DEALER + PUB/SUB |
+| libcurl (8.21.0 런타임) | LS 어댑터 | dev 패키지 권장. 미설치 시 `third_party/curl-linux/include`의 헤더 + 시스템 `libcurl.so.4`로 빌드 (deb 추출 경량 경로) |
+
+`third_party/curl-linux/include`는 `libcurl4-openssl-dev_8.21.0-2` deb에서 추출한 헤더다 (sudo 불가 환경의 경량 대응).
+정식 경로는 `sudo apt install libcurl4-openssl-dev` 설치이며, CMake가 시스템 헤더를 우선 사용한다.
 
 ## Windows 독립 MinGW 빌드 절차 (미검증 기록)
 

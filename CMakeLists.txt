@@ -77,6 +77,26 @@ add_library(yyjson STATIC third_party/yyjson/yyjson.c)
 target_include_directories(yyjson PUBLIC third_party/yyjson)
 target_compile_options(yyjson PRIVATE -w) # 서드파티 코드에는 경고 플래그를 적용하지 않는다
 
+# libcurl: 시스템 패키지를 우선 찾고, 없으면 third_party/curl-linux 헤더 + 시스템 런타임을 사용한다
+# (libcurl4-openssl-dev 미설치 환경의 경량 경로. 자세한 결정은 docs/THIRD_PARTY.md).
+find_path(CURL_INCLUDE_DIR NAMES curl/curl.h
+    PATHS /usr/include /usr/include/x86_64-linux-gnu ${CMAKE_SOURCE_DIR}/third_party/curl-linux/include)
+find_library(CURL_LIBRARY NAMES curl libcurl libcurl.so.4
+    PATHS /usr/lib /usr/lib/x86_64-linux-gnu)
+if(CURL_INCLUDE_DIR AND CURL_LIBRARY)
+    add_library(ls STATIC
+        src/adapters/ls/ls_auth.c
+        src/adapters/ls/ls_chart.c
+        src/adapters/ls/ls_http.c
+    )
+    target_link_libraries(ls PUBLIC core yyjson ${CURL_LIBRARY})
+    target_include_directories(ls PUBLIC src ${CURL_INCLUDE_DIR})
+    target_compile_options(ls PRIVATE ${TR_WARNINGS})
+    set(TR_LS_FOUND TRUE)
+else()
+    message(STATUS "libcurl not found: ls 어댑터와 ls 테스트는 건성한다 (미검증 기록)")
+endif()
+
 # IPC 어댑터: ZeroMQ는 시스템 패키지를 사용한다.
 find_library(ZMQ_LIBRARY NAMES zmq libzmq)
 find_path(ZMQ_INCLUDE_DIR NAMES zmq.h)
@@ -150,6 +170,20 @@ if(SQLite3_FOUND)
     target_link_libraries(test_store PRIVATE storage)
     target_compile_options(test_store PRIVATE ${TR_WARNINGS})
     add_test(NAME store COMMAND test_store)
+endif()
+
+if(TR_LS_FOUND)
+    add_executable(test_ls tests/test_ls.c)
+    target_link_libraries(test_ls PRIVATE ls)
+    target_compile_options(test_ls PRIVATE ${TR_WARNINGS})
+    add_test(NAME ls COMMAND test_ls)
+
+    # 라이브 테스트: 실제 키·네트워크 필요. 키가 없으면 77로 skip.
+    add_executable(test_ls_live tests/test_ls_live.c)
+    target_link_libraries(test_ls_live PRIVATE ls)
+    target_compile_options(test_ls_live PRIVATE ${TR_WARNINGS})
+    add_test(NAME ls_live COMMAND test_ls_live)
+    set_tests_properties(ls_live PROPERTIES SKIP_RETURN_CODE 77 LABELS live)
 endif()
 
 if(TR_IPC_FOUND)

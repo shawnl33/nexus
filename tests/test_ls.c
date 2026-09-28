@@ -1,0 +1,107 @@
+/* LS 차트 파서 단위 테스트: 실제 API 응답 캡처 기반 (네트워크 불필요) */
+
+#include "test_util.h"
+
+#include <string.h>
+
+#include "adapters/ls/ls_chart.h"
+#include "adapters/ls/ls_http.h"
+#include "core/model/civil_time.h"
+
+#define CAP 16
+static tr_candle_t g_bars[CAP];
+
+/* 2026-09-28 실제 t8412 응답 캡처 (005930) */
+static const char *STOCK_RESP =
+    "{\"t8412OutBlock\":{\"shcode\":\"005930\",\"cts_date\":\"20260928\",\"cts_time\":\"124400\","
+    "\"s_time\":\"090000\",\"e_time\":\"153000\",\"rec_count\":3},"
+    "\"t8412OutBlock1\":["
+    "{\"date\":\"20260928\",\"time\":\"124500\",\"open\":271750,\"high\":272000,\"low\":271500,\"close\":272000,\"jdiff_vol\":19563,\"value\":5316,\"jongchk\":0,\"rate\":\"0\",\"sign\":\"5\"},"
+    "{\"date\":\"20260928\",\"time\":\"124600\",\"open\":271750,\"high\":272500,\"low\":271500,\"close\":272250,\"jdiff_vol\":72715,\"value\":19777,\"jongchk\":0,\"rate\":\"0\",\"sign\":\"5\"},"
+    "{\"date\":\"20260928\",\"time\":\"124700\",\"open\":272250,\"high\":272500,\"low\":272000,\"close\":272250,\"jdiff_vol\":4269,\"value\":1162,\"jongchk\":0,\"rate\":\"0\",\"sign\":\"5\"}],"
+    "\"rsp_cd\":\"00000\",\"rsp_msg\":\"정상적으로 조회가 완료되었습니다.\"}";
+
+/* 실제 t8465 응답 캡처 (A016C000, 가격이 문자열) */
+static const char *FUT_RESP =
+    "{\"t8465OutBlock\":{\"shcode\":\"A016C000\",\"cts_date\":\"20260928\",\"cts_time\":\"124600\","
+    "\"s_time\":\"084500\",\"e_time\":\"154500\",\"rec_count\":2},"
+    "\"t8465OutBlock1\":["
+    "{\"date\":\"20260928\",\"time\":\"124700\",\"open\":\"1093.90\",\"high\":\"1094.35\",\"low\":\"1093.65\",\"close\":\"1094.00\",\"jdiff_vol\":137,\"value\":37471,\"openyak\":136315},"
+    "{\"date\":\"20260928\",\"time\":\"124800\",\"open\":\"1094.05\",\"high\":\"1095.20\",\"low\":\"1093.75\",\"close\":\"1095.05\",\"jdiff_vol\":279,\"value\":76360,\"openyak\":136295}],"
+    "\"rsp_cd\":\"00000\",\"rsp_msg\":\"정상적으로 조회가 완료되었습니다.\"}";
+
+static const char *EMPTY_RESP = "{\"rsp_cd\":\"00000\",\"rsp_msg\":\"해당자료가 없습니다.\"}";
+
+static void test_stock_parse(void) {
+    ls_chart_page_t page;
+    char err[128] = {0};
+    int rc = ls_chart_parse_page(STOCK_RESP, strlen(STOCK_RESP), LS_CHART_STOCK_MIN,
+                                 1, 7, 60, g_bars, CAP, &page, err, sizeof(err));
+    TR_CHECK(rc == LS_HTTP_OK);
+    TR_CHECK(page.count == 3);
+    TR_CHECK(page.has_more);
+    TR_CHECK(strcmp(page.cts_date, "20260928") == 0);
+    TR_CHECK(strcmp(page.cts_time, "124400") == 0);
+    TR_CHECK(page.session_open_min == 540 && page.session_close_min == 930);
+
+    /* 오름차순 정렬 확인 */
+    TR_CHECK(g_bars[0].open_time_us < g_bars[1].open_time_us);
+    TR_CHECK(g_bars[1].open_time_us < g_bars[2].open_time_us);
+
+    /* 2026-09-28 12:45 KST = 03:45 UTC */
+    tr_civil_t c = {2026, 9, 28, 3, 45, 0};
+    tr_time_us_t expect;
+    tr_time_us_from_civil(&c, 0, &expect);
+    TR_CHECK(g_bars[0].open_time_us == expect);
+    TR_CHECK(g_bars[0].open == 27175000); /* ×100 스케일 */
+    TR_CHECK(g_bars[0].close == 27200000);
+    TR_CHECK(g_bars[0].volume == 19563);
+    TR_CHECK(g_bars[0].state == TR_CANDLE_CLOSED);
+    TR_CHECK(g_bars[0].source_id == 7);
+}
+
+static void test_futures_string_prices(void) {
+    ls_chart_page_t page;
+    char err[128] = {0};
+    int rc = ls_chart_parse_page(FUT_RESP, strlen(FUT_RESP), LS_CHART_FUT_MIN,
+                                 2, 7, 60, g_bars, CAP, &page, err, sizeof(err));
+    TR_CHECK(rc == LS_HTTP_OK);
+    TR_CHECK(page.count == 2);
+    /* 선물 가격 문자열 "1093.90" → 109390 (×100) */
+    TR_CHECK(g_bars[0].open == 109390);
+    TR_CHECK(g_bars[0].high == 109435);
+    TR_CHECK(g_bars[0].low == 109365);
+    TR_CHECK(g_bars[0].close == 109400);
+    TR_CHECK(page.session_open_min == 8 * 60 + 45);
+    TR_CHECK(page.session_close_min == 15 * 60 + 45);
+}
+
+static void test_empty_is_not_error(void) {
+    ls_chart_page_t page;
+    char err[128] = {0};
+    int rc = ls_chart_parse_page(EMPTY_RESP, strlen(EMPTY_RESP), LS_CHART_STOCK_MIN,
+                                 1, 7, 60, g_bars, CAP, &page, err, sizeof(err));
+    TR_CHECK(rc == LS_CHART_EMPTY);
+    TR_CHECK(page.count == 0);
+}
+
+static void test_duplicate_detected(void) {
+    const char *dup =
+        "{\"t8412OutBlock\":{\"cts_date\":\"\",\"cts_time\":\"\",\"s_time\":\"090000\",\"e_time\":\"153000\"},"
+        "\"t8412OutBlock1\":["
+        "{\"date\":\"20260928\",\"time\":\"124500\",\"open\":1,\"high\":1,\"low\":1,\"close\":1,\"jdiff_vol\":1},"
+        "{\"date\":\"20260928\",\"time\":\"124500\",\"open\":1,\"high\":1,\"low\":1,\"close\":1,\"jdiff_vol\":1}]}";
+    ls_chart_page_t page;
+    char err[128] = {0};
+    int rc = ls_chart_parse_page(dup, strlen(dup), LS_CHART_STOCK_MIN,
+                                 1, 7, 60, g_bars, CAP, &page, err, sizeof(err));
+    TR_CHECK(rc == LS_HTTP_PARSE_ERR);
+}
+
+int main(void) {
+    test_stock_parse();
+    test_futures_string_prices();
+    test_empty_is_not_error();
+    test_duplicate_detected();
+    TR_TEST_SUMMARY();
+}
