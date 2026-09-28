@@ -34,8 +34,15 @@
 
 ## 바로 다음 작업
 
-- 단계 3: 기본 지표와 미래곡선의 독립 계산부 (지표 API, 원본 의존성별 구현)
+- 단계 3: 기본 지표와 미래곡선의 독립 계산부 — [docs/yeslanguage_mapping.md](docs/yeslanguage_mapping.md) §5 포팅 단위 순서로 구현 (회귀 유틸 → Htf → V4 → 호가 V2 → 신형 V3)
 - 병행 가능: 단계 6의 LS 읽기 전용 사전 확인 (토큰 발급, TR 매핑 문서화) — `.env`의 키 사용
+
+## 완료된 분석
+
+- YesLanguage 원본 6개 전수 분석 완료: [docs/yeslanguage_mapping.md](docs/yeslanguage_mapping.md)
+  - 호출 그래프, 함수별 계약(인자/상태/출력/워밍업), P01~P06 갱신, 미제공 함수 영향, 포팅 단위 제안
+  - 핵심 확인: V3 7인자 호출 vs 19인자 정의 불일치(메인은 구형 V3+외부 V4 체계), Htf `%1` 항상 참, 방향 출력은 수치, 점수에서 방향 0은 −2 분기
+  - 원본 8개 해시 전부 SOURCE_INDEX와 일치
 
 ## 차단·미결 사항
 
