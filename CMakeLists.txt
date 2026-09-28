@@ -58,8 +58,8 @@ target_include_directories(history PUBLIC src)
 target_compile_options(history PRIVATE ${TR_WARNINGS})
 
 # 저장소 어댑터: SQLite는 시스템 패키지를 사용한다.
-# (계획서 §2는 vcpkg 우선이나 현재 환경에 vcpkg가 없어 시스템 패키지로 진행.
-#  libzmq 도입 시점에 vcpkg 전환을 재검토한다 — PROJECT_STATE 기록.)
+# (의존성 관리 결정: vcpkg는 도입하지 않는다. Linux는 시스템 패키지,
+#  Windows 독립 MinGW는 소형 라이브러리 벤더 + 중형은 소스 빌드 — PROJECT_STATE 기록.)
 find_package(SQLite3 QUIET)
 if(SQLite3_FOUND)
     add_library(storage STATIC
@@ -70,6 +70,27 @@ if(SQLite3_FOUND)
     target_compile_options(storage PRIVATE ${TR_WARNINGS})
 else()
     message(STATUS "SQLite3 not found: storage 어댑터와 store 테스트는 건성한다 (미검증 기록)")
+endif()
+
+# yyjson 벤더 (MIT, third_party/yyjson, 버전은 docs/THIRD_PARTY.md).
+add_library(yyjson STATIC third_party/yyjson/yyjson.c)
+target_include_directories(yyjson PUBLIC third_party/yyjson)
+target_compile_options(yyjson PRIVATE -w) # 서드파티 코드에는 경고 플래그를 적용하지 않는다
+
+# IPC 어댑터: ZeroMQ는 시스템 패키지를 사용한다.
+find_library(ZMQ_LIBRARY NAMES zmq libzmq)
+find_path(ZMQ_INCLUDE_DIR NAMES zmq.h)
+if(ZMQ_LIBRARY AND ZMQ_INCLUDE_DIR)
+    add_library(ipc STATIC
+        src/adapters/ipc/ipc.c
+        src/adapters/ipc/ipc_msg.c
+    )
+    target_link_libraries(ipc PUBLIC core yyjson ${ZMQ_LIBRARY})
+    target_include_directories(ipc PUBLIC src ${ZMQ_INCLUDE_DIR})
+    target_compile_options(ipc PRIVATE ${TR_WARNINGS})
+    set(TR_IPC_FOUND TRUE)
+else()
+    message(STATUS "libzmq not found: ipc 어댑터와 ipc 테스트는 건성한다 (미검증 기록)")
 endif()
 
 add_executable(trading-engine
@@ -100,4 +121,11 @@ if(SQLite3_FOUND)
     target_link_libraries(test_store PRIVATE storage)
     target_compile_options(test_store PRIVATE ${TR_WARNINGS})
     add_test(NAME store COMMAND test_store)
+endif()
+
+if(TR_IPC_FOUND)
+    add_executable(test_ipc tests/test_ipc.c)
+    target_link_libraries(test_ipc PRIVATE ipc)
+    target_compile_options(test_ipc PRIVATE ${TR_WARNINGS})
+    add_test(NAME ipc COMMAND test_ipc)
 endif()

@@ -50,9 +50,10 @@
 ## 바로 다음 작업
 
 - 단계 4 진행 중:
-  - 저장소 어댑터(SQLite) ✅ — adapters/storage: 마이그레이션, instruments/candles/orders/order_events/fills/commands, 체결 트랜잭션, 명령 중복 검사. 시스템 SQLite 3.46.1 사용 (vcpkg 미설치로 시스템 패키지 선택, §2 기록)
-  - IPC(ZeroMQ ROUTER/DEALER + PUB/SUB) — **차단: libzmq 미설치**. 사용자가 `sudo apt install libzmq3-dev` 실행 필요 (또는 vcpkg 도입 결정)
-  - CLI(traderctl) — IPC 이후
+  - 저장소 어댑터(SQLite) ✅ — adapters/storage: 마이그레이션, instruments/candles/orders/order_events/fills/commands, 체결 트랜잭션, 명령 중복 검사
+  - IPC 어댑터(ZeroMQ) ✅ — adapters/ipc: ROUTER/DEALER 명령 + PUB/SUB 상태, JSON 계약(int64 문자열, 크기 상한, 버전 거절), 명령 결과 구분(accepted/applied/rejected), 순번 추적(GAP/RESTART), yyjson 0.10.0 벤더
+  - CLI(traderctl) — 다음 작업
+- 의존성 관리: vcpkg 도입 안 함 (MinGW 사용으로 이점 없음). Linux 시스템 패키지 + Windows 소스 빌드 — docs/THIRD_PARTY.md
 - 병행 가능: 단계 6 LS 읽기 사전 확인
 
 ## 차단·미결 사항
