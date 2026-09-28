@@ -92,25 +92,32 @@ function applyStatus(msg) {
   }
 }
 
-// 과거 봉 시딩: PUB/SUB는 과거 메시지를 보존하지 않으므로 접속 시 스냅샷을 가져온다
+// 과거 봉 시딩: PUB/SUB는 과거 메시지를 보존하지 않으므로 접속 시 스냅샷을 가져온다.
+// 링 전체(최대 2일치)를 페이지로 나눠 가져와 합친다.
 async function seedChart() {
   try {
-    const res = await fetch("/api/chart");
-    if (!res.ok) return;
-    const data = await res.json();
-    const rows = data.payload?.bars ?? [];
-    if (rows.length === 0) return;
-    if (typeof data.payload.generation === "number" && data.payload.generation > generation) {
-      generation = data.payload.generation;
+    const all = [];
+    let back = 0;
+    for (let pages = 0; pages < 16; pages++) {
+      const res = await fetch(`/api/chart?back_index=${back}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const p = data.payload ?? {};
+      if (typeof p.generation === "number" && p.generation > generation) {
+        generation = p.generation;
+      }
+      for (const [t, o, h, l, c] of p.bars ?? []) {
+        all.push({ time: Number(t) / 1e6, open: o, high: h, low: l, close: c });
+      }
+      if (!p.next_back_index) break;
+      back = p.next_back_index;
     }
+    if (all.length === 0) return;
+    all.sort((a, b) => a.time - b.time);
+    const dedup = all.filter((b, i) => i === 0 || b.time !== all[i - 1].time);
     bars.clear();
-    const seeded = [];
-    for (const [t, o, h, l, c] of rows) {
-      const bar = { time: Number(t) / 1e6, open: o, high: h, low: l, close: c };
-      bars.set(bar.time, bar);
-      seeded.push(bar);
-    }
-    candleSeries.setData(seeded);
+    for (const b of dedup) bars.set(b.time, b);
+    candleSeries.setData(dedup);
     regSeries.setData([]);
     predSeries.setData([]);
   } catch { /* 시딩 실패는 라이브 스트림으로 진행 */ }

@@ -50,7 +50,7 @@ static uint64_t make_engine_instance_id(void) {
 #endif
 }
 
-#define BB_CAP 512
+#define BB_CAP 2560 /* 2일치 1분봉(선물 주간+야간 2,130) + 라이브 여유 */
 static tr_candle_t g_bb_storage[BB_CAP];
 static double g_score_mid[64];
 
@@ -81,26 +81,59 @@ typedef struct {
     bool is_fut;
 } live_ctx_t;
 
-static tr_candle_t g_hist[256];
+static tr_candle_t g_hist[2208]; /* 2일치(선물 2,130) + 페이지 경계 여유 */
+#define HIST_CAP ((size_t)(sizeof(g_hist) / sizeof(g_hist[0])))
+#define BACKFILL_PAGE_BARS 500 /* 비압축 qrycnt 상한 (t8465 명세) */
+#define BACKFILL_STOCK_BARS 1440 /* NXT 720봉 × 2일 */
+#define BACKFILL_FUT_BARS 2130   /* (주간 405 + 야간 660) × 2일 */
 
-/* 워밍업 백필: 최근 1분봉(실제 OHLC)을 조회해 봉 자체로 주입한다.
+/* 워밍업 백필: 최근 1분봉(실제 OHLC)을 2일치 조회해 봉 자체로 주입한다.
  * (틱 근사 재생을 쓰지 않는다 — 봉 낶부 틱 경로는 알 수 없지만 OHLC·거래량은 실측값이다.
  * 호가 지표는 과거 호가가 없어 라이브부터 워밍업된다)
+ * 페이지는 최신→과거 순으로 오므로, 전부 모은 뒤 과거 페이지부터 주입한다.
  * 성공 시 주입한 봉 수, 실패 시 -1. */
 static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, const char *shcode, bool is_fut) {
-    ls_chart_page_t page;
-    char cerr[128] = {0};
-    int rc = ls_chart_fetch_minute(auth, is_fut ? LS_CHART_FUT_MIN : LS_CHART_STOCK_MIN,
-                                   shcode, 1, 120, "99999999", " ", " ",
-                                   eng->cfg.instrument_id, 2, g_hist, 256, &page, cerr, sizeof(cerr));
-    if (rc != LS_HTTP_OK || page.count == 0) {
-        fprintf(stderr, "backfill unavailable rc=%d: %s (continuing live only)\n", rc, cerr);
-        return -1;
+    size_t target = is_fut ? BACKFILL_FUT_BARS : BACKFILL_STOCK_BARS;
+    size_t total = 0;
+    size_t page_start[8];
+    int pages = 0;
+    char cont_date[9] = "99999999"; /* 첫 페이지 */
+    char cont_time[11] = " ";
+    for (size_t pg = 0; pg < 8 && total < target; pg++) {
+        ls_chart_page_t page;
+        char cerr[128] = {0};
+        /* 연속 조회: 이전 페이지 cts 값을 edate/etime으로 옮겨 다음(더 과거) 페이지를 얻는다 */
+        int rc = ls_chart_fetch_minute(auth, is_fut ? LS_CHART_FUT_MIN : LS_CHART_STOCK_MIN,
+                                       shcode, 1, BACKFILL_PAGE_BARS, cont_date, cont_time, " ", " ",
+                                       eng->cfg.instrument_id, 2, g_hist + total, HIST_CAP - total,
+                                       &page, cerr, sizeof(cerr));
+        if (rc == LS_CHART_EMPTY) {
+            break;
+        }
+        if (rc != LS_HTTP_OK) {
+            fprintf(stderr, "backfill page %zu failed rc=%d: %s\n", pg, rc, cerr);
+            break;
+        }
+        if (page.count == 0) {
+            break;
+        }
+        page_start[pages++] = total;
+        total += page.count;
+        if (!page.has_more) {
+            break;
+        }
+        snprintf(cont_date, sizeof(cont_date), "%s", page.cts_date);
+        snprintf(cont_time, sizeof(cont_time), "%s", page.cts_time);
     }
+    /* 과거 페이지(마지막)부터 주입해 시간 오름차순을 지킨다 */
     int injected = 0;
-    for (size_t i = 0; i < page.count; i++) {
-        if (tr_engine_inject_bar(eng, &g_hist[i])) {
-            injected++;
+    for (int pg = pages; pg-- > 0;) {
+        size_t begin = page_start[pg];
+        size_t end = (pg + 1 < pages) ? page_start[pg + 1] : total;
+        for (size_t i = begin; i < end; i++) {
+            if (tr_engine_inject_bar(eng, &g_hist[i])) {
+                injected++;
+            }
         }
     }
     return injected;
@@ -214,16 +247,34 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
 
     if (strstr(p, "\"type\":\"chart.snapshot\"") != 0) {
         /* 늦게 접속한 대시보드의 과거 봉 시딩용. PUB/SUB는 과거 메시지를 보존하지 않으므로
-         * 엔진의 봉 링에서 최근 봉을 직접 돌려준다 (최대 300개, 오름차순). */
+         * 엔진의 봉 링에서 직접 돌려준다. data.back_index(최신 기준 건너뜀, 기본 0)로
+         * 페이지를 나누고, 이어지면 next_back_index != 0 을 돌려준다 (페이지당 300봉, 오름차순). */
         static char buf[48 * 1024];
         tr_engine_t *eng = g_live_ctx.engine;
+        long back_index = 0;
+        yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
+        if (doc != 0) {
+            yyjson_val *data = yyjson_obj_get(yyjson_doc_get_root(doc), "data");
+            yyjson_val *bv = data != 0 ? yyjson_obj_get(data, "back_index") : 0;
+            if (yyjson_is_num(bv)) {
+                back_index = (long)yyjson_get_num(bv);
+            }
+            yyjson_doc_free(doc);
+        }
+        if (back_index < 0) {
+            back_index = 0;
+        }
         size_t n = tr_ring_count(&eng->bb.bars);
-        size_t take = n < 300 ? n : 300;
+        size_t from = (size_t)back_index;
+        size_t remain = from < n ? n - from : 0;
+        size_t take = remain < 300 ? remain : 300;
+        size_t next = from + take < n ? from + take : 0;
         int off = snprintf(buf, sizeof(buf),
-                           "{\"shcode\":\"%s\",\"generation\":%u,\"timeframe_sec\":%u,\"bars\":[",
-                           g_live_ctx.shcode, eng->generation, (unsigned)eng->cfg.timeframe_sec);
+                           "{\"shcode\":\"%s\",\"generation\":%u,\"timeframe_sec\":%u,\"total\":%zu,"
+                           "\"next_back_index\":%zu,\"bars\":[",
+                           g_live_ctx.shcode, eng->generation, (unsigned)eng->cfg.timeframe_sec, n, next);
         bool first = true;
-        for (size_t k = take; k-- > 0 && off < (int)sizeof(buf) - 96;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 96;) {
             tr_candle_t c;
             tr_ring_at(&eng->bb.bars, k, &c);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%lld,%lld,%lld,%lld,%lld,%lld]",

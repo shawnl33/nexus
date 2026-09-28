@@ -1,3 +1,7 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 199309L /* clock_gettime/nanosleep (throttle_1tps) */
+#endif
+
 #include "adapters/ls/ls_chart.h"
 
 #include <stdio.h>
@@ -11,6 +15,41 @@
 #include "yyjson.h"
 
 #define KST_OFFSET_MIN 540
+
+/* 차트 TR은 초당 1건(1 TPS) 제한 — 연속 조회 시 서버가 HTTP 500으로 거절한다 (2026-09-28 실측).
+ * 요청 간 최소 간격을 여기서 강제한다 (헤더 주석의 계약 구현). */
+static int64_t g_last_req_us[2];
+
+static int64_t mono_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
+}
+
+static void sleep_us(int64_t us) {
+#ifdef _WIN32
+    Sleep((DWORD)(us / 1000));
+#else
+    struct timespec w;
+    w.tv_sec = (time_t)(us / 1000000);
+    w.tv_nsec = (long)(us % 1000000) * 1000L;
+    nanosleep(&w, 0);
+#endif
+}
+
+static void throttle_1tps(ls_chart_kind_t kind) {
+    if (kind < 0 || kind > LS_CHART_FUT_MIN) {
+        return;
+    }
+    int64_t now = mono_us();
+    int64_t last = g_last_req_us[kind];
+    const int64_t min_gap_us = 1100000; /* 1 TPS + 10% 여유 */
+    if (last != 0 && now - last < min_gap_us) {
+        sleep_us(min_gap_us - (now - last));
+        now = mono_us();
+    }
+    g_last_req_us[kind] = now;
+}
 
 static const char *path_for(ls_chart_kind_t kind) {
     switch (kind) {
@@ -169,7 +208,7 @@ int ls_chart_parse_page(const char *body, size_t body_len, ls_chart_kind_t kind,
 }
 
 int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shcode,
-                          int32_t ncnt, int32_t qrycnt, const char *edate,
+                          int32_t ncnt, int32_t qrycnt, const char *edate, const char *etime,
                           const char *cts_date, const char *cts_time,
                           uint64_t instrument_id, uint64_t source_id,
                           tr_candle_t *out, size_t out_cap, ls_chart_page_t *page,
@@ -185,12 +224,15 @@ int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shc
 
     const char *inblock = tr_for(kind);
     char body[1024];
+    /* 연속 조회는 InBlock cts가 아니라 edate/etime을 이전 페이지 cts 값으로 옮기는
+     * 방식만 서버가 받아들인다 (2026-09-28 t8465 실측, docs/ls_api_mapping.md §3) */
     snprintf(body, sizeof(body),
         "{\"%sInBlock\":{\"shcode\":\"%s\",\"ncnt\":%d,\"qrycnt\":%d,"
-        "\"nday\":\"0\",\"sdate\":\" \",\"stime\":\" \",\"edate\":\"%s\",\"etime\":\" \","
+        "\"nday\":\"0\",\"sdate\":\" \",\"stime\":\" \",\"edate\":\"%s\",\"etime\":\"%s\","
         "\"cts_date\":\"%s\",\"cts_time\":\"%s\",\"comp_yn\":\"N\"}}",
         inblock, shcode, (int)ncnt, (int)qrycnt,
-        edate != 0 && edate[0] != 0 ? edate : "99999999",
+        edate != 0 && edate[0] > ' ' ? edate : "99999999",
+        etime != 0 && etime[0] > ' ' ? etime : " ",
         cts_date != 0 && cts_date[0] > ' ' ? cts_date : " ",
         cts_time != 0 && cts_time[0] > ' ' ? cts_time : " ");
 
@@ -202,6 +244,7 @@ int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shc
     req.body_json = body;
     req.timeout_ms = 10000;
 
+    throttle_1tps(kind);
     ls_http_resp_t resp;
     ls_http_rc_t rc = ls_http_post(&req, &resp);
     if (rc != LS_HTTP_OK) {

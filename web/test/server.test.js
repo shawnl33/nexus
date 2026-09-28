@@ -35,12 +35,27 @@ before(async () => {
             echo_q: req.payload.data?.q ?? "",
           }
         : req.payload?.type === "chart.snapshot"
-          ? {
-              shcode: "005930",
-              generation: 3,
-              timeframe_sec: 60,
-              bars: [[1704153600000000, 100, 110, 90, 105, 42], [1704153660000000, 105, 106, 101, 102, 40]],
-            }
+          ? (() => {
+              const back = req.payload.data?.back_index ?? 0;
+              if (back === 0) {
+                return {
+                  shcode: "005930",
+                  generation: 3,
+                  timeframe_sec: 60,
+                  total: 3,
+                  next_back_index: 2,
+                  bars: [[1704153660000000, 105, 106, 101, 102, 40], [1704153720000000, 102, 108, 100, 107, 41]],
+                };
+              }
+              return {
+                shcode: "005930",
+                generation: 3,
+                timeframe_sec: 60,
+                total: 3,
+                next_back_index: 0,
+                bars: [[1704153600000000, 100, 110, 90, 105, 42]],
+              };
+            })()
           : { mode: "replay", state: "ok" };
       const reply = {
         protocol_version: 1,
@@ -111,13 +126,20 @@ test("GET /api/market rejects overlong query", async () => {
   assert.equal(res.status, 400);
 });
 
-test("GET /api/chart proxies engine bar snapshot", async () => {
-  const res = await fetch(`${base}/api/chart`);
+test("GET /api/chart proxies engine bar snapshot with pagination", async () => {
+  let res = await fetch(`${base}/api/chart?back_index=0`);
   assert.equal(res.status, 200);
-  const data = await res.json();
+  let data = await res.json();
   assert.equal(data.payload.shcode, "005930");
   assert.equal(data.payload.bars.length, 2);
+  assert.equal(data.payload.next_back_index, 2);
+
+  res = await fetch(`${base}/api/chart?back_index=2`);
+  assert.equal(res.status, 200);
+  data = await res.json();
+  assert.equal(data.payload.bars.length, 1);
   assert.equal(data.payload.bars[0][4], 105);
+  assert.equal(data.payload.next_back_index, 0);
 });
 
 test("workspace save/load/list/delete with token", async () => {

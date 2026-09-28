@@ -168,8 +168,9 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && path === "/api/chart") {
-      // 읽기 전용: 늦은 접속자의 과거 봉 스냅샷 (엔진 봉 링 프록시)
-      const reply = await engineCommand(`dash-chart-${reqSeq}`, "chart.snapshot", null);
+      // 읽기 전용: 늦은 접속자의 과거 봉 스냅샷 (엔진 봉 링 프록시, back_index로 페이지네이션)
+      const backIndex = Math.min(Math.max(Number(url.searchParams.get("back_index")) || 0, 0), 1e6);
+      const reply = await engineCommand(`dash-chart-${reqSeq}`, "chart.snapshot", JSON.stringify({ back_index: backIndex }));
       const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
       return json(res, code, reply);
     }

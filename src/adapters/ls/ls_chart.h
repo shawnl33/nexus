@@ -35,7 +35,7 @@ typedef struct {
 #define LS_CHART_EMPTY 100
 
 int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shcode,
-                          int32_t ncnt, int32_t qrycnt, const char *edate,
+                          int32_t ncnt, int32_t qrycnt, const char *edate, const char *etime,
                           const char *cts_date, const char *cts_time,
                           uint64_t instrument_id, uint64_t source_id,
                           tr_candle_t *out, size_t out_cap, ls_chart_page_t *page,

@@ -32,7 +32,7 @@ int main(void) {
     ls_chart_page_t page;
     char err[128] = {0};
 
-    int rc = ls_chart_fetch_minute(&auth, LS_CHART_STOCK_MIN, "005930", 1, 3, "99999999",
+    int rc = ls_chart_fetch_minute(&auth, LS_CHART_STOCK_MIN, "005930", 1, 3, "99999999", " ",
                                    " ", " ", 1, 7, g_bars, CAP, &page, err, sizeof(err));
     if (rc != LS_HTTP_OK) {
         fprintf(stderr, "stock chart failed rc=%d: %s\n", rc, err);
@@ -45,7 +45,7 @@ int main(void) {
         return 1;
     }
 
-    rc = ls_chart_fetch_minute(&auth, LS_CHART_FUT_MIN, "A016C000", 1, 3, "99999999",
+    rc = ls_chart_fetch_minute(&auth, LS_CHART_FUT_MIN, "A016C000", 1, 3, "99999999", " ",
                                " ", " ", 2, 7, g_bars, CAP, &page, err, sizeof(err));
     if (rc != LS_HTTP_OK) {
         fprintf(stderr, "futures chart failed rc=%d: %s\n", rc, err);
