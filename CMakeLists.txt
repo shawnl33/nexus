@@ -57,6 +57,21 @@ target_link_libraries(history PUBLIC core)
 target_include_directories(history PUBLIC src)
 target_compile_options(history PRIVATE ${TR_WARNINGS})
 
+# 저장소 어댑터: SQLite는 시스템 패키지를 사용한다.
+# (계획서 §2는 vcpkg 우선이나 현재 환경에 vcpkg가 없어 시스템 패키지로 진행.
+#  libzmq 도입 시점에 vcpkg 전환을 재검토한다 — PROJECT_STATE 기록.)
+find_package(SQLite3 QUIET)
+if(SQLite3_FOUND)
+    add_library(storage STATIC
+        src/adapters/storage/store.c
+    )
+    target_link_libraries(storage PUBLIC core SQLite::SQLite3)
+    target_include_directories(storage PUBLIC src)
+    target_compile_options(storage PRIVATE ${TR_WARNINGS})
+else()
+    message(STATUS "SQLite3 not found: storage 어댑터와 store 테스트는 건성한다 (미검증 기록)")
+endif()
+
 add_executable(trading-engine
     src/app/main.c
 )
@@ -79,3 +94,10 @@ add_executable(test_replay tests/test_replay.c)
 target_link_libraries(test_replay PRIVATE history)
 target_compile_options(test_replay PRIVATE ${TR_WARNINGS})
 add_test(NAME replay COMMAND test_replay)
+
+if(SQLite3_FOUND)
+    add_executable(test_store tests/test_store.c)
+    target_link_libraries(test_store PRIVATE storage)
+    target_compile_options(test_store PRIVATE ${TR_WARNINGS})
+    add_test(NAME store COMMAND test_store)
+endif()

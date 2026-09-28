@@ -49,9 +49,11 @@
 
 ## 바로 다음 작업
 
-- 단계 4: 저장소·기록·IPC·CLI
-- 병행 가능: 단계 6 LS 읽기 사전 확인 (ATR 산식·Bids/Asks 범위 등 '불명' 해소에도 필요)
-- 미제공 원본 잔여: **없음** (전 함수 제공·포팅 완료). 공식 매뉴얼(YLHelp.pdf)로 ATR=TR 단순이평·Bids/Asks=매수/매도잔량·DayIndex 정의 확정. 남은 것: LS 실제 TR 필드 매핑(단계 6), HTS 기준 출력 비교 자료(선택)
+- 단계 4 진행 중:
+  - 저장소 어댑터(SQLite) ✅ — adapters/storage: 마이그레이션, instruments/candles/orders/order_events/fills/commands, 체결 트랜잭션, 명령 중복 검사. 시스템 SQLite 3.46.1 사용 (vcpkg 미설치로 시스템 패키지 선택, §2 기록)
+  - IPC(ZeroMQ ROUTER/DEALER + PUB/SUB) — **차단: libzmq 미설치**. 사용자가 `sudo apt install libzmq3-dev` 실행 필요 (또는 vcpkg 도입 결정)
+  - CLI(traderctl) — IPC 이후
+- 병행 가능: 단계 6 LS 읽기 사전 확인
 
 ## 차단·미결 사항
 
