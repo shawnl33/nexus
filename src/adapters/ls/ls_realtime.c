@@ -121,7 +121,8 @@ bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id
     out->recv_time_us = recv_time_us;
 
     if (strcmp(out->tr_cd, "S3_") == 0 || strcmp(out->tr_cd, "K3_") == 0 ||
-        strcmp(out->tr_cd, "FC9") == 0 || strcmp(out->tr_cd, "US3") == 0) {
+        strcmp(out->tr_cd, "FC9") == 0 || strcmp(out->tr_cd, "DC0") == 0 ||
+        strcmp(out->tr_cd, "US3") == 0) {
         out->kind = LS_RT_TICK;
         out->price = parse_price(yyjson_obj_get(b, "price"));
         out->qty = parse_i64(yyjson_obj_get(b, "cvolume"));
@@ -154,7 +155,7 @@ bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id
             out->level_count = i;
         }
     } else if (strcmp(out->tr_cd, "H1_") == 0 || strcmp(out->tr_cd, "HA_") == 0 ||
-               strcmp(out->tr_cd, "FH9") == 0) {
+               strcmp(out->tr_cd, "FH9") == 0 || strcmp(out->tr_cd, "DH0") == 0) {
         out->kind = LS_RT_ORDERBOOK;
         out->event_time_us = parse_chetime(yyjson_obj_get(b, "hotime"), recv_time_us);
         /* 실제 필드명(2026-09-28 H1_ 실측): totbidrem=총매수잔량, totofferrem=총매도잔량.

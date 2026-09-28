@@ -85,6 +85,35 @@ static void test_parse_uh1_orderbook(void) {
     TR_CHECK(ev.levels[5].price == 27300000);
 }
 
+static void test_parse_dc0_night_fut_tick(void) {
+    /* KRX야간파생 체결: price/cvolume/chetime은 FC9와 같은 이름 (공식 명세, 2026-09-28 실측) */
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"DC0\",\"tr_key\":\"A016C000\"},"
+        "\"body\":{\"date\":\"20260928\",\"price\":\"1087.15\",\"cvolume\":\"1\",\"chetime\":\"201505\"}}";
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 7, 1790567100000000LL, &ev));
+    TR_CHECK(ev.kind == LS_RT_TICK);
+    TR_CHECK(ev.price == 108715);
+    TR_CHECK(ev.qty == 1);
+    TR_CHECK(strcmp(ev.tr_cd, "DC0") == 0);
+}
+
+static void test_parse_dh0_night_fut_orderbook(void) {
+    /* KRX야간파생 호가: 총잔량 totbidrem/totofferrem (H1_과 같은 이름, 공식 명세) */
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"DH0\",\"tr_key\":\"A016C000\"},"
+        "\"body\":{\"hotime\":\"201505\",\"totbidrem\":\"1234\",\"totofferrem\":\"987\","
+        "\"bidho1\":\"1087.00\",\"bidrem1\":\"10\",\"offerho1\":\"1087.15\",\"offerrem1\":\"5\"}}";
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 7, 1790567100000000LL, &ev));
+    TR_CHECK(ev.kind == LS_RT_ORDERBOOK);
+    TR_CHECK(ev.bid_total == 1234);
+    TR_CHECK(ev.ask_total == 987);
+    TR_CHECK(ev.level_count == 1);
+    TR_CHECK(ev.levels[0].price == 108700);
+    TR_CHECK(ev.levels[5].price == 108715);
+}
+
 static void test_parse_rejects(void) {
     ls_rt_event_t ev;
     TR_CHECK(!tr_ls_rt_parse_message("{broken", 7, 1, 0, &ev));
@@ -97,8 +126,10 @@ int main(void) {
     test_parse_s3_tick();
     test_parse_fut_tick();
     test_parse_us3_tick();
+    test_parse_dc0_night_fut_tick();
     test_parse_orderbook();
     test_parse_uh1_orderbook();
+    test_parse_dh0_night_fut_orderbook();
     test_parse_rejects();
     TR_TEST_SUMMARY();
 }

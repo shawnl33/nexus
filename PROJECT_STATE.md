@@ -18,7 +18,7 @@
 - **runtime/engine**: 틱→봉→지표→상태 스트림, `trading-engine --replay FILE [--replay-delay MS]`
 - **web/** (Node 24, ES Modules): WS 브리지, 차트(lightweight-charts), 화면틀 CRUD·인증, npm test 5개
 - **adapters/ls** (libcurl): OAuth 토큰 발급·자동 갱신, t8412/t8465 1분봉 조회·정규화, .env 백업 로딩(환경변수 우선)
-- **adapters/ls** (libwebsockets 4.3.5 정적): 실시간 구독 S3_/H1_/FC9/FH9, 틱·호가 정규화,
+- **adapters/ls** (libwebsockets 4.3.5 정적): 실시간 구독 S3_/H1_/FC9/FH9/DC0/DH0(야간선물), 틱·호가 정규화,
   재연결 백오프·재인증·재구독, 입력 큐 상한·포화 카운트
 - **종목 레지스트리** (t8436+t8467 마스터): 유형 판별·검색(ls_master_search), market.instruments 명령(q/limit)
 - **대시보드 종목 검색**: GET /api/market 프록시 + 헤더 검색 드롭다운(코드 접두사/종목명 부분 일치, 클릭 전환)
@@ -51,10 +51,11 @@
 - ~~정적 libwebsockets 간헐 정지~~ — **해결(2026-09-28)**: 근본 원인은 lws 4.3.5가 lws_service의
   timeout 인자를 무시하는 upstream 동작(양수이면 23일로 강제, lib/plat/unix/unix-service.c).
   tr_ls_rt_service가 호출마다 wake sul을 걸어 poll 대기 상한을 보장하도록 수정
-- **엔진 live 틱 유실 — 조사 중(2026-09-28)**: 15:45 이후 모든 --live 실행에서 구독 ACK(정상처리)와
-  TCP 수신(6.3KB/s, 서버가 스트리밍 중)은 확인되나 콜백→큐→발행 체인에 데이터가 도달하지 않음.
-  같은 어댑터의 test_ls_rt_live는 같은 시각 틱 수신 성공(19:52). 명령 채널은 정상(20ms).
-  원인 후보: 2채널(S3_+H1_) 동시 구독 상호작용, sul 수정과 엔진 루프 상호작용.
-  LS_RT_DEBUG=1로 프레임 카운트 계측 추가됨. 다음 세션(08:00 NXT/09:00 정규장)에 계측 검증 예정
+- **엔진 live 틱 유실 — 해결(2026-09-28)**: 근본 원인은 세션 정책이 정규장(09:00~15:30/15:45)만
+  열어둬서 NXT·야간선물 틱이 전부 '세션 밖'으로 걸러진 것. lws·채널·계정 문제가 아니었다.
+  세션 확장(주식 08:00~20:00 NXT, 선물 08:45~익일05:00 야간장)으로 해결. 야간선물 실측 검증 완료
+  (DC0/DH0 구독, 40초에 상태 16건, 호가 점수 정상)
 - ATR 산식은 YLHelp.pdf 공식 매뉴얼로 확정(SMA of TR). Bids/Asks 단계는 LS 필드로 매핑 예정
+- 선물 채널은 시각으로 선택(주간 FC9/FH9, 야간 DC0/DH0) — 세션 경계 자동 재구독은 미지원
+  (기동·market select 시 재평가). 주식 정규장 시간대 S3_ 검증은 다음 정규장에 재확인 예정
 - US3/UH1(통합) 채널은 구독 ACK되나 데이터 무수신 — 주식은 S3_/H1_ 유지 (NXT 체결도 S3_로 수신 실측)

@@ -62,9 +62,12 @@ static void on_signal(int sig) {
     g_stop = 1;
 }
 
-/* 세션 정책: 주식 KRX 09:00~15:30, 코스피200선물 08:45~15:45 (t8465 OutBlock s_time/e_time 확인) */
-static const tr_session_policy_t SESS_STOCK = {540, 540, 930, TR_SESSION_WEEKDAYS};
-static const tr_session_policy_t SESS_FUT = {540, 525, 945, TR_SESSION_WEEKDAYS};
+/* 세션 정책: 주식은 NXT 운영 시간(08:00~20:00) 전체를 받는다 (KRX 정규장 포함).
+ * 선물은 주간 08:45~15:45 + 야간 18:00~익일 05:00 — 사이 공백(15:45~18:00)은 데이터가
+ * 없어 무해하므로 익일 폐장 야간장 세션 하나로 표현한다 (close <= open 이면 익일 폐장).
+ * 좁은 세션(정규장만)을 쓰면 NXT·야간 틱이 세션 밖으로 버려진다 (2026-09-28 유실 사건). */
+static const tr_session_policy_t SESS_STOCK = {540, 480, 1200, TR_SESSION_WEEKDAYS};
+static const tr_session_policy_t SESS_FUT = {540, 525, 300, TR_SESSION_WEEKDAYS};
 
 /* live 모드 명령 컨텍스트 */
 typedef struct {
@@ -72,6 +75,8 @@ typedef struct {
     tr_engine_t *engine;
     tr_ls_master_t *master;
     char shcode[16];
+    char tick_cd[4]; /* 실제 구독 중인 채널 (해지 시 그대로 사용) */
+    char ob_cd[4];
     bool is_fut;
 } live_ctx_t;
 
@@ -85,6 +90,26 @@ static uint64_t instrument_id_of(const char *shcode) {
         h *= 1099511628211ULL;
     }
     return h != 0 ? h : 1;
+}
+
+/* 선물 실시간 채널: 주간 FC9/FH9, 야간(KRX야간파생 18:00~05:00) DC0/DH0
+ * (docs/ls_api_mapping.md §4). 현재 시각(KST)으로 고른다.
+ * 세션 경계 자동 재구독은 미지원 — 기동·market select 시점에 재평가된다. */
+static void fut_rt_channels(const char **tick_cd, const char **ob_cd) {
+    long kst_sec = (long)((time(0) + 9 * 3600) % 86400);
+    int day = kst_sec >= 5 * 3600 && kst_sec < 15 * 3600 + 45 * 60;
+    *tick_cd = day ? "FC9" : "DC0";
+    *ob_cd = day ? "FH9" : "DH0";
+}
+
+/* 종목 유형별 실시간 채널 선택 */
+static void rt_channels_for(bool is_fut, const char **tick_cd, const char **ob_cd) {
+    if (is_fut) {
+        fut_rt_channels(tick_cd, ob_cd);
+    } else {
+        *tick_cd = "S3_";
+        *ob_cd = "H1_";
+    }
 }
 
 /* 종목 유형 판별: 마스터 레지스트리 우선, 없으면 코드 길이 추정(폐기 예정 경고) */
@@ -134,19 +159,19 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         live_ctx_t *lc = &g_live_ctx;
 
         /* 이전 구독 해지 → 새 구독 (전략 거래 대상과 무관한 화면 상태 변경) */
-        const char *old_tick = lc->is_fut ? "FC9" : "S3_";
-        const char *old_ob = lc->is_fut ? "FH9" : "H1_";
-        tr_ls_rt_unsubscribe(lc->rt, old_tick, lc->shcode);
-        tr_ls_rt_unsubscribe(lc->rt, old_ob, lc->shcode);
+        tr_ls_rt_unsubscribe(lc->rt, lc->tick_cd, lc->shcode);
+        tr_ls_rt_unsubscribe(lc->rt, lc->ob_cd, lc->shcode);
 
         uint64_t new_id = instrument_id_of(new_code);
-        const char *new_tick = new_fut ? "FC9" : "S3_";
-        const char *new_ob = new_fut ? "FH9" : "H1_";
+        const char *new_tick, *new_ob;
+        rt_channels_for(new_fut, &new_tick, &new_ob);
         tr_ls_rt_subscribe(lc->rt, new_tick, new_code, new_id);
         tr_ls_rt_subscribe(lc->rt, new_ob, new_code, new_id);
 
         tr_engine_select_symbol(lc->engine, new_id, new_fut);
         snprintf(lc->shcode, sizeof(lc->shcode), "%s", new_code);
+        snprintf(lc->tick_cd, sizeof(lc->tick_cd), "%s", new_tick);
+        snprintf(lc->ob_cd, sizeof(lc->ob_cd), "%s", new_ob);
         lc->is_fut = new_fut;
 
         snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u}",
@@ -318,9 +343,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         tr_ipc_close(ipc);
         return 3;
     }
-    /* 주식은 S3_/H1_ 구독 — 실측상 NXT 시간외 체결도 이 채널로 날아온다 (docs/ls_api_mapping.md §4) */
-    const char *tr_cd = is_fut ? "FC9" : "S3_";
-    const char *ob_tr_cd = is_fut ? "FH9" : "H1_";
+    /* 주식은 S3_/H1_, 선물은 주간 FC9/FH9·야간 DC0/DH0을 현재 시각으로 고른다 */
+    const char *tr_cd, *ob_tr_cd;
+    rt_channels_for(is_fut, &tr_cd, &ob_tr_cd);
     if (!tr_ls_rt_subscribe(rt, tr_cd, shcode, ecfg.instrument_id) ||
         !tr_ls_rt_subscribe(rt, ob_tr_cd, shcode, ecfg.instrument_id)) {
         fprintf(stderr, "error: subscribe failed\n");
@@ -335,6 +360,8 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     g_running = 1;
     g_stop = 0;
     snprintf(g_live_ctx.shcode, sizeof(g_live_ctx.shcode), "%s", shcode);
+    snprintf(g_live_ctx.tick_cd, sizeof(g_live_ctx.tick_cd), "%s", tr_cd);
+    snprintf(g_live_ctx.ob_cd, sizeof(g_live_ctx.ob_cd), "%s", ob_tr_cd);
     g_live_ctx.is_fut = is_fut;
     g_live_ctx.rt = rt;
     g_live_ctx.engine = &engine;
