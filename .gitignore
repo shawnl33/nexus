@@ -7,3 +7,4 @@ web/.runtime/
 *:Zone.Identifier
 *.user
 .vscode/
+*.deb
