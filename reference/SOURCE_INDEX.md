@@ -19,6 +19,18 @@
 | `미래곡선그리기.html` | [mirae_curve_demo.html](explanations/mirae_curve_demo.html) | 57327 | 설명용 근사 재현, HTS 기준 출력 아님 |
 | `미래곡선그리기_코드엑스레이.html` | [mirae_curve_code_xray.html](explanations/mirae_curve_code_xray.html) | 177457 | 설명용 근사 재현, HTS 기준 출력 아님 |
 
+2026-09-28 추가 제공 (기존 미제공 함수 7종):
+
+| 원래 파일명 | 묶음 내 위치 | 바이트 | 용도 |
+|---|---|---:|---|
+| `WSF_Mtf_LinRegV3_구형.txt` | [WSF_Mtf_LinRegV3_구형.txt](yeslanguage/WSF_Mtf_LinRegV3_구형.txt) | 4971 | 메인이 호출하는 7인자 구형 V3 |
+| `WSF_1m_DailyAlignV2.txt` | [WSF_1m_DailyAlignV2.txt](yeslanguage/WSF_1m_DailyAlignV2.txt) | 4771 | 일봉 정렬·최종 운영 상태 |
+| `WSF_1m_DailyTrendLinkV1.txt` | [WSF_1m_DailyTrendLinkV1.txt](yeslanguage/WSF_1m_DailyTrendLinkV1.txt) | 4535 | 1분봉-일봉 추세 연결 |
+| `WSF_GapRegimeV1.txt` | [WSF_GapRegimeV1.txt](yeslanguage/WSF_GapRegimeV1.txt) | 4626 | 갭 상태·일봉 가중 |
+| `WSF_OrderBookDirectionV1.txt` | [WSF_OrderBookDirectionV1.txt](yeslanguage/WSF_OrderBookDirectionV1.txt) | 5242 | 호가 기반 지표 V1 |
+| `WSF_AutoSessionADXV1.txt` | [WSF_AutoSessionADXV1.txt](yeslanguage/WSF_AutoSessionADXV1.txt) | 3552 | 세션 ADX |
+| `WSF_DailyMarketProfileV1.txt` | [WSF_DailyMarketProfileV1.txt](yeslanguage/WSF_DailyMarketProfileV1.txt) | 1600 | 일봉 이상 마켓 프로파일 |
+
 ## SHA-256
 
 | 묶음 내 파일 | SHA-256 |
@@ -31,3 +43,10 @@
 | `reference/yeslanguage/WSF_Htf_CurvePredict.txt` | `aede9596fb7760766cb639315e52462968c661a310bf8015c6328502b94912a5` |
 | `reference/explanations/mirae_curve_demo.html` | `f0d35c7068aed72f9306c56d6a35f9fb7fdca09f2b40f3a28bd6fdeb950ef493` |
 | `reference/explanations/mirae_curve_code_xray.html` | `12bbec9ba1503b28b4ea0448841c538f1dc060cc304c15fa111b4e5c93e398c0` |
+| `reference/yeslanguage/WSF_Mtf_LinRegV3_구형.txt` | `97a55256d9867c65bdd7d4abca5ff24793bfdb9ee62164d83afcc0916b8d5a77` |
+| `reference/yeslanguage/WSF_1m_DailyAlignV2.txt` | `94caff2c23a9c9dc05670234f6e741f774e2fa0223a257ba18717a72ca72c30a` |
+| `reference/yeslanguage/WSF_1m_DailyTrendLinkV1.txt` | `a3490108f8bcb791254da315785552b032aaa7e6ca1beee1adf56bf2bf818e57` |
+| `reference/yeslanguage/WSF_GapRegimeV1.txt` | `c057ce345f66fe01c7a09096a26a3071f3d3738c179cda72f0f4f49ac1e96716` |
+| `reference/yeslanguage/WSF_OrderBookDirectionV1.txt` | `e0a0371797588da90a9492edcf7b5b7bd4fdee94f530dcfe7939fec3dc1fe19b` |
+| `reference/yeslanguage/WSF_AutoSessionADXV1.txt` | `4b5eed6903d0fdb12f85a86c70984868e76c086e96b3426d3b4ec7991fda3279` |
+| `reference/yeslanguage/WSF_DailyMarketProfileV1.txt` | `a0127e49e016db69120cb64117a0ebfae8f45e99f9201ed172a6a0707369368b` |

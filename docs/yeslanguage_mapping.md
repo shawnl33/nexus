@@ -107,16 +107,13 @@ WSF_MiraeCurve1mFullOutputV1 (계산 분리 함수, 69 OUT)
 
 ## 4. 미제공 함수와 영향 (MISSING_DEPENDENCY 대상)
 
-| 함수 | 인자(호출부 기준) | 하류 영향 | 초기 1분봉 범위와의 관계 |
-|---|---|---|---|
-| WSF_AutoSessionADXV1 | 5 (값1+ref4) | 없음 (죽은 체인) | 제외 가능 |
-| WSF_DailyMarketProfileV1 | 6 (값2+ref4) | 비1분봉 Plot51–55 | 분리 가능 (계획서 §10.2) |
-| WSF_OrderBookDirectionV1 | 7 (값3+ref4) | 호가 관성 게이트 → 회귀기본방향 | 출력은 MISSING_DEPENDENCY |
-| WSF_1m_DailyTrendLinkV1 | 10 (값2+ref8) | DailyAlignV2 상류 | 출력은 MISSING_DEPENDENCY |
-| WSF_GapRegimeV1 | 9 (값3+ref6) | DailyAlignV2 게이트 | 출력은 MISSING_DEPENDENCY |
-| WSF_1m_DailyAlignV2 | 21~22 (값14~15+ref7) | 운영최종방향/상태 → 매매상태·기억선 | 출력은 MISSING_DEPENDENCY |
+2026-09-28 추가 제공으로 기존 6종은 해소됐다 (§6-1). 현재 남은 미제공 함수:
 
-DailyAlignV2는 메인 21인자, FullOutput 22인자로 호출부끼리도 불일치 — 낶부 로직 불명, 매매상태·기억선의 직접 상류이므로 **임의 재작성 금지**.
+| 함수 | 인자(호출부 기준) | 하류 영향 | 처리 |
+|---|---|---|---|
+| WSF_Daily_LinRegTrendV1 | 11 (DailyTrendLinkV1:135–147) | 일봉추세방향/상태/강도/유효 → DailyAlignV2 상류 | 원본 제공 전까지 해당 출력군만 MISSING_DEPENDENCY. DailyTrendLinkV1의 집계·회귀 출력(회귀선/기울기/신뢰도/잔차)은 포팅 가능 |
+
+DailyAlignV2 인자 수는 이전 기록(메인 21 vs FullOutput 22 불일치)이 **오보**로 정정됐다: 양쪽 호출부 모두 정의와 같은 22인자다 (§6-1).
 
 ## 5. 포팅 단위 제안 (독립 계산부 우선, 단계 3)
 
@@ -138,12 +135,26 @@ DailyAlignV2는 메인 21인자, FullOutput 22인자로 호출부끼리도 불�
 - 호가·회귀 상태는 일자/세션 경계 리셋 — bar_builder의 세션 이벤트와 연결.
 - R²를 확률로 표시하지 않음, 방향 수치를 열거로 바꾸지 않음 (계획서 §10.3).
 
+## 6-1. 2026-09-28 추가 제공 7종 분석 결과
+
+| 함수 | 결론 | 포팅 판정 |
+|---|---|---|
+| WSF_Mtf_LinRegV3_구형 (7인자) | 회귀 코어가 신형과 **바이트 단위 동일**, V4 호출 없음. P01 완전 해소 — 기존 `linreg_v3` 포팅의 회귀 6종 출력이 구형과 동치 확인 (차이 기록: 절편 연산 순서 ulp, 새 봉 판정 sTime 해상도 불명) | 기존 포팅으로 충분 (V4 비활성 모드 추가로 구형 호출 패턴 재현 가능) |
+| WSF_1m_DailyAlignV2 (22인자) | **호출부 불일치 오보 정정: 메인·FullOutput 모두 22인자로 정의와 일치**. Stateless(무상태) 합의 함수. 수식 전부 확보. 미사용 입력 1개(일봉추세상태입력) | 포팅 가능 |
+| WSF_1m_DailyTrendLinkV1 (10인자) | 자체 세션 집계로 완성 일봉 생성 + (고+저)/2 회귀 + 1봉 투영까지 제공. **단 하위 함수 `WSF_Daily_LinRegTrendV1`(11인자)가 미제공 — 추세방향/상태/강도/유효 계산식 불명** | 집계·회귀부만 포팅, 추세 판정부는 MISSING_DEPENDENCY |
+| WSF_GapRegimeV1 (9인자) | 수식 전부 확보. 첫 인자 = `변동기간입력`(평균TR 산출 완성 세션 수, 5~10 클램프). 갭비율=\|당일시가−직전완성종가\|/평균TR, 등급 0/1/2 → 비중 1.0/0.5/0.0, 경과분 = TimeToMinutes(stime)−세션시작 | 포팅 가능 (stime 분 변환 필요) |
+| WSF_OrderBookDirectionV1 (7인자) | **V2와 함수명 대입 1줄만 다르고 로직 완전 동일**. P05 해소 | 별도 포팅 불필요 — `obd2` 구현 재사용, 단 V1/V2 호출 경로는 별도 인스턴스 |
+| WSF_AutoSessionADXV1 (5인자) | Wilder 방식 ADX/+DI/−DI 완전한 수식. 1분봉이면 일자 변경 시 리셋. 워밍업 기간×2봉. 호출 체인은 여전히 죽은 코드(출력 미사용) | 포팅 가능 (우선순위 낮음) |
+| WSF_DailyMarketProfileV1 (6인자) | VWAP(대표가격 (H+L+C)/3, 거래량 가중) + 가중 모집단 표준편차. 세션 앵커링·봉 수 하한 없음. 누적거래량>0이 유효 조건 | 포팅 가능 |
+
+**신규 MISSING_DEPENDENCY 1종**: `WSF_Daily_LinRegTrendV1` (11인자) — DailyTrendLinkV1의 추세 판정 하위 함수. 원본 추가 제공 필요.
+
 ## 7. 불명 사항 (원본 추가·실행 확인 필요)
 
-1. 구형 7인자 WSF_Mtf_LinRegV3 정의 — 미제공.
-2. 미제공 6종 함수 낶부 로직·워밍업 — 특히 DailyAlignV2의 합의·강도 산정.
+1. ~~구형 7인자 WSF_Mtf_LinRegV3 정의~~ → 해소 (§6-1)
+2. ~~미제공 6종 함수 낶부 로직~~ → 6종 해소, 잔여: `WSF_Daily_LinRegTrendV1` 1종
 3. 내장 ATR(14) 산식·시딩, 차트 초기 봉의 `[n]` 평가값.
 4. Bids/Asks의 호가 단계 범위, CodeCategory 값 체계(4=선물 외).
-5. YesLanguage 내장 값 의미: DataCompress(분봉=2 추정), BarInterval, Index(0-base 추정), PriceScale.
-6. GapRegimeV1 첫 인자 리터럴 10의 의미.
+5. YesLanguage 내장 값 의미: DataCompress(분봉=2, V3 43줄 주석으로 확인), BarInterval, Index(0-base 추정), PriceScale, stime 포맷(HHMM 추정, GapRegimeV1 주석).
+6. ~~GapRegimeV1 첫 인자 리터럴 10의 의미~~ → 해소 (변동기간)
 7. 무효 봉에서의 var 이월 규약(호가 V2 평균 계산에 영향).
