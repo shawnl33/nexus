@@ -7,10 +7,34 @@ const WS_URL = `ws://${location.host}/ws`;
 const bars = new Map(); // time(sec) → candle
 let generation = 0;     // 종목 전환 시 올려 늦은 응답을 폐기 (계획서 §18)
 
+// 거래소 시간은 항상 KST(UTC+9, 서머타임 없음) — 라이브러리 기본 UTC 표시를 KST로 맞춘다
+const KST_OFFSET_SEC = 9 * 3600;
+function kstParts(timeSec) {
+  const d = new Date((Number(timeSec) + KST_OFFSET_SEC) * 1000);
+  return { y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate(), hh: d.getUTCHours(), mm: d.getUTCMinutes(), ss: d.getUTCSeconds() };
+}
+const pad2 = (n) => String(n).padStart(2, "0");
+
 const chart = LightweightCharts.createChart(document.getElementById("chart"), {
   layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
   grid: { vertLines: { color: "#1e2530" }, horzLines: { color: "#1e2530" } },
-  timeScale: { timeVisible: true, secondsVisible: true },
+  localization: {
+    locale: "ko-KR",
+    timeFormatter: (t) => {
+      const p = kstParts(t);
+      return `${p.y}-${pad2(p.mo)}-${pad2(p.d)} ${pad2(p.hh)}:${pad2(p.mm)}:${pad2(p.ss)}`;
+    },
+  },
+  timeScale: {
+    timeVisible: true, secondsVisible: true,
+    tickMarkFormatter: (t, tickMarkType) => {
+      const p = kstParts(t);
+      if (tickMarkType <= 1) return `${p.y}-${pad2(p.mo)}`;
+      if (tickMarkType === 2) return `${pad2(p.mo)}-${pad2(p.d)}`;
+      if (tickMarkType === 3) return `${pad2(p.hh)}:${pad2(p.mm)}`;
+      return `${pad2(p.hh)}:${pad2(p.mm)}:${pad2(p.ss)}`;
+    },
+  },
 });
 const candleSeries = chart.addCandlestickSeries({
   upColor: "#ef5350", downColor: "#2962ff",
