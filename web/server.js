@@ -167,6 +167,13 @@ const server = createServer(async (req, res) => {
       return json(res, code, reply);
     }
 
+    if (req.method === "GET" && path === "/api/chart") {
+      // 읽기 전용: 늦은 접속자의 과거 봉 스냅샷 (엔진 봉 링 프록시)
+      const reply = await engineCommand(`dash-chart-${reqSeq}`, "chart.snapshot", null);
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
     if (req.method === "GET" && path === "/api/market") {
       // 읽기 전용 종목 검색: 엔진 레지스트리 프록시 (인증 불필요, 계획서 §15)
       const q = url.searchParams.get("q") ?? "";

@@ -92,6 +92,30 @@ function applyStatus(msg) {
   }
 }
 
+// 과거 봉 시딩: PUB/SUB는 과거 메시지를 보존하지 않으므로 접속 시 스냅샷을 가져온다
+async function seedChart() {
+  try {
+    const res = await fetch("/api/chart");
+    if (!res.ok) return;
+    const data = await res.json();
+    const rows = data.payload?.bars ?? [];
+    if (rows.length === 0) return;
+    if (typeof data.payload.generation === "number" && data.payload.generation > generation) {
+      generation = data.payload.generation;
+    }
+    bars.clear();
+    const seeded = [];
+    for (const [t, o, h, l, c] of rows) {
+      const bar = { time: Number(t) / 1e6, open: o, high: h, low: l, close: c };
+      bars.set(bar.time, bar);
+      seeded.push(bar);
+    }
+    candleSeries.setData(seeded);
+    regSeries.setData([]);
+    predSeries.setData([]);
+  } catch { /* 시딩 실패는 라이브 스트림으로 진행 */ }
+}
+
 function connect() {
   const ws = new WebSocket(WS_URL);
   ws.onopen = () => {
@@ -113,6 +137,7 @@ function connect() {
       candleSeries.setData([]);
       regSeries.setData([]);
       predSeries.setData([]);
+      seedChart(); // 재시작한 엔진의 봉 링으로 다시 시딩
     }
     applyStatus(data.message ?? {});
   };
@@ -282,4 +307,5 @@ document.addEventListener("click", (ev) => {
 });
 document.getElementById("symbol-apply").onclick = switchSymbol;
 
+seedChart();
 connect();

@@ -34,7 +34,14 @@ before(async () => {
             items: [{ shcode: "005930", name: "삼성전자", fut: 0 }],
             echo_q: req.payload.data?.q ?? "",
           }
-        : { mode: "replay", state: "ok" };
+        : req.payload?.type === "chart.snapshot"
+          ? {
+              shcode: "005930",
+              generation: 3,
+              timeframe_sec: 60,
+              bars: [[1704153600000000, 100, 110, 90, 105, 42], [1704153660000000, 105, 106, 101, 102, 40]],
+            }
+          : { mode: "replay", state: "ok" };
       const reply = {
         protocol_version: 1,
         message_type: "command_result",
@@ -102,6 +109,15 @@ test("GET /api/market proxies registry search with query", async () => {
 test("GET /api/market rejects overlong query", async () => {
   const res = await fetch(`${base}/api/market?q=${"a".repeat(65)}`);
   assert.equal(res.status, 400);
+});
+
+test("GET /api/chart proxies engine bar snapshot", async () => {
+  const res = await fetch(`${base}/api/chart`);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.payload.shcode, "005930");
+  assert.equal(data.payload.bars.length, 2);
+  assert.equal(data.payload.bars[0][4], 105);
 });
 
 test("workspace save/load/list/delete with token", async () => {

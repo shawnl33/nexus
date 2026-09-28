@@ -183,6 +183,33 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         return;
     }
 
+    if (strstr(p, "\"type\":\"chart.snapshot\"") != 0) {
+        /* 늦게 접속한 대시보드의 과거 봉 시딩용. PUB/SUB는 과거 메시지를 보존하지 않으므로
+         * 엔진의 봉 링에서 최근 봉을 직접 돌려준다 (최대 300개, 오름차순). */
+        static char buf[48 * 1024];
+        tr_engine_t *eng = g_live_ctx.engine;
+        size_t n = tr_ring_count(&eng->bb.bars);
+        size_t take = n < 300 ? n : 300;
+        int off = snprintf(buf, sizeof(buf),
+                           "{\"shcode\":\"%s\",\"generation\":%u,\"timeframe_sec\":%u,\"bars\":[",
+                           g_live_ctx.shcode, eng->generation, (unsigned)eng->cfg.timeframe_sec);
+        bool first = true;
+        for (size_t k = take; k-- > 0 && off < (int)sizeof(buf) - 96;) {
+            tr_candle_t c;
+            tr_ring_at(&eng->bb.bars, k, &c);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%lld,%lld,%lld,%lld,%lld,%lld]",
+                            first ? "" : ",", (long long)c.open_time_us,
+                            (long long)c.open, (long long)c.high, (long long)c.low,
+                            (long long)c.close, (long long)c.volume);
+            first = false;
+        }
+        snprintf(buf + off, sizeof(buf) - (size_t)off, "]}");
+        cmd->status = "applied";
+        cmd->error_code = "none";
+        cmd->payload_json = buf;
+        return;
+    }
+
     if (strstr(p, "\"type\":\"market.instruments\"") != 0) {
         /* 검색: data.q(종목코드 접두사 또는 종목명 부분 문자열), data.limit(기본 50, 최대 100) */
         static const ls_instrument_info_t *hits[100];

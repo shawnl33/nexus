@@ -22,6 +22,8 @@
   재연결 백오프·재인증·재구독, 입력 큐 상한·포화 카운트
 - **종목 레지스트리** (t8436+t8467 마스터): 유형 판별·검색(ls_master_search), market.instruments 명령(q/limit)
 - **대시보드 종목 검색**: GET /api/market 프록시 + 헤더 검색 드롭다운(코드 접두사/종목명 부분 일치, 클릭 전환)
+- **대시보드 과거 봉 시딩**: chart.snapshot 명령(엔진 봉 링 최대 300개) + GET /api/chart 프록시 +
+  접속·엔진 재시작 시 스냅샷으로 차트 시딩 (PUB/SUB는 과거 메시지 미보존)
 - 실제 API 검증 명세: [docs/ls_api_mapping.md](docs/ls_api_mapping.md)
 
 ## 검증 결과
