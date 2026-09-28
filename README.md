@@ -35,6 +35,16 @@ ctest --preset windows
 빌드 디렉터리는 OS별로 분리된다: Linux는 `build/`, Windows는 `build-windows/`.
 WSL 공유 폴터처럼 양쪽 OS가 같은 소스를 보는 환경에서도 충돌하지 않는다.
 
+Linux에서 Windows 바이너리 크로스 컴파일 (MinGW-w64 필요):
+
+```sh
+cmake --preset windows-cross
+cmake --build --preset windows-cross
+```
+
+결과물은 `build-windows-cross/trading-engine.exe`. 테스트 실행은 Windows에서 해야 하므로
+크로스 빌드는 'Windows 검증'으로 기록하지 않고 빌드 호환성 확인 용도로만 사용한다(계획서 §25 취지).
+
 core 테스트가 있으므로 0개 테스트 실행을 통과로 간주하지 않는다(`ctest --no-tests=error`).
 
 ## 실행

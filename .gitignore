@@ -1,5 +1,6 @@
 build/
 build-windows/
+build-windows-cross/
 .env
 *:Zone.Identifier
 *.user

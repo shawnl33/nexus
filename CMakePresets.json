@@ -38,6 +38,18 @@
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       }
+    },
+    {
+      "name": "windows-cross",
+      "displayName": "Linux→Windows 크로스 컴파일 (MinGW-w64)",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build-windows-cross",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-windows-mingw.cmake",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
     }
   ],
   "buildPresets": [
@@ -48,6 +60,10 @@
     {
       "name": "windows",
       "configurePreset": "windows"
+    },
+    {
+      "name": "windows-cross",
+      "configurePreset": "windows-cross"
     }
   ],
   "testPresets": [
