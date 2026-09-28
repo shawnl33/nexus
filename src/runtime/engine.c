@@ -174,6 +174,13 @@ void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us) {
     tr_bar_builder_on_timer(&e->bb, now_us);
 }
 
+bool tr_engine_inject_bar(tr_engine_t *e, const tr_candle_t *bar) {
+    if (e == 0) {
+        return false;
+    }
+    return tr_bar_builder_inject_bar(&e->bb, bar != 0 ? bar->close_time_us : 0, bar);
+}
+
 void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, double asks) {
     if (e == 0) {
         return;

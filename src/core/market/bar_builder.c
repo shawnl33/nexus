@@ -261,6 +261,36 @@ const tr_candle_t *tr_bar_builder_current(const tr_bar_builder_t *bb) {
     return (const tr_candle_t *)tr_ring_get_mut((tr_ring *)&bb->bars, 0);
 }
 
+bool tr_bar_builder_inject_bar(tr_bar_builder_t *bb, tr_time_us_t event_time, const tr_candle_t *bar) {
+    if (bb == 0 || bar == 0 || bar->instrument_id != bb->cfg.instrument_id ||
+        bar->timeframe_sec != bb->cfg.timeframe_sec) {
+        return false;
+    }
+    if (bb->has_open) {
+        return false; /* OPEN 봉이 있는 상태에서의 과거 주입은 허용하지 않는다 */
+    }
+    tr_time_us_t session_open, session_close;
+    if (!tr_session_span(&bb->cfg.session, bar->open_time_us, &session_open, &session_close)) {
+        bb->n_out_of_session++;
+        return false;
+    }
+    if (bb->bars.count > 0) {
+        tr_candle_t last;
+        tr_ring_at(&bb->bars, 0, &last);
+        if (bar->open_time_us <= last.open_time_us) {
+            bb->n_late_dropped++; /* 역순·중복 주입은 버리고 카운트 */
+            return false;
+        }
+    }
+    tr_candle_t c = *bar;
+    c.state = TR_CANDLE_CLOSED;
+    tr_ring_push(&bb->bars, &c);
+    bb->last_close = c.close;
+    bb->has_last_close = true;
+    emit(bb, TR_EVENT_CANDLE_CLOSED, event_time != 0 ? event_time : c.close_time_us, &c);
+    return true;
+}
+
 bool tr_bar_builder_at(const tr_bar_builder_t *bb, size_t back_index, tr_candle_t *out) {
     if (bb == 0 || out == 0) {
         return false;

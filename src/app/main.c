@@ -83,9 +83,10 @@ typedef struct {
 
 static tr_candle_t g_hist[256];
 
-/* 워밍업 백필: 최근 1분봉을 조회해 종가 단일 틱으로 근사 재생한다.
- * (봉 낶부 경로는 알 수 없으므로 근사. 지표 워밍업·차트 시딩용, 실제 봉 재구성과 다를 수 있음)
- * 성공 시 재생한 봉 수, 실패 시 -1. */
+/* 워밍업 백필: 최근 1분봉(실제 OHLC)을 조회해 봉 자체로 주입한다.
+ * (틱 근사 재생을 쓰지 않는다 — 봉 낶부 틱 경로는 알 수 없지만 OHLC·거래량은 실측값이다.
+ * 호가 지표는 과거 호가가 없어 라이브부터 워밍업된다)
+ * 성공 시 주입한 봉 수, 실패 시 -1. */
 static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, const char *shcode, bool is_fut) {
     ls_chart_page_t page;
     char cerr[128] = {0};
@@ -96,22 +97,13 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, const char *s
         fprintf(stderr, "backfill unavailable rc=%d: %s (continuing live only)\n", rc, cerr);
         return -1;
     }
-    tr_event_envelope_t env;
-    memset(&env, 0, sizeof(env));
-    env.kind = TR_EVENT_TICK;
+    int injected = 0;
     for (size_t i = 0; i < page.count; i++) {
-        env.event_time_us = g_hist[i].open_time_us;
-        env.received_time_us = g_hist[i].open_time_us;
-        tr_tick_t tk;
-        memset(&tk, 0, sizeof(tk));
-        tk.instrument_id = eng->cfg.instrument_id;
-        tk.price = g_hist[i].close;
-        tk.qty = g_hist[i].volume;
-        tk.source_exec_id = 0; /* 백필은 중복 제거 ID 없음 */
-        tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
-        tr_engine_on_tick(eng, &env, &tk);
+        if (tr_engine_inject_bar(eng, &g_hist[i])) {
+            injected++;
+        }
     }
-    return (int)page.count;
+    return injected;
 }
 
 static live_ctx_t g_live_ctx;

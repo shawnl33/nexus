@@ -24,7 +24,8 @@
 - **대시보드 종목 검색**: GET /api/market 프록시 + 헤더 검색 드롭다운(코드 접두사/종목명 부분 일치, 클릭 전환)
 - **대시보드 과거 봉 시딩**: chart.snapshot 명령(엔진 봉 링 최대 300개) + GET /api/chart 프록시 +
   접속·엔진 재시작 시 스냅샷으로 차트 시딩 (PUB/SUB는 과거 메시지 미보존)
-- **종목 전환 백필**: market select도 기동 시와 같은 1분봉 백필 수행 (전환 시 빈 차트가 되던 문제)
+- **종목 전환 백필**: market select도 기동 시와 같은 1분봉 백필 수행 (전환 시 빈 차트가 되던 문제).
+  백필은 종가 단일 틱 근사가 아니라 **실제 OHLC 봉 직접 주입**(tr_bar_builder_inject_bar) — 납작 캔들 해소
 - 실제 API 검증 명세: [docs/ls_api_mapping.md](docs/ls_api_mapping.md)
 
 ## 검증 결과

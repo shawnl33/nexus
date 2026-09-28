@@ -77,6 +77,12 @@ void tr_bar_builder_on_timer(tr_bar_builder_t *bb, tr_time_us_t now_us);
 /* 현재 OPEN 봉 조회. 없으면 NULL. */
 const tr_candle_t *tr_bar_builder_current(const tr_bar_builder_t *bb);
 
+/* 과거 확정 봉 직접 주입 (백필 경로). 실제 OHLC를 가진 봉을 시간 오름차순으로 넣는다.
+ * - 종가 단일 틱 근사 재생 대신 봉 자체를 넣어 백필 캔들이 납작(O=H=L=C)해지는 것을 막는다.
+ * - OPEN 봉이 있는 상태, 최신 봉보다 과거·중복 시각이면 거부한다.
+ * - 주입 봉은 CLOSED로 기록하고 last_close를 갱신한다 (이후 FILL 정책과 호환). */
+bool tr_bar_builder_inject_bar(tr_bar_builder_t *bb, tr_time_us_t event_time, const tr_candle_t *bar);
+
 /* 과거 봉 조회. back_index 0 = 최신 봉(OPEN일 수 있음). */
 bool tr_bar_builder_at(const tr_bar_builder_t *bb, size_t back_index, tr_candle_t *out);
 

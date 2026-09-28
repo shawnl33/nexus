@@ -211,6 +211,57 @@ static void test_error_cases(void) {
     TR_CHECK(tr_bar_builder_on_tick(&bb, 0, &tk) == TR_BB_ERROR);
 }
 
+static void test_inject_bar(void) {
+    tr_bar_builder_t bb;
+    collect_t c;
+    init_builder(&bb, &c, TR_NO_TRADE_SKIP);
+
+    /* 실제 OHLC를 가진 과거 확정 봉을 주입한다 — 납작해지지 않아야 한다 */
+    tr_candle_t b1;
+    memset(&b1, 0, sizeof(b1));
+    b1.instrument_id = 1;
+    b1.timeframe_sec = 60;
+    b1.open_time_us = kst(9, 0, 0);
+    b1.close_time_us = kst(9, 1, 0);
+    b1.open = 100;
+    b1.high = 110;
+    b1.low = 95;
+    b1.close = 105;
+    b1.volume = 42;
+    TR_CHECK(tr_bar_builder_inject_bar(&bb, b1.close_time_us, &b1));
+
+    tr_candle_t got;
+    TR_CHECK(tr_ring_at(&bb.bars, 0, &got));
+    TR_CHECK(got.open == 100 && got.high == 110 && got.low == 95 && got.close == 105);
+    TR_CHECK(got.state == TR_CANDLE_CLOSED);
+    TR_CHECK(c.n_closed == 1); /* 확정 이벤트가 발행되어 지표가 워밍업된다 */
+
+    /* 다음 봉 주입, 역순·중복은 거부 */
+    tr_candle_t b2 = b1;
+    b2.open_time_us = kst(9, 1, 0);
+    b2.close_time_us = kst(9, 2, 0);
+    TR_CHECK(tr_bar_builder_inject_bar(&bb, b2.close_time_us, &b2));
+    TR_CHECK(!tr_bar_builder_inject_bar(&bb, b1.close_time_us, &b1)); /* 중복 */
+    TR_CHECK(tr_ring_count(&bb.bars) == 2);
+
+    /* 세션 밖 시각은 거부 */
+    tr_candle_t b3 = b1;
+    b3.open_time_us = kst(16, 0, 0);
+    b3.close_time_us = kst(16, 1, 0);
+    TR_CHECK(!tr_bar_builder_inject_bar(&bb, b3.close_time_us, &b3));
+
+    /* 주입 후 라이브 틱이 정상으로 새 봉을 연다 */
+    tr_event_envelope_t env;
+    make_env(&env, kst(9, 2, 10));
+    tr_tick_t tk = tick(108, 3, 1);
+    TR_CHECK(tr_bar_builder_on_tick(&bb, &env, &tk) == TR_BB_ACCEPTED);
+    TR_CHECK(bb.has_open);
+    const tr_candle_t *cur = tr_bar_builder_current(&bb);
+    TR_CHECK(cur != 0 && cur->open == 108 && cur->open_time_us == kst(9, 2, 0));
+    /* OPEN 상태에서는 주입 거부 */
+    TR_CHECK(!tr_bar_builder_inject_bar(&bb, b1.close_time_us, &b1));
+}
+
 int main(void) {
     test_basic_ohlcv_and_close();
     test_duplicate_ticks();
@@ -218,6 +269,7 @@ int main(void) {
     test_late_dropped_when_out_of_buffer();
     test_fill_empty_bars();
     test_session_force_close();
+    test_inject_bar();
     test_error_cases();
     TR_TEST_SUMMARY();
 }

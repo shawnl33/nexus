@@ -73,6 +73,9 @@ void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ct
 tr_bb_status_t tr_engine_on_tick(tr_engine_t *e, const tr_event_envelope_t *env, const tr_tick_t *tick);
 void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us);
 
+/* 백필: 과거 확정 봉(실제 OHLC)을 직접 주입한다. tr_bar_builder_inject_bar 래퍼. */
+bool tr_engine_inject_bar(tr_engine_t *e, const tr_candle_t *bar);
+
 /* 호가 입력 (H1_/FH9). bids/asks는 총잔량(totbidrem/totofferrem). */
 void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, double asks);
 
