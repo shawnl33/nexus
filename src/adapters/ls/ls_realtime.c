@@ -44,6 +44,7 @@ struct tr_ls_rt {
      * 양수이면 LWS_POLL_WAIT_LIMIT으로 강제). poll 대기 상한은 sul 스케줄러로만
      * 제한할 수 있어, service 호출마다 wake sul을 걸어 timeout을 보장한다. */
     lws_sorted_usec_list_t sul_wake;
+    uint64_t dbg_rx_frames; /* LS_RT_DEBUG=1일 때 수신 프레임 카운트 */
 };
 
 static int64_t default_now_us(void) {
@@ -120,12 +121,38 @@ bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id
     out->recv_time_us = recv_time_us;
 
     if (strcmp(out->tr_cd, "S3_") == 0 || strcmp(out->tr_cd, "K3_") == 0 ||
-        strcmp(out->tr_cd, "FC9") == 0) {
+        strcmp(out->tr_cd, "FC9") == 0 || strcmp(out->tr_cd, "US3") == 0) {
         out->kind = LS_RT_TICK;
         out->price = parse_price(yyjson_obj_get(b, "price"));
         out->qty = parse_i64(yyjson_obj_get(b, "cvolume"));
         out->volume_meaning = TR_TICK_VOLUME_PER_TRADE; /* cvolume = 개별 체결량 */
         out->event_time_us = parse_chetime(yyjson_obj_get(b, "chetime"), recv_time_us);
+    } else if (strcmp(out->tr_cd, "UH1") == 0) {
+        out->kind = LS_RT_ORDERBOOK;
+        out->event_time_us = parse_chetime(yyjson_obj_get(b, "hotime"), recv_time_us);
+        /* 통합(KRX+NXT) 호가: 총잔량·단계별 잔량은 unt_ 접두사 (공식 명세, docs/ls_api_mapping.md §4) */
+        out->bid_total = parse_i64(yyjson_obj_get(b, "unt_totbidrem"));
+        out->ask_total = parse_i64(yyjson_obj_get(b, "unt_totofferrem"));
+        out->level_count = 0;
+        for (int i = 1; i <= 5; i++) {
+            char key[24];
+            snprintf(key, sizeof(key), "bidho%d", i);
+            yyjson_val *bp = yyjson_obj_get(b, key);
+            snprintf(key, sizeof(key), "unt_bidrem%d", i);
+            yyjson_val *bv = yyjson_obj_get(b, key);
+            snprintf(key, sizeof(key), "offerho%d", i);
+            yyjson_val *ap = yyjson_obj_get(b, key);
+            snprintf(key, sizeof(key), "unt_offerrem%d", i);
+            yyjson_val *av = yyjson_obj_get(b, key);
+            if (bp == 0 || ap == 0) {
+                break;
+            }
+            out->levels[i - 1].price = parse_price(bp);
+            out->levels[i - 1].qty = parse_i64(bv);
+            out->levels[5 + i - 1].price = parse_price(ap);
+            out->levels[5 + i - 1].qty = parse_i64(av);
+            out->level_count = i;
+        }
     } else if (strcmp(out->tr_cd, "H1_") == 0 || strcmp(out->tr_cd, "HA_") == 0 ||
                strcmp(out->tr_cd, "FH9") == 0) {
         out->kind = LS_RT_ORDERBOOK;
@@ -177,9 +204,21 @@ static void queue_push(tr_ls_rt_t *rt, const ls_rt_event_t *ev) {
 
 /* ---------- lws 콜백 ---------- */
 
+/* tr_key 비교: 통합 채널은 서버가 공백 패딩을 붙이므로 후행 공백을 무시한다 */
+static bool key_equal(const char *a, const char *b) {
+    size_t la = strlen(a), lb = strlen(b);
+    while (la > 0 && a[la - 1] == ' ') {
+        la--;
+    }
+    while (lb > 0 && b[lb - 1] == ' ') {
+        lb--;
+    }
+    return la == lb && strncmp(a, b, la) == 0;
+}
+
 static uint64_t find_instrument(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key) {
     for (int i = 0; i < rt->n_subs; i++) {
-        if (strcmp(rt->subs[i].tr_cd, tr_cd) == 0 && strcmp(rt->subs[i].tr_key, tr_key) == 0) {
+        if (strcmp(rt->subs[i].tr_cd, tr_cd) == 0 && key_equal(rt->subs[i].tr_key, tr_key)) {
             return rt->subs[i].instrument_id;
         }
     }
@@ -230,6 +269,14 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
         send_next_sub(rt);
         break;
     case LWS_CALLBACK_CLIENT_RECEIVE: {
+        if (getenv("LS_RT_DEBUG") != 0) {
+            rt->dbg_rx_frames++;
+            if (rt->dbg_rx_frames <= 6 || rt->dbg_rx_frames % 500 == 0) {
+                fprintf(stderr, "rt-debug: frame #%llu len=%zu final=%d head=%.100s\n",
+                        (unsigned long long)rt->dbg_rx_frames, len,
+                        lws_is_final_fragment(wsi) ? 1 : 0, (const char *)in);
+            }
+        }
         if (rt->sub_sent_idx < rt->n_subs) {
             /* 구독 ACK — 남은 구독을 본낸다 */
             send_next_sub(rt);
@@ -263,6 +310,9 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
         ls_rt_event_t ev;
         if (tr_ls_rt_parse_message(rt->rx_buf, strlen(rt->rx_buf), inst, now_us(rt), &ev)) {
             queue_push(rt, &ev);
+        } else if (getenv("LS_RT_DEBUG") != 0) {
+            fprintf(stderr, "rt-debug: drop inst=%llu msg=%.120s\n",
+                    (unsigned long long)inst, rt->rx_buf);
         }
         break;
     }
@@ -343,7 +393,12 @@ bool tr_ls_rt_subscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key, u
     }
     ls_rt_sub_t *s = &rt->subs[rt->n_subs++];
     snprintf(s->tr_cd, sizeof(s->tr_cd), "%.7s", tr_cd);
-    snprintf(s->tr_key, sizeof(s->tr_key), "%.15s", tr_key);
+    /* 통합 채널(US3/UH1)의 tr_key는 10자리 고정(단축코드 + 공백 패딩, 공식 명세) */
+    if (strcmp(tr_cd, "US3") == 0 || strcmp(tr_cd, "UH1") == 0) {
+        snprintf(s->tr_key, sizeof(s->tr_key), "%-10.10s", tr_key);
+    } else {
+        snprintf(s->tr_key, sizeof(s->tr_key), "%.15s", tr_key);
+    }
     s->instrument_id = instrument_id;
     s->sent = false;
     /* 연결된 상태에서의 사후 구독은 즉시 전송한다 */
@@ -359,7 +414,7 @@ bool tr_ls_rt_unsubscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key)
     }
     int found = -1;
     for (int i = 0; i < rt->n_subs; i++) {
-        if (strcmp(rt->subs[i].tr_cd, tr_cd) == 0 && strcmp(rt->subs[i].tr_key, tr_key) == 0) {
+        if (strcmp(rt->subs[i].tr_cd, tr_cd) == 0 && key_equal(rt->subs[i].tr_key, tr_key)) {
             found = i;
             break;
         }

@@ -1,10 +1,9 @@
 /* LS 실시간 어댑터 파서 단위 테스트 (네트워크 불필요, 결정적).
  *
  * 연결·구독·재연결의 통합 검증은 test_ls_rt_live.c가 실제 LS 서버로 수행한다.
- * 루프백 스텁 서버 방식도 시도했으나, 이 환경의 정적 libwebsockets 빌드가
- * 낶부 상태 기계(netlink coldplug 대기·poll 지연) 문제로 테스트 스타일의
- * 이중 컨텍스트 사용에서 간헐 정지를 일으켜 비결정적이었다 (2026-09-28 조사).
- * 라이브 검증으로 대체하고, 단위 테스트는 결정적인 파서 검증만 유지한다.
+ * 루프백 스텁 서버 방식은 lws 4.3.5가 lws_service의 timeout 인자를 무시하는
+ * upstream 동작 때문에 비결정적이었다 (2026-09-28 규명, ls_realtime.c의
+ * service_bounded 참조). 라이브 검증으로 대체하고 파서 검증만 유지한다.
  */
 
 #include "test_util.h"
@@ -56,6 +55,36 @@ static void test_parse_orderbook(void) {
     TR_CHECK(ev.levels[5].price == 27300000);
 }
 
+static void test_parse_us3_tick(void) {
+    /* 통합(KRX+NXT) 체결: 필드명은 S3_와 같고 수치 필드는 Number 타입 (공식 명세) */
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"US3\",\"tr_key\":\"005930    \"},"
+        "\"body\":{\"price\":272500,\"cvolume\":10,\"chetime\":\"162005\",\"mdvolume\":1000000}}";
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 42, 1790567100000000LL, &ev));
+    TR_CHECK(ev.kind == LS_RT_TICK);
+    TR_CHECK(ev.price == 27250000);
+    TR_CHECK(ev.qty == 10);
+    TR_CHECK(ev.volume_meaning == TR_TICK_VOLUME_PER_TRADE);
+    TR_CHECK(strcmp(ev.tr_cd, "US3") == 0);
+}
+
+static void test_parse_uh1_orderbook(void) {
+    /* 통합 호가: 총잔량·단계 잔량은 unt_ 접두사, 가격 단계는 무접두사 (공식 명세) */
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"UH1\",\"tr_key\":\"005930    \"},"
+        "\"body\":{\"hotime\":\"162005\",\"unt_totbidrem\":\"1257710\",\"unt_totofferrem\":\"306757\","
+        "\"bidho1\":\"272500\",\"unt_bidrem1\":\"1000\",\"offerho1\":\"273000\",\"unt_offerrem1\":\"900\"}}";
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 42, 1790567100000000LL, &ev));
+    TR_CHECK(ev.kind == LS_RT_ORDERBOOK);
+    TR_CHECK(ev.bid_total == 1257710);
+    TR_CHECK(ev.ask_total == 306757);
+    TR_CHECK(ev.level_count == 1);
+    TR_CHECK(ev.levels[0].price == 27250000);
+    TR_CHECK(ev.levels[5].price == 27300000);
+}
+
 static void test_parse_rejects(void) {
     ls_rt_event_t ev;
     TR_CHECK(!tr_ls_rt_parse_message("{broken", 7, 1, 0, &ev));
@@ -67,7 +96,9 @@ static void test_parse_rejects(void) {
 int main(void) {
     test_parse_s3_tick();
     test_parse_fut_tick();
+    test_parse_us3_tick();
     test_parse_orderbook();
+    test_parse_uh1_orderbook();
     test_parse_rejects();
     TR_TEST_SUMMARY();
 }

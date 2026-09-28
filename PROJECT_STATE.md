@@ -51,4 +51,10 @@
 - ~~정적 libwebsockets 간헐 정지~~ — **해결(2026-09-28)**: 근본 원인은 lws 4.3.5가 lws_service의
   timeout 인자를 무시하는 upstream 동작(양수이면 23일로 강제, lib/plat/unix/unix-service.c).
   tr_ls_rt_service가 호출마다 wake sul을 걸어 poll 대기 상한을 보장하도록 수정
+- **엔진 live 틱 유실 — 조사 중(2026-09-28)**: 15:45 이후 모든 --live 실행에서 구독 ACK(정상처리)와
+  TCP 수신(6.3KB/s, 서버가 스트리밍 중)은 확인되나 콜백→큐→발행 체인에 데이터가 도달하지 않음.
+  같은 어댑터의 test_ls_rt_live는 같은 시각 틱 수신 성공(19:52). 명령 채널은 정상(20ms).
+  원인 후보: 2채널(S3_+H1_) 동시 구독 상호작용, sul 수정과 엔진 루프 상호작용.
+  LS_RT_DEBUG=1로 프레임 카운트 계측 추가됨. 다음 세션(08:00 NXT/09:00 정규장)에 계측 검증 예정
 - ATR 산식은 YLHelp.pdf 공식 매뉴얼로 확정(SMA of TR). Bids/Asks 단계는 LS 필드로 매핑 예정
+- US3/UH1(통합) 채널은 구독 ACK되나 데이터 무수신 — 주식은 S3_/H1_ 유지 (NXT 체결도 S3_로 수신 실측)

@@ -318,6 +318,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         tr_ipc_close(ipc);
         return 3;
     }
+    /* 주식은 S3_/H1_ 구독 — 실측상 NXT 시간외 체결도 이 채널로 날아온다 (docs/ls_api_mapping.md §4) */
     const char *tr_cd = is_fut ? "FC9" : "S3_";
     const char *ob_tr_cd = is_fut ? "FH9" : "H1_";
     if (!tr_ls_rt_subscribe(rt, tr_cd, shcode, ecfg.instrument_id) ||
