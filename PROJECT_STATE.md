@@ -17,7 +17,7 @@
 - **traderctl**: 11개 명령, 종료 코드 계약
 - **runtime/engine**: 틱→봉→지표→상태 스트림, `trading-engine --replay FILE [--replay-delay MS]`
 - **web/** (Node 24, ES Modules): WS 브리지, 차트(lightweight-charts), 화면틀 CRUD·인증, npm test 5개
-- **adapters/ls** (libcurl): OAuth 토큰 발급·자동 갱신, t8412/t8465 1분봉 조회·정규화
+- **adapters/ls** (libcurl): OAuth 토큰 발급·자동 갱신, t8412/t8465 1분봉 조회·정규화, .env 백업 로딩(환경변수 우선)
 - **adapters/ls** (libwebsockets 4.3.5 정적): 실시간 구독 S3_/H1_/FC9/FH9, 틱·호가 정규화,
   재연결 백오프·재인증·재구독, 입력 큐 상한·포화 카운트
 - **종목 레지스트리** (t8436+t8467 마스터): 유형 판별·검색(ls_master_search), market.instruments 명령(q/limit)

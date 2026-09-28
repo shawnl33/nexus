@@ -32,4 +32,9 @@ bool ls_auth_refresh(ls_auth_t *a);
 /* 환경변수에 키가 있는지 (키 값 자체는 노출하지 않음). */
 bool ls_auth_keys_present(void);
 
+/* .env 백업 경로: LS_APP_KEY/LS_SECRET_KEY가 환경변수에 없으면 KEY=VALUE 파일에서 읽는다.
+ * 환경변수가 항상 우선한다. path가 NULL이면 "./.env" (현재 디렉터리 기준).
+ * `#` 주석, `export ` 접두사, 값의 따옴표를 허용한다. 읽은 키 수(0~2)를 돌려준다. */
+int ls_auth_load_dotenv(const char *path);
+
 #endif

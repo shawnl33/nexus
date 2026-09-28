@@ -208,6 +208,11 @@ if(TR_LS_FOUND)
     target_compile_options(test_ls_master PRIVATE ${TR_WARNINGS})
     add_test(NAME ls_master COMMAND test_ls_master)
 
+    add_executable(test_ls_auth tests/test_ls_auth.c)
+    target_link_libraries(test_ls_auth PRIVATE ls)
+    target_compile_options(test_ls_auth PRIVATE ${TR_WARNINGS})
+    add_test(NAME ls_auth COMMAND test_ls_auth)
+
     # 라이브 테스트: 실제 키·네트워크 필요. 키가 없으면 77로 skip.
     add_executable(test_ls_live tests/test_ls_live.c)
     target_link_libraries(test_ls_live PRIVATE ls)
