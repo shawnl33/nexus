@@ -1,0 +1,421 @@
+#include "adapters/ls/ls_realtime.h"
+
+#include <libwebsockets.h>
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "core/model/civil_time.h"
+#include "yyjson.h"
+
+#define LS_RT_DEFAULT_URL "wss://openapi.ls-sec.co.kr:9443/websocket"
+#define LS_RT_MAX_SUBS 16
+#define LS_RT_RX_BUF (64 * 1024)
+
+typedef struct {
+    char tr_cd[8];
+    char tr_key[16];
+    uint64_t instrument_id;
+} ls_rt_sub_t;
+
+struct tr_ls_rt {
+    ls_rt_config_t cfg;
+    struct lws_context *ctx;
+    struct lws *wsi;
+    ls_rt_state_t state;
+    ls_rt_sub_t subs[LS_RT_MAX_SUBS];
+    int n_subs;
+    /* 입력 큐 (단일 스레드: service 호출자와 next 호출자가 같음) */
+    ls_rt_event_t *queue;
+    size_t q_head, q_count;
+    uint64_t q_dropped;
+    uint64_t reconnects;
+    int64_t next_retry_us;
+    int retry_ms;
+    char rx_buf[LS_RT_RX_BUF];
+    size_t rx_len;
+    bool sub_sent;
+    int sub_sent_idx;
+};
+
+static int64_t default_now_us(void) {
+    return (int64_t)time(0) * TR_US_PER_SEC;
+}
+
+static int64_t now_us(tr_ls_rt_t *rt) {
+    return rt->cfg.now_us_fn != 0 ? rt->cfg.now_us_fn() : default_now_us();
+}
+
+/* ---------- 파싱 ---------- */
+
+static int64_t parse_i64(yyjson_val *v) {
+    if (yyjson_is_num(v)) {
+        return yyjson_get_sint(v);
+    }
+    if (yyjson_is_str(v)) {
+        return atoll(yyjson_get_str(v));
+    }
+    return 0;
+}
+
+static tr_price_t parse_price(yyjson_val *v) {
+    if (yyjson_is_num(v)) {
+        return (tr_price_t)llround(yyjson_get_num(v) * 100.0);
+    }
+    if (yyjson_is_str(v)) {
+        return (tr_price_t)llround(atof(yyjson_get_str(v)) * 100.0);
+    }
+    return 0;
+}
+
+/* HHMMSS(문자열, KST) → 당일 epoch µs. 없으면 수신 시각. */
+static int64_t parse_chetime(yyjson_val *v, int64_t recv_time_us) {
+    if (!yyjson_is_str(v)) {
+        return recv_time_us;
+    }
+    const char *s = yyjson_get_str(v);
+    if (strlen(s) < 6) {
+        return recv_time_us;
+    }
+    int64_t days;
+    tr_local_day_and_min(recv_time_us, 540, &days, 0);
+    tr_time_us_t midnight;
+    tr_local_midnight(days, 540, &midnight);
+    char hh[3] = {s[0], s[1], 0};
+    char mm[3] = {s[2], s[3], 0};
+    char ss[3] = {s[4], s[5], 0};
+    int64_t us = (int64_t)atoi(hh) * 3600 + (int64_t)atoi(mm) * 60 + atoi(ss);
+    return midnight + us * TR_US_PER_SEC;
+}
+
+bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id,
+                            int64_t recv_time_us, ls_rt_event_t *out) {
+    memset(out, 0, sizeof(*out));
+    yyjson_doc *doc = yyjson_read((char *)body, len, 0);
+    if (doc == 0) {
+        return false;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *header = yyjson_obj_get(root, "header");
+    yyjson_val *b = yyjson_obj_get(root, "body");
+    if (!yyjson_is_obj(header) || !yyjson_is_obj(b)) {
+        yyjson_doc_free(doc);
+        return false;
+    }
+    yyjson_val *tr_cd = yyjson_obj_get(header, "tr_cd");
+    if (!yyjson_is_str(tr_cd)) {
+        yyjson_doc_free(doc);
+        return false;
+    }
+    snprintf(out->tr_cd, sizeof(out->tr_cd), "%.7s", yyjson_get_str(tr_cd));
+    out->instrument_id = instrument_id;
+    out->recv_time_us = recv_time_us;
+
+    if (strcmp(out->tr_cd, "S3_") == 0 || strcmp(out->tr_cd, "K3_") == 0 ||
+        strcmp(out->tr_cd, "FC9") == 0) {
+        out->kind = LS_RT_TICK;
+        out->price = parse_price(yyjson_obj_get(b, "price"));
+        out->qty = parse_i64(yyjson_obj_get(b, "cvolume"));
+        out->volume_meaning = TR_TICK_VOLUME_PER_TRADE; /* cvolume = 개별 체결량 */
+        out->event_time_us = parse_chetime(yyjson_obj_get(b, "chetime"), recv_time_us);
+    } else if (strcmp(out->tr_cd, "H1_") == 0 || strcmp(out->tr_cd, "HA_") == 0 ||
+               strcmp(out->tr_cd, "FH9") == 0) {
+        out->kind = LS_RT_ORDERBOOK;
+        out->event_time_us = parse_chetime(yyjson_obj_get(b, "chetime"), recv_time_us);
+        /* 총잔량: 매수총잔량(bidvolsum)/매도총잔량(askvolsum) 추정 필드명.
+           실제 필드가 다륩면 라이브 검증으로 교정한다 (docs/ls_api_mapping.md §4). */
+        out->bid_total = parse_i64(yyjson_obj_get(b, "bidvolsum"));
+        out->ask_total = parse_i64(yyjson_obj_get(b, "askvolsum"));
+        out->level_count = 0;
+        /* 우선호가 1~5단계 (있으면 기록) */
+        for (int i = 1; i <= 5 && out->level_count < 5; i++) {
+            char key[16];
+            snprintf(key, sizeof(key), "bidho%d", i);
+            yyjson_val *bp = yyjson_obj_get(b, key);
+            snprintf(key, sizeof(key), "bidvol%d", i);
+            yyjson_val *bv = yyjson_obj_get(b, key);
+            snprintf(key, sizeof(key), "askho%d", i);
+            yyjson_val *ap = yyjson_obj_get(b, key);
+            snprintf(key, sizeof(key), "askvol%d", i);
+            yyjson_val *av = yyjson_obj_get(b, key);
+            if (bp == 0 || ap == 0) {
+                break;
+            }
+            out->levels[i - 1].price = parse_price(bp);
+            out->levels[i - 1].qty = parse_i64(bv);
+            out->levels[5 + i - 1].price = parse_price(ap);
+            out->levels[5 + i - 1].qty = parse_i64(av);
+            out->level_count = i;
+        }
+    } else {
+        yyjson_doc_free(doc);
+        return false; /* 미지원 채널 */
+    }
+    yyjson_doc_free(doc);
+    return true;
+}
+
+/* ---------- 큐 ---------- */
+
+static void queue_push(tr_ls_rt_t *rt, const ls_rt_event_t *ev) {
+    if (rt->q_count == rt->cfg.queue_capacity) {
+        rt->q_dropped++; /* 조용히 버리지 않고 카운트 */
+        return;
+    }
+    size_t tail = (rt->q_head + rt->q_count) % rt->cfg.queue_capacity;
+    rt->queue[tail] = *ev;
+    rt->q_count++;
+}
+
+/* ---------- lws 콜백 ---------- */
+
+static uint64_t find_instrument(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key) {
+    for (int i = 0; i < rt->n_subs; i++) {
+        if (strcmp(rt->subs[i].tr_cd, tr_cd) == 0 && strcmp(rt->subs[i].tr_key, tr_key) == 0) {
+            return rt->subs[i].instrument_id;
+        }
+    }
+    return 0;
+}
+
+static void send_next_sub(tr_ls_rt_t *rt) {
+    if (rt->sub_sent_idx >= rt->n_subs) {
+        return;
+    }
+    ls_rt_sub_t *s = &rt->subs[rt->sub_sent_idx];
+    const char *token = 0;
+    if (!ls_auth_ensure(rt->cfg.auth, &token)) {
+        /* 인증 실패는 재연결 사유다 */
+        rt->state = LS_RT_FAILED;
+        return;
+    }
+    char buf[768];
+    int n = snprintf(buf + LWS_PRE, sizeof(buf) - LWS_PRE,
+        "{\"header\":{\"token\":\"%s\",\"tr_type\":\"3\"},\"body\":{\"tr_cd\":\"%s\",\"tr_key\":\"%s\"}}",
+        token, s->tr_cd, s->tr_key);
+    if (n > 0) {
+        lws_write(rt->wsi, (unsigned char *)buf + LWS_PRE, (size_t)n, LWS_WRITE_TEXT);
+    }
+    rt->sub_sent_idx++;
+}
+
+static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
+                          void *user, void *in, size_t len) {
+    (void)user;
+    tr_ls_rt_t *rt = (tr_ls_rt_t *)lws_context_user(lws_get_context(wsi));
+    switch (reason) {
+    case LWS_CALLBACK_CLIENT_ESTABLISHED:
+        rt->state = LS_RT_READY;
+        rt->retry_ms = rt->cfg.reconnect_min_ms;
+        rt->sub_sent_idx = 0;
+        send_next_sub(rt);
+        break;
+    case LWS_CALLBACK_CLIENT_RECEIVE: {
+        if (rt->sub_sent_idx < rt->n_subs) {
+            /* 구독 ACK — 다음 구독을 본낸다 */
+            send_next_sub(rt);
+            break;
+        }
+        /* 메시지 조립 (fragment 대응) */
+        if (rt->rx_len + len > sizeof(rt->rx_buf) - 1) {
+            rt->rx_len = 0; /* 상한 초과 메시지는 폐기하고 카운트 */
+            rt->q_dropped++;
+            break;
+        }
+        memcpy(rt->rx_buf + rt->rx_len, in, len);
+        rt->rx_len += len;
+        if (!lws_is_final_fragment(wsi)) {
+            break;
+        }
+        rt->rx_buf[rt->rx_len] = 0;
+        rt->rx_len = 0;
+        /* header의 tr_cd/tr_key로 구독 맵을 찾는다 */
+        yyjson_doc *doc = yyjson_read(rt->rx_buf, strlen(rt->rx_buf), 0);
+        if (doc == 0) {
+            break;
+        }
+        yyjson_val *root = yyjson_doc_get_root(doc);
+        yyjson_val *header = yyjson_obj_get(root, "header");
+        const char *tr_cd = yyjson_get_str(yyjson_obj_get(header, "tr_cd"));
+        const char *tr_key = yyjson_get_str(yyjson_obj_get(header, "tr_key"));
+        uint64_t inst = find_instrument(rt, tr_cd != 0 ? tr_cd : "", tr_key != 0 ? tr_key : "");
+        yyjson_doc_free(doc);
+
+        ls_rt_event_t ev;
+        if (tr_ls_rt_parse_message(rt->rx_buf, strlen(rt->rx_buf), inst, now_us(rt), &ev)) {
+            queue_push(rt, &ev);
+        }
+        break;
+    }
+    case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
+    case LWS_CALLBACK_CLIENT_CLOSED:
+        rt->wsi = 0;
+        if (rt->state != LS_RT_FAILED) {
+            rt->state = LS_RT_RECONNECTING;
+            rt->reconnects++;
+            rt->next_retry_us = now_us(rt) + (int64_t)rt->retry_ms * 1000;
+            if (rt->retry_ms < rt->cfg.reconnect_max_ms) {
+                rt->retry_ms *= 2;
+            }
+        }
+        break;
+    default:
+        break;
+    }
+    return 0;
+}
+
+static const struct lws_protocols protocols[] = {
+    {"ls-rt", callback_ls_rt, 0, 0, 0, 0, 0},
+    {NULL, NULL, 0, 0, 0, 0, 0},
+};
+
+/* ---------- 수명 ---------- */
+
+tr_ls_rt_t *tr_ls_rt_open(const ls_rt_config_t *cfg, char *errbuf, size_t errlen) {
+    if (cfg == 0 || cfg->auth == 0 || cfg->queue_capacity == 0) {
+        return 0;
+    }
+    tr_ls_rt_t *rt = (tr_ls_rt_t *)calloc(1, sizeof(tr_ls_rt_t));
+    if (rt == 0) {
+        return 0;
+    }
+    rt->cfg = *cfg;
+    rt->state = LS_RT_CONNECTING;
+    rt->retry_ms = cfg->reconnect_min_ms > 0 ? cfg->reconnect_min_ms : 1000;
+    rt->queue = (ls_rt_event_t *)calloc(cfg->queue_capacity, sizeof(ls_rt_event_t));
+    if (rt->queue == 0) {
+        free(rt);
+        return 0;
+    }
+
+    struct lws_context_creation_info info = {0};
+    info.protocols = protocols;
+    info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT | LWS_SERVER_OPTION_NO_LWS_SYSTEM_STATES;
+    info.user = rt;
+    rt->ctx = lws_create_context(&info);
+    if (rt->ctx == 0) {
+        if (errbuf != 0 && errlen > 0) {
+            snprintf(errbuf, errlen, "lws_create_context failed");
+        }
+        free(rt->queue);
+        free(rt);
+        return 0;
+    }
+    rt->next_retry_us = 0;
+    return rt;
+}
+
+void tr_ls_rt_close(tr_ls_rt_t *rt) {
+    if (rt == 0) {
+        return;
+    }
+    if (rt->ctx != 0) {
+        lws_context_destroy(rt->ctx);
+    }
+    free(rt->queue);
+    free(rt);
+}
+
+bool tr_ls_rt_subscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key, uint64_t instrument_id) {
+    if (rt == 0 || tr_cd == 0 || tr_key == 0 || rt->n_subs >= LS_RT_MAX_SUBS) {
+        return false;
+    }
+    ls_rt_sub_t *s = &rt->subs[rt->n_subs++];
+    snprintf(s->tr_cd, sizeof(s->tr_cd), "%.7s", tr_cd);
+    snprintf(s->tr_key, sizeof(s->tr_key), "%.15s", tr_key);
+    s->instrument_id = instrument_id;
+    return true;
+}
+
+static void start_connect(tr_ls_rt_t *rt) {
+    const char *url = rt->cfg.url != 0 ? rt->cfg.url : LS_RT_DEFAULT_URL;
+    char address[128], path[128];
+    int port = 0;
+    const char *p = url;
+    if (strncmp(p, "wss://", 6) == 0) {
+        p += 6;
+        port = 443;
+    } else if (strncmp(p, "ws://", 5) == 0) {
+        p += 5;
+        port = 80;
+    }
+    const char *slash = strchr(p, '/');
+    size_t host_len = slash != 0 ? (size_t)(slash - p) : strlen(p);
+    if (host_len >= sizeof(address)) {
+        rt->state = LS_RT_FAILED;
+        return;
+    }
+    memcpy(address, p, host_len);
+    address[host_len] = 0;
+    /* 포트 명시가 있으면 분리 */
+    char *colon = strchr(address, ':');
+    if (colon != 0) {
+        *colon = 0;
+        port = atoi(colon + 1);
+    }
+    snprintf(path, sizeof(path), "%s", slash != 0 ? slash : "/");
+
+    struct lws_client_connect_info cc = {0};
+    cc.context = rt->ctx;
+    cc.address = address;
+    cc.port = port;
+    cc.path = path;
+    cc.host = address;
+    cc.origin = address;
+    cc.protocol = protocols[0].name;
+    cc.ssl_connection = (port == 443 || strncmp(url, "wss://", 6) == 0) ? LCCSCF_USE_SSL : 0;
+    cc.userdata = rt;
+
+    rt->state = LS_RT_CONNECTING;
+    rt->wsi = lws_client_connect_via_info(&cc);
+    if (rt->wsi == 0) {
+        rt->state = LS_RT_RECONNECTING;
+        rt->next_retry_us = now_us(rt) + (int64_t)rt->retry_ms * 1000;
+    }
+}
+
+int tr_ls_rt_service(tr_ls_rt_t *rt, int timeout_ms) {
+    if (rt == 0) {
+        return -1;
+    }
+    if (rt->wsi == 0 && rt->state != LS_RT_FAILED) {
+        if (rt->state == LS_RT_RECONNECTING && now_us(rt) < rt->next_retry_us) {
+            lws_service(rt->ctx, timeout_ms < 50 ? timeout_ms : 50);
+            return 0;
+        }
+        if (rt->state == LS_RT_CONNECTING || rt->state == LS_RT_RECONNECTING) {
+            start_connect(rt);
+        }
+    }
+    int rc = lws_service(rt->ctx, timeout_ms);
+    if (rc < 0) {
+        rt->state = LS_RT_FAILED;
+    }
+    return rc;
+}
+
+bool tr_ls_rt_next(tr_ls_rt_t *rt, ls_rt_event_t *out) {
+    if (rt == 0 || out == 0 || rt->q_count == 0) {
+        return false;
+    }
+    *out = rt->queue[rt->q_head];
+    rt->q_head = (rt->q_head + 1) % rt->cfg.queue_capacity;
+    rt->q_count--;
+    return true;
+}
+
+ls_rt_state_t tr_ls_rt_state(tr_ls_rt_t *rt) {
+    return rt != 0 ? rt->state : LS_RT_FAILED;
+}
+
+uint64_t tr_ls_rt_queue_dropped(tr_ls_rt_t *rt) {
+    return rt != 0 ? rt->q_dropped : 0;
+}
+
+uint64_t tr_ls_rt_reconnect_count(tr_ls_rt_t *rt) {
+    return rt != 0 ? rt->reconnects : 0;
+}

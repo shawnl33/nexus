@@ -97,6 +97,27 @@ else()
     message(STATUS "libcurl not found: ls 어댑터와 ls 테스트는 건성한다 (미검증 기록)")
 endif()
 
+# libwebsockets: 시스템 패키지 우선, 없으면 third_party/lws-linux (deb 추출 정적 라이브러리).
+find_path(LWS_INCLUDE_DIR NAMES libwebsockets.h
+    PATHS /usr/include ${CMAKE_SOURCE_DIR}/third_party/lws-linux/include)
+find_library(LWS_LIBRARY NAMES websockets libwebsockets
+    PATHS /usr/lib /usr/lib/x86_64-linux-gnu ${CMAKE_SOURCE_DIR}/third_party/lws-linux/lib)
+if(NOT LWS_LIBRARY)
+    find_library(LWS_LIBRARY NAMES libwebsockets.a
+        PATHS ${CMAKE_SOURCE_DIR}/third_party/lws-linux/lib)
+endif()
+if(LWS_INCLUDE_DIR AND LWS_LIBRARY)
+    add_library(lsrt STATIC
+        src/adapters/ls/ls_realtime.c
+    )
+    target_link_libraries(lsrt PUBLIC ls ${LWS_LIBRARY} ssl crypto z cap)
+    target_include_directories(lsrt PUBLIC src ${LWS_INCLUDE_DIR})
+    target_compile_options(lsrt PRIVATE ${TR_WARNINGS})
+    set(TR_LWS_FOUND TRUE)
+else()
+    message(STATUS "libwebsockets not found: 실시간 어댑터와 ls_rt 테스트는 건성한다 (미검증 기록)")
+endif()
+
 # IPC 어댑터: ZeroMQ는 시스템 패키지를 사용한다.
 find_library(ZMQ_LIBRARY NAMES zmq libzmq)
 find_path(ZMQ_INCLUDE_DIR NAMES zmq.h)
@@ -184,6 +205,19 @@ if(TR_LS_FOUND)
     target_compile_options(test_ls_live PRIVATE ${TR_WARNINGS})
     add_test(NAME ls_live COMMAND test_ls_live)
     set_tests_properties(ls_live PROPERTIES SKIP_RETURN_CODE 77 LABELS live)
+endif()
+
+if(TR_LWS_FOUND)
+    add_executable(test_ls_rt tests/test_ls_rt.c)
+    target_link_libraries(test_ls_rt PRIVATE lsrt)
+    target_compile_options(test_ls_rt PRIVATE ${TR_WARNINGS})
+    add_test(NAME ls_rt COMMAND test_ls_rt)
+
+    add_executable(test_ls_rt_live tests/test_ls_rt_live.c)
+    target_link_libraries(test_ls_rt_live PRIVATE lsrt)
+    target_compile_options(test_ls_rt_live PRIVATE ${TR_WARNINGS})
+    add_test(NAME ls_rt_live COMMAND test_ls_rt_live)
+    set_tests_properties(ls_rt_live PROPERTIES SKIP_RETURN_CODE 77 LABELS live)
 endif()
 
 if(TR_IPC_FOUND)

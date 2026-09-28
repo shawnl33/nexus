@@ -5,7 +5,7 @@
 
 ## 현재 단계
 
-단계 6 (LS 인증·과거/실시간 읽기) 진행 중 — 인증·과거 분봉 완료, 실시간 WebSocket 어댑터 다음
+단계 6 (LS 인증·과거/실시간 읽기) — **완료** (인증·과거 분봉·실시간 구독 전부 실제 검증)
 
 ## 완료 항목 (누적)
 
@@ -17,28 +17,31 @@
 - **traderctl**: 11개 명령, 종료 코드 계약
 - **runtime/engine**: 틱→봉→지표→상태 스트림, `trading-engine --replay FILE [--replay-delay MS]`
 - **web/** (Node 24, ES Modules): WS 브리지, 차트(lightweight-charts), 화면틀 CRUD·인증, npm test 5개
-- **adapters/ls** (libcurl): OAuth 토큰 발급·자동 갱신, t8412/t8465 1분봉 조회·정규화.
-  실제 API 검증 명세: [docs/ls_api_mapping.md](docs/ls_api_mapping.md)
+- **adapters/ls** (libcurl): OAuth 토큰 발급·자동 갱신, t8412/t8465 1분봉 조회·정규화
+- **adapters/ls** (libwebsockets 4.3.5 정적): 실시간 구독 S3_/H1_/FC9/FH9, 틱·호가 정규화,
+  재연결 백오프·재인증·재구독, 입력 큐 상한·포화 카운트
+- 실제 API 검증 명세: [docs/ls_api_mapping.md](docs/ls_api_mapping.md)
 
 ## 검증 결과
 
-- `ctest --preset default` — **32/32 통과** (ls_live는 키 없으면 자동 skip)
-- 라이브 검증 (`.env` 로딩 후): 토큰 발급, 005930 1분봉 3건, A016C000(코스피200선물 2612) 1분봉 3건, 실시간 S3_ 틱 수신 — 전부 성공 (2026-09-28)
+- `ctest --preset default` — **34/34 통과** (ls_live, ls_rt_live는 키 없으면 자동 skip)
+- 라이브 검증 (`.env` 로딩 후, 2026-09-28 장중): 토큰 발급, 005930 1분봉, A016C000(코스피200선물) 1분봉,
+  S3_ 실시간 틱(가격×100·개별 체결량) 수신 — 전부 성공
 - `cd web && npm test` — 5/5 통과
 - Windows 크로스 컴파일 — 경고 0, exe 생성. 네이티브 ctest 미검증
 - 미래곡선 완료 수준: '부분 구현+수식 검증' (계획서 §10.4). HTS 출력 비교 자료는 미확보
 
 ## 바로 다음 작업
 
-1. **실시간 WebSocket 어댑터** (단계 6 잔여): S3_/H1_/FC9/FH9 구독·정규화·재접속.
-   libwebsockets 미설치 — 시스템 패키지(libwebsockets-dev) 또는 소스 빌드 결정 필요
-2. 계좌 읽기(CSPAQ12300/12200)·대사 (단계 6 잔여)
-3. 이후: 단계 8 (전략·포트폴리오·리스크·주문·시뮬레이터)
+1. 계좌 읽기(CSPAQ12300/12200)·대사 (REST만으로 가능)
+2. runtime을 실시간 입력과 연결: LS 틱 → engine.on_tick (paper 모드 골격)
+3. 단계 8: 전략·포트폴리오·리스크·주문·시뮬레이터 (백테스트 체결 모델)
 
 ## 차단·미결 사항
 
 - HTS 기준 출력 묶음 없음 — 원본과의 봉 확정 출력 비교는 미검증 상태 유지
-- libwebsockets 미설치 (실시간 어댑터 의존성)
 - Git 원격 저장소 미연결
 - live 실거래 실행 여부: 사용자 결정 사항 (구현 에이전트가 임의 실행하지 않음)
+- 정적 libwebsockets 빌드는 테스트용 이중 컨텍스트에서 간헐 정지 — 통합 검증은 라이브 경로로 대체
+  (docs/THIRD_PARTY.md 검증 기록 참조)
 - ATR 산식은 YLHelp.pdf 공식 매뉴얼로 확정(SMA of TR). Bids/Asks 단계는 LS 필드로 매핑 예정

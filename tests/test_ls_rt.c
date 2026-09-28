@@ -1,0 +1,72 @@
+/* LS 실시간 어댑터 파서 단위 테스트 (네트워크 불필요, 결정적).
+ *
+ * 연결·구독·재연결의 통합 검증은 test_ls_rt_live.c가 실제 LS 서버로 수행한다.
+ * 루프백 스텁 서버 방식도 시도했으나, 이 환경의 정적 libwebsockets 빌드가
+ * 낶부 상태 기계(netlink coldplug 대기·poll 지연) 문제로 테스트 스타일의
+ * 이중 컨텍스트 사용에서 간헐 정지를 일으켜 비결정적이었다 (2026-09-28 조사).
+ * 라이브 검증으로 대체하고, 단위 테스트는 결정적인 파서 검증만 유지한다.
+ */
+
+#include "test_util.h"
+
+#include <string.h>
+
+#include "adapters/ls/ls_realtime.h"
+
+static void test_parse_s3_tick(void) {
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"S3_\",\"tr_key\":\"005930\"},"
+        "\"body\":{\"price\":\"272500\",\"cvolume\":\"10\",\"chetime\":\"124500\",\"mdvolume\":\"1000000\"}}";
+    ls_rt_event_t ev;
+    int64_t recv = 1790567100000000LL; /* 2026-09-28 03:45 UTC */
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 42, recv, &ev));
+    TR_CHECK(ev.kind == LS_RT_TICK);
+    TR_CHECK(ev.instrument_id == 42);
+    TR_CHECK(ev.price == 27250000); /* ×100 */
+    TR_CHECK(ev.qty == 10);
+    TR_CHECK(ev.volume_meaning == TR_TICK_VOLUME_PER_TRADE);
+    TR_CHECK(ev.event_time_us == recv);
+    TR_CHECK(strcmp(ev.tr_cd, "S3_") == 0);
+}
+
+static void test_parse_fut_tick(void) {
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"FC9\",\"tr_key\":\"A016C000\"},"
+        "\"body\":{\"price\":\"1094.05\",\"cvolume\":\"3\",\"chetime\":\"090010\"}}";
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 7, 1790567100000000LL, &ev));
+    TR_CHECK(ev.kind == LS_RT_TICK);
+    TR_CHECK(ev.price == 109405);
+    TR_CHECK(ev.qty == 3);
+}
+
+static void test_parse_orderbook(void) {
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"H1_\",\"tr_key\":\"005930\"},"
+        "\"body\":{\"bidvolsum\":\"100000\",\"askvolsum\":\"90000\",\"chetime\":\"124500\","
+        "\"bidho1\":\"272500\",\"bidvol1\":\"1000\",\"askho1\":\"273000\",\"askvol1\":\"900\"}}";
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 42, 1790567100000000LL, &ev));
+    TR_CHECK(ev.kind == LS_RT_ORDERBOOK);
+    TR_CHECK(ev.bid_total == 100000);
+    TR_CHECK(ev.ask_total == 90000);
+    TR_CHECK(ev.level_count == 1);
+    TR_CHECK(ev.levels[0].price == 27250000);
+    TR_CHECK(ev.levels[5].price == 27300000);
+}
+
+static void test_parse_rejects(void) {
+    ls_rt_event_t ev;
+    TR_CHECK(!tr_ls_rt_parse_message("{broken", 7, 1, 0, &ev));
+    TR_CHECK(!tr_ls_rt_parse_message("{\"header\":{}}", 12, 1, 0, &ev));
+    const char *unknown = "{\"header\":{\"tr_cd\":\"NWS\",\"tr_key\":\"x\"},\"body\":{}}";
+    TR_CHECK(!tr_ls_rt_parse_message(unknown, strlen(unknown), 1, 0, &ev));
+}
+
+int main(void) {
+    test_parse_s3_tick();
+    test_parse_fut_tick();
+    test_parse_orderbook();
+    test_parse_rejects();
+    TR_TEST_SUMMARY();
+}

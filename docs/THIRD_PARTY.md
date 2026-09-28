@@ -26,9 +26,18 @@ vcpkg는 도입하지 않는다. 이 프로젝트는 Windows에서도 MSVC가 �
 | SQLite3 (3.46.1로 검증) | 저장소 어댑터 | WAL, synchronous=FULL |
 | libzmq3-dev | IPC 어댑터 | ROUTER/DEALER + PUB/SUB |
 | libcurl (8.21.0 런타임) | LS 어댑터 | dev 패키지 권장. 미설치 시 `third_party/curl-linux/include`의 헤더 + 시스템 `libcurl.so.4`로 빌드 (deb 추출 경량 경로) |
+| libwebsockets (4.3.5 정적) | LS 실시간 어댑터 | `third_party/lws-linux` (deb 추출 헤더+`libwebsockets.a`). 정식 경로는 `sudo apt install libwebsockets-dev` |
 
-`third_party/curl-linux/include`는 `libcurl4-openssl-dev_8.21.0-2` deb에서 추출한 헤더다 (sudo 불가 환경의 경량 대응).
-정식 경로는 `sudo apt install libcurl4-openssl-dev` 설치이며, CMake가 시스템 헤더를 우선 사용한다.
+`third_party/lws-linux`은 `libwebsockets-dev_4.3.5-6` deb에서 추출한 헤더와 정적 라이브러리다.
+정적 링크 시 `ssl crypto z cap`를 함께 링크한다.
+
+### libwebsockets 검증 기록 (2026-09-28)
+
+- 실제 LS 서버(wss://openapi.ls-sec.co.kr:9443) 대상 TLS 연결·구독·틱 수신 검증 완료 (tests/test_ls_rt_live.c).
+- 이 정적 빌드는 낶부 상태 기계(netlink coldplug)와 poll 지연 특성이 있어, 테스트 목적의 이중 컨텍스트
+  루프백 스텁에서는 간헐 정지를 일으켰다. 따라서 통합 검증은 라이브 경로로 수행하고
+  단위 테스트는 결정적인 파서 테스트로 유지한다.
+- 컨텍스트 생성 시 `LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT` 사용, 클라이언트 TLS는 `LCCSCF_USE_SSL`.
 
 ## Windows 독립 MinGW 빌드 절차 (미검증 기록)
 
