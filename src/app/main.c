@@ -74,11 +74,45 @@ typedef struct {
     tr_ls_rt_t *rt;
     tr_engine_t *engine;
     tr_ls_master_t *master;
+    ls_auth_t *auth;
     char shcode[16];
     char tick_cd[4]; /* 실제 구독 중인 채널 (해지 시 그대로 사용) */
     char ob_cd[4];
     bool is_fut;
 } live_ctx_t;
+
+static tr_candle_t g_hist[256];
+
+/* 워밍업 백필: 최근 1분봉을 조회해 종가 단일 틱으로 근사 재생한다.
+ * (봉 낶부 경로는 알 수 없으므로 근사. 지표 워밍업·차트 시딩용, 실제 봉 재구성과 다를 수 있음)
+ * 성공 시 재생한 봉 수, 실패 시 -1. */
+static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, const char *shcode, bool is_fut) {
+    ls_chart_page_t page;
+    char cerr[128] = {0};
+    int rc = ls_chart_fetch_minute(auth, is_fut ? LS_CHART_FUT_MIN : LS_CHART_STOCK_MIN,
+                                   shcode, 1, 120, "99999999", " ", " ",
+                                   eng->cfg.instrument_id, 2, g_hist, 256, &page, cerr, sizeof(cerr));
+    if (rc != LS_HTTP_OK || page.count == 0) {
+        fprintf(stderr, "backfill unavailable rc=%d: %s (continuing live only)\n", rc, cerr);
+        return -1;
+    }
+    tr_event_envelope_t env;
+    memset(&env, 0, sizeof(env));
+    env.kind = TR_EVENT_TICK;
+    for (size_t i = 0; i < page.count; i++) {
+        env.event_time_us = g_hist[i].open_time_us;
+        env.received_time_us = g_hist[i].open_time_us;
+        tr_tick_t tk;
+        memset(&tk, 0, sizeof(tk));
+        tk.instrument_id = eng->cfg.instrument_id;
+        tk.price = g_hist[i].close;
+        tk.qty = g_hist[i].volume;
+        tk.source_exec_id = 0; /* 백필은 중복 제거 ID 없음 */
+        tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+        tr_engine_on_tick(eng, &env, &tk);
+    }
+    return (int)page.count;
+}
 
 static live_ctx_t g_live_ctx;
 
@@ -174,8 +208,11 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         snprintf(lc->ob_cd, sizeof(lc->ob_cd), "%s", new_ob);
         lc->is_fut = new_fut;
 
-        snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u}",
-                 new_code, new_name != 0 ? new_name : "", lc->engine->generation);
+        /* 새 종목도 기동 시와 같은 경로로 백필한다 (없으면 빈 차트로 시작한다) */
+        int nb = backfill_minute_bars(lc->auth, lc->engine, new_code, new_fut);
+
+        snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":%d}",
+                 new_code, new_name != 0 ? new_name : "", lc->engine->generation, nb > 0 ? nb : 0);
         cmd->status = "applied";
         cmd->error_code = "none";
         cmd->payload_json = payload;
@@ -263,8 +300,6 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     cmd->payload_json = payload;
 }
 
-static tr_candle_t g_hist[256];
-
 static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const char *pub_ep) {
     /* 1) 인증 */
     ls_auth_t auth;
@@ -327,33 +362,11 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     }
     tr_engine_attach_ipc(&engine, ipc, "display");
 
-    /* 4) 워밍업 백필: 최근 1분봉을 조회해 종가 단일 틱으로 근사 재생한다.
-       (봉 낶부 경로는 알 수 없으므로 근사다. 지표 워밍업용이며 실제 봉 재구성과 다를 수 있음을 명시) */
+    /* 4) 워밍업 백필 (market select 시에도 같은 경로로 다시 채운다) */
     {
-        ls_chart_page_t page;
-        char cerr[128] = {0};
-        int rc = ls_chart_fetch_minute(&auth, is_fut ? LS_CHART_FUT_MIN : LS_CHART_STOCK_MIN,
-                                       shcode, 1, 120, "99999999", " ", " ",
-                                       ecfg.instrument_id, 2, g_hist, 256, &page, cerr, sizeof(cerr));
-        if (rc == LS_HTTP_OK && page.count > 0) {
-            tr_event_envelope_t env;
-            memset(&env, 0, sizeof(env));
-            env.kind = TR_EVENT_TICK;
-            for (size_t i = 0; i < page.count; i++) {
-                env.event_time_us = g_hist[i].open_time_us;
-                env.received_time_us = g_hist[i].open_time_us;
-                tr_tick_t tk;
-                memset(&tk, 0, sizeof(tk));
-                tk.instrument_id = ecfg.instrument_id;
-                tk.price = g_hist[i].close;
-                tk.qty = g_hist[i].volume;
-                tk.source_exec_id = 0; /* 백필은 중복 제거 ID 없음 */
-                tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
-                tr_engine_on_tick(&engine, &env, &tk);
-            }
-            printf("backfill: %zu bars\n", page.count);
-        } else {
-            fprintf(stderr, "backfill unavailable rc=%d: %s (continuing live only)\n", rc, cerr);
+        int nb = backfill_minute_bars(&auth, &engine, shcode, is_fut);
+        if (nb > 0) {
+            printf("backfill: %d bars\n", nb);
         }
     }
 
@@ -393,6 +406,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     g_live_ctx.rt = rt;
     g_live_ctx.engine = &engine;
     g_live_ctx.master = master;
+    g_live_ctx.auth = &auth;
 
     printf("live %s %s: streaming (Ctrl+C 또는 'traderctl engine stop'으로 중지)\n",
            is_fut ? "FUT" : "STK", shcode);

@@ -240,6 +240,7 @@ async function switchSymbol() {
   candleSeries.setData([]);
   regSeries.setData([]);
   predSeries.setData([]);
+  seedChart(); // 엔진이 새 종목을 백필해 두었으므로 스냅샷으로 채운다
 }
 
 function hideSymbolResults() {
