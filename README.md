@@ -52,8 +52,19 @@ core 테스트가 있으므로 0개 테스트 실행을 통과로 간주하지 �
 리플레이 (인증정보 불필요):
 
 ```sh
-./build/trading-engine --replay examples/ticks_sample.csv
+./build/trading-engine --replay examples/ticks_sample.csv --replay-delay 100
 ```
+
+라이브 (`.env`의 LS 키 필요, 읽기 전용 시세):
+
+```sh
+set -a; . ./.env; set +a
+./build/trading-engine --live 005930        # 주식 (S3_)
+./build/trading-engine --live-fut A016C000  # 선물 (FC9)
+```
+
+라이브 모드는 최근 1분봉으로 지표 워밍업(백필 근사 재생) 후 실시간 틱을 처리한다.
+중지는 Ctrl+C 또는 `traderctl --json engine stop` (정상 종료). 현황은 `traderctl --json status`.
 
 틱 CSV(`epoch_us,price,qty`)를 재생해 봉·지표를 계산하고 상태 스트림을 발행한다.
 구독은 `tcp://127.0.0.1:5556` (변경: `--pub-endpoint`), 명령은 `tcp://127.0.0.1:5555` (`--cmd-endpoint`).
