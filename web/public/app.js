@@ -42,7 +42,14 @@ const candleSeries = chart.addCandlestickSeries({
   wickUpColor: "#ef5350", wickDownColor: "#2962ff",
 });
 const regSeries = chart.addLineSeries({ color: "#f0b90b", lineWidth: 2, priceLineVisible: false });
-const predSeries = chart.addLineSeries({ color: "#26a69a", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false });
+// 예측은 원본처럼 지평(5/10/15봉)별 3개 트랙으로 분리한다 — 하나로 합치면 지그재그로 보인다
+const predStyles = [
+  { color: "#26a69a", lineStyle: LightweightCharts.LineStyle.Dashed },
+  { color: "#4db6ac", lineStyle: LightweightCharts.LineStyle.Dotted },
+  { color: "#80cbc4", lineStyle: LightweightCharts.LineStyle.SparseDotted },
+];
+const predSeries = predStyles.map((s) =>
+  chart.addLineSeries({ color: s.color, lineWidth: 1, lineStyle: s.lineStyle, priceLineVisible: false }));
 
 const el = {
   wsState: document.getElementById("ws-state"),
@@ -67,7 +74,7 @@ function applyStatus(msg) {
     bars.clear();
     candleSeries.setData([]);
     regSeries.setData([]);
-    predSeries.setData([]);
+    for (const s of predSeries) s.setData([]);
   }
   const t = Number(p.bar_open_time) / 1e6;
   if (!Number.isFinite(t) || t <= 0) return;
@@ -93,11 +100,12 @@ function applyStatus(msg) {
   }
 
   // 예측: 생성 시점 기준 n봉 앞 위치에 표시한다. 미래 가격 데이터가 있는 것처럼 연결하지 않는다.
+  // 지평(5/10/15봉)별로 원본처럼 별개 트랙에 찍는다.
   const preds = p.pred ?? [];
   if (p.reg_valid === 1 && preds.length === 3) {
     const spans = [5, 10, 15];
     for (let i = 0; i < 3; i++) {
-      predSeries.update({ time: t + spans[i] * 60, value: preds[i] });
+      predSeries[i].update({ time: t + spans[i] * 60, value: preds[i] });
     }
     el.pred.textContent = `예측 ${preds.map((v) => v.toFixed(1)).join(" / ")}`;
   }
@@ -148,22 +156,26 @@ async function seedChart() {
 
     // 봉별 지표 복원: 스냅샷의 ind 배열로 과거 구간의 회귀선·예측선·배지를 다시 그린다
     const regData = [];
-    const predData = [];
+    const predTracks = [[], [], []]; // 지평(5/10/15봉)별 트랙 — 원본의 3개 분리 표시
     const spans = [5, 10, 15];
     for (const b of dedup) {
       const ind = b.ind;
       if (!ind || ind[1] !== 1) continue; // reg_valid 아닌 봉은 건너뜀
-      regData.push({ time: b.time, value: ind[2] });
+      if (Number.isFinite(ind[2])) regData.push({ time: b.time, value: ind[2] });
       for (let i = 0; i < 3; i++) {
-        predData.push({ time: b.time + spans[i] * 60, value: ind[4 + i] });
+        if (Number.isFinite(ind[4 + i])) {
+          predTracks[i].push({ time: b.time + spans[i] * 60, value: ind[4 + i] });
+        }
       }
     }
-    // setData는 시간 오름차순·중복 불가 — 예측점은 봉마다 +5/+10/+15분이라 뒤섞이므로
-    // 정렬하고 같은 시각은 최신 봉의 값(뒤쪽)을 남긴다
-    predData.sort((a, b) => a.time - b.time);
-    const predDedup = predData.filter((p, i) => i === predData.length - 1 || p.time !== predData[i + 1].time);
-    regSeries.setData(regData.filter((p) => Number.isFinite(p.value)));
-    predSeries.setData(predDedup.filter((p) => Number.isFinite(p.value)));
+    regSeries.setData(regData);
+    // setData는 시간 오름차순·중복 불가 — 각 트랙을 정렬하고 같은 시각은 최신 봉의 값을 남긴다
+    for (let i = 0; i < 3; i++) {
+      const track = predTracks[i];
+      track.sort((a, b) => a.time - b.time);
+      const dedupT = track.filter((p, k) => k === track.length - 1 || p.time !== track[k + 1].time);
+      predSeries[i].setData(dedupT);
+    }
 
     // 마지막 봉의 값으로 배지를 복원한다
     const last = dedup[dedup.length - 1]?.ind;
@@ -203,7 +215,7 @@ function connect() {
       bars.clear();
       candleSeries.setData([]);
       regSeries.setData([]);
-      predSeries.setData([]);
+      for (const s of predSeries) s.setData([]);
       seedChart(); // 재시작한 엔진의 봉 링으로 다시 시딩
     }
     try {
@@ -310,7 +322,7 @@ async function switchSymbol() {
   bars.clear();
   candleSeries.setData([]);
   regSeries.setData([]);
-  predSeries.setData([]);
+  for (const s of predSeries) s.setData([]);
   seedChart(); // 엔진이 새 종목을 백필해 두었으므로 스냅샷으로 채운다
 }
 
