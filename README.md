@@ -65,6 +65,8 @@ set -a; . ./.env; set +a
 
 라이브 모드는 최근 1분봉으로 지표 워밍업(백필 근사 재생) 후 실시간 틱을 처리한다.
 중지는 Ctrl+C 또는 `traderctl --json engine stop` (정상 종료). 현황은 `traderctl --json status`.
+종목 전환은 `traderctl --json market select 000660` 또는 대시보드의 종목 입력 —
+화면 상태만 바뀌며(세대/generation 증가, 지표 재워밍업) 전략 거래 대상과는 무관하다 (계획서 §18).
 
 틱 CSV(`epoch_us,price,qty`)를 재생해 봉·지표를 계산하고 상태 스트림을 발행한다.
 구독은 `tcp://127.0.0.1:5556` (변경: `--pub-endpoint`), 명령은 `tcp://127.0.0.1:5555` (`--cmd-endpoint`).

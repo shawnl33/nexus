@@ -29,6 +29,7 @@ static void sleep_ms(int ms) {
 #include "adapters/ls/ls_http.h"
 #include "adapters/ls/ls_realtime.h"
 #include "runtime/engine.h"
+#include "yyjson.h"
 
 #include <signal.h>
 
@@ -64,17 +65,89 @@ static void on_signal(int sig) {
 static const tr_session_policy_t SESS_STOCK = {540, 540, 930, TR_SESSION_WEEKDAYS};
 static const tr_session_policy_t SESS_FUT = {540, 525, 945, TR_SESSION_WEEKDAYS};
 
+/* live 모드 명령 컨텍스트 */
+typedef struct {
+    tr_ls_rt_t *rt;
+    tr_engine_t *engine;
+    char shcode[16];
+    bool is_fut;
+} live_ctx_t;
+
+static live_ctx_t g_live_ctx;
+
+/* shcode → instrument_id 해시 (FNV-1a). 종목별 지표 상태가 섞이지 않게 한다 */
+static uint64_t instrument_id_of(const char *shcode) {
+    uint64_t h = 1469598103934665603ULL;
+    while (*shcode) {
+        h ^= (unsigned char)*shcode++;
+        h *= 1099511628211ULL;
+    }
+    return h != 0 ? h : 1;
+}
+
+/* 종목 유형 추정: 6자리 초과 코드(선물, 예: A016C000)는 선물로 본다.
+   제한: 주식선물 등 다른 코드 체계는 별도 레지스트리가 필요하다 (capability 기록) */
+static bool shcode_is_fut(const char *shcode) {
+    return strlen(shcode) > 6;
+}
+
 static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     (void)ctx;
-    static char payload[256];
-    if (strstr(cmd->msg.payload, "\"type\":\"engine.stop\"") != 0) {
+    static char payload[512];
+    const char *p = cmd->msg.payload;
+
+    if (strstr(p, "\"type\":\"engine.stop\"") != 0) {
         g_stop = 1;
         cmd->status = "applied";
         cmd->error_code = "none";
         cmd->payload_json = "{\"stopping\":true}";
         return;
     }
-    snprintf(payload, sizeof(payload), "{\"mode\":\"live\",\"running\":%d}", (int)g_running);
+
+    if (strstr(p, "\"type\":\"market.select\"") != 0) {
+        yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
+        yyjson_val *sh = doc != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0;
+        sh = sh != 0 ? yyjson_obj_get(sh, "shcode") : 0;
+        if (!yyjson_is_str(sh) || strlen(yyjson_get_str(sh)) >= sizeof(g_live_ctx.shcode)) {
+            if (doc != 0) {
+                yyjson_doc_free(doc);
+            }
+            cmd->status = "rejected";
+            cmd->error_code = "invalid_symbol";
+            cmd->payload_json = 0;
+            return;
+        }
+        const char *new_code = yyjson_get_str(sh);
+        bool new_fut = shcode_is_fut(new_code);
+        live_ctx_t *lc = &g_live_ctx;
+
+        /* 이전 구독 해지 → 새 구독 (전략 거래 대상과 무관한 화면 상태 변경) */
+        const char *old_tick = lc->is_fut ? "FC9" : "S3_";
+        const char *old_ob = lc->is_fut ? "FH9" : "H1_";
+        tr_ls_rt_unsubscribe(lc->rt, old_tick, lc->shcode);
+        tr_ls_rt_unsubscribe(lc->rt, old_ob, lc->shcode);
+
+        uint64_t new_id = instrument_id_of(new_code);
+        const char *new_tick = new_fut ? "FC9" : "S3_";
+        const char *new_ob = new_fut ? "FH9" : "H1_";
+        tr_ls_rt_subscribe(lc->rt, new_tick, new_code, new_id);
+        tr_ls_rt_subscribe(lc->rt, new_ob, new_code, new_id);
+
+        tr_engine_select_symbol(lc->engine, new_id, new_fut);
+        snprintf(lc->shcode, sizeof(lc->shcode), "%s", new_code);
+        lc->is_fut = new_fut;
+
+        snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"generation\":%u}",
+                 new_code, lc->engine->generation);
+        cmd->status = "applied";
+        cmd->error_code = "none";
+        cmd->payload_json = payload;
+        yyjson_doc_free(doc);
+        return;
+    }
+
+    snprintf(payload, sizeof(payload), "{\"mode\":\"live\",\"running\":%d,\"shcode\":\"%s\"}",
+             (int)g_running, g_live_ctx.shcode);
     cmd->status = "applied";
     cmd->error_code = "none";
     cmd->payload_json = payload;
@@ -111,7 +184,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     tr_engine_config_t ecfg;
     memset(&ecfg, 0, sizeof(ecfg));
     ecfg.engine_instance_id = engine_instance_id;
-    ecfg.instrument_id = 1;
+    ecfg.instrument_id = instrument_id_of(shcode);
     ecfg.session = is_fut ? SESS_FUT : SESS_STOCK;
     ecfg.timeframe_sec = 60;
     ecfg.no_trade = TR_NO_TRADE_SKIP;
@@ -189,6 +262,11 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
 
     g_running = 1;
     g_stop = 0;
+    snprintf(g_live_ctx.shcode, sizeof(g_live_ctx.shcode), "%s", shcode);
+    g_live_ctx.is_fut = is_fut;
+    g_live_ctx.rt = rt;
+    g_live_ctx.engine = &engine;
+
     printf("live %s %s: streaming (Ctrl+C 또는 'traderctl engine stop'으로 중지)\n",
            is_fut ? "FUT" : "STK", shcode);
 
@@ -197,7 +275,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         tr_ls_rt_service(rt, 20);
         ls_rt_event_t ev;
         while (tr_ls_rt_next(rt, &ev)) {
-            if (ev.instrument_id != ecfg.instrument_id) {
+            if (ev.instrument_id != engine.cfg.instrument_id) {
                 continue;
             }
             if (ev.kind == LS_RT_TICK) {
@@ -208,7 +286,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                 env.received_time_us = ev.recv_time_us;
                 tr_tick_t tk;
                 memset(&tk, 0, sizeof(tk));
-                tk.instrument_id = ecfg.instrument_id;
+                tk.instrument_id = engine.cfg.instrument_id;
                 tk.price = ev.price;
                 tk.qty = ev.qty;
                 tk.source_exec_id = 0; /* 실시간 채널은 안정적인 체결 ID 미확인 — 중복 제거 한계 기록 */

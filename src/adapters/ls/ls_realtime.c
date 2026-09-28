@@ -19,6 +19,7 @@ typedef struct {
     char tr_cd[8];
     char tr_key[16];
     uint64_t instrument_id;
+    bool sent;
 } ls_rt_sub_t;
 
 struct tr_ls_rt {
@@ -181,25 +182,32 @@ static uint64_t find_instrument(tr_ls_rt_t *rt, const char *tr_cd, const char *t
     return 0;
 }
 
-static void send_next_sub(tr_ls_rt_t *rt) {
-    if (rt->sub_sent_idx >= rt->n_subs) {
-        return;
-    }
-    ls_rt_sub_t *s = &rt->subs[rt->sub_sent_idx];
+/* tr_type "3"=실시간 시세 등록, "4"=해제 (공식 명세, docs/ls_api_mapping.md §4) */
+static void send_tr(tr_ls_rt_t *rt, const char *tr_type, const char *tr_cd, const char *tr_key) {
     const char *token = 0;
     if (!ls_auth_ensure(rt->cfg.auth, &token)) {
-        /* 인증 실패는 재연결 사유다 */
         rt->state = LS_RT_FAILED;
         return;
     }
     char buf[768];
     int n = snprintf(buf + LWS_PRE, sizeof(buf) - LWS_PRE,
-        "{\"header\":{\"token\":\"%s\",\"tr_type\":\"3\"},\"body\":{\"tr_cd\":\"%s\",\"tr_key\":\"%s\"}}",
-        token, s->tr_cd, s->tr_key);
+        "{\"header\":{\"token\":\"%s\",\"tr_type\":\"%s\"},\"body\":{\"tr_cd\":\"%s\",\"tr_key\":\"%s\"}}",
+        token, tr_type, tr_cd, tr_key);
     if (n > 0) {
         lws_write(rt->wsi, (unsigned char *)buf + LWS_PRE, (size_t)n, LWS_WRITE_TEXT);
     }
-    rt->sub_sent_idx++;
+}
+
+static void send_next_sub(tr_ls_rt_t *rt) {
+    /* 아직 전송되지 않은 구독을 본낸다. 재연결 시에는 전부 미전송으로 되돌려 다시 본낸다. */
+    for (; rt->sub_sent_idx < rt->n_subs; rt->sub_sent_idx++) {
+        ls_rt_sub_t *s = &rt->subs[rt->sub_sent_idx];
+        if (s->sent) {
+            continue;
+        }
+        send_tr(rt, "3", s->tr_cd, s->tr_key);
+        s->sent = true;
+    }
 }
 
 static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
@@ -210,12 +218,16 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
     case LWS_CALLBACK_CLIENT_ESTABLISHED:
         rt->state = LS_RT_READY;
         rt->retry_ms = rt->cfg.reconnect_min_ms;
+        /* 재연결: 모든 구독을 미전송으로 되돌리고 다시 본낸다 */
+        for (int i = 0; i < rt->n_subs; i++) {
+            rt->subs[i].sent = false;
+        }
         rt->sub_sent_idx = 0;
         send_next_sub(rt);
         break;
     case LWS_CALLBACK_CLIENT_RECEIVE: {
         if (rt->sub_sent_idx < rt->n_subs) {
-            /* 구독 ACK — 다음 구독을 본낸다 */
+            /* 구독 ACK — 남은 구독을 본낸다 */
             send_next_sub(rt);
             break;
         }
@@ -328,6 +340,39 @@ bool tr_ls_rt_subscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key, u
     snprintf(s->tr_cd, sizeof(s->tr_cd), "%.7s", tr_cd);
     snprintf(s->tr_key, sizeof(s->tr_key), "%.15s", tr_key);
     s->instrument_id = instrument_id;
+    s->sent = false;
+    /* 연결된 상태에서의 사후 구독은 즉시 전송한다 */
+    if (rt->state == LS_RT_READY && rt->wsi != 0) {
+        send_next_sub(rt);
+    }
+    return true;
+}
+
+bool tr_ls_rt_unsubscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key) {
+    if (rt == 0 || tr_cd == 0 || tr_key == 0) {
+        return false;
+    }
+    int found = -1;
+    for (int i = 0; i < rt->n_subs; i++) {
+        if (strcmp(rt->subs[i].tr_cd, tr_cd) == 0 && strcmp(rt->subs[i].tr_key, tr_key) == 0) {
+            found = i;
+            break;
+        }
+    }
+    if (found < 0) {
+        return false;
+    }
+    /* 전송은 READY 상태일 때만. 목록에서도 제거해 재연결 시 복원되지 않게 한다 */
+    if (rt->state == LS_RT_READY && rt->wsi != 0) {
+        send_tr(rt, "4", tr_cd, tr_key);
+    }
+    for (int i = found; i < rt->n_subs - 1; i++) {
+        rt->subs[i] = rt->subs[i + 1];
+    }
+    rt->n_subs--;
+    if (rt->sub_sent_idx > rt->n_subs) {
+        rt->sub_sent_idx = rt->n_subs;
+    }
     return true;
 }
 

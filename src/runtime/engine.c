@@ -23,6 +23,7 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
     e->status_cb_ctx = 0;
     e->stream_id = "display";
     e->status_seq = 1;
+    e->generation = 1;
     e->prev_trading_day = 0;
     e->has_prev_day = false;
     e->prev_bar_open = 0;
@@ -86,14 +87,14 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         "\"reg_valid\":%d,\"reg_line\":%.10g,\"reg_slope\":%.10g,\"reg_r2\":%.10g,"
         "\"pred\":[%.10g,%.10g,%.10g],\"pred_dir\":[%d,%d,%d],"
         "\"score\":%d,\"future_dir\":%.10g,\"market_dir\":%d,\"reg_dir\":%d,\"ob_dir\":%d,"
-        "\"ob_valid\":%d,\"ob_score\":%.10g}",
+        "\"ob_valid\":%d,\"ob_score\":%.10g,\"generation\":%u}",
         (long long)bar->open_time_us, closed ? 1 : 0,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
         r->v4.pred_price[0], r->v4.pred_price[1], r->v4.pred_price[2],
         r->v4.pred_dir[0], r->v4.pred_dir[1], r->v4.pred_dir[2],
         sc->score, sc->future_dir, sc->market_dir, sc->reg_dir, sc->ob_dir,
-        e->obd2.validity == TR_VALIDITY_VALID ? 1 : 0, e->obd2.score);
+        e->obd2.validity == TR_VALIDITY_VALID ? 1 : 0, e->obd2.score, e->generation);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -182,4 +183,30 @@ void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, 
         day = e->has_prev_day ? e->prev_trading_day : -1;
     }
     tr_obd2_eval(&e->obd2, bids, asks, day);
+}
+
+bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures) {
+    if (e == 0 || instrument_id == 0) {
+        return false;
+    }
+    uint32_t gen = e->generation;
+    /* init는 출력 연결(ipc/callback)을 초기화하므로 보존한다 */
+    tr_ipc_t *ipc = e->ipc;
+    const char *stream_id = e->stream_id;
+    tr_engine_status_fn cb = e->status_cb;
+    void *cb_ctx = e->status_cb_ctx;
+    tr_engine_config_t cfg = e->cfg;
+    cfg.instrument_id = instrument_id;
+    cfg.is_futures = is_futures;
+    /* 지표 상태를 새 종목 기준으로 재구성한다. 링 저장소는 그대로 재사용한다 */
+    if (!tr_engine_init(e, &cfg, e->bb_storage, e->bb_capacity,
+                        e->score_mid_storage, e->score_mid_capacity)) {
+        return false;
+    }
+    e->ipc = ipc;
+    e->stream_id = stream_id;
+    e->status_cb = cb;
+    e->status_cb_ctx = cb_ctx;
+    e->generation = gen + 1;
+    return true;
 }

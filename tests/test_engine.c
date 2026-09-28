@@ -62,7 +62,7 @@ static void feed(tr_engine_t *e, unsigned mi, unsigned s, tr_price_t price, uint
     env.received_time_us = env.event_time_us;
     tr_tick_t tk;
     memset(&tk, 0, sizeof(tk));
-    tk.instrument_id = 1;
+    tk.instrument_id = e->cfg.instrument_id;
     tk.price = price;
     tk.qty = 10;
     tk.source_exec_id = id;
@@ -142,9 +142,35 @@ static void test_orderbook_path(void) {
     TR_CHECK(any_payload_contains(&cap, "\"ob_dir\":1"));
 }
 
+static void test_select_symbol_generation(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap);
+    TR_CHECK(e.generation == 1);
+
+    for (int i = 1; i <= 6; i++) {
+        feed(&e, (unsigned)i, 0, 100 + i, (uint64_t)i);
+    }
+    TR_CHECK(e.lr3.reg_valid); /* 워밍업 완료 상태 */
+
+    /* 종목 전환: 상태가 리셋되고 generation이 오른다 */
+    TR_CHECK(tr_engine_select_symbol(&e, 999, false));
+    TR_CHECK(e.generation == 2);
+    TR_CHECK(e.cfg.instrument_id == 999);
+    TR_CHECK(!e.lr3.reg_valid); /* 지표는 새 종목 기준으로 다시 워밍업 */
+    TR_CHECK(e.status_cb == capture_cb); /* 출력 연결은 보존 */
+    TR_CHECK(tr_engine_select_symbol(&e, 1000, true));
+    TR_CHECK(e.generation == 3);
+
+    /* 전환 후에도 상태 발행이 계속된다 */
+    feed(&e, 1, 0, 200, 100);
+    TR_CHECK(any_payload_contains(&cap, "\"generation\":3"));
+}
+
 int main(void) {
     test_replay_pipeline();
     test_session_first_reset();
     test_orderbook_path();
+    test_select_symbol_generation();
     TR_TEST_SUMMARY();
 }

@@ -37,6 +37,14 @@ function scoreColor(v) {
 
 function applyStatus(msg) {
   const p = msg.payload ?? {};
+  // 세대 확인: 종목 전환 이후 새 세대가 오면 로컬 이력을 지우고 다시 쌓는다 (혼합 방지, 계획서 §18)
+  if (typeof p.generation === "number" && p.generation > generation) {
+    generation = p.generation;
+    bars.clear();
+    candleSeries.setData([]);
+    regSeries.setData([]);
+    predSeries.setData([]);
+  }
   const t = Number(p.bar_open_time) / 1e6;
   if (!Number.isFinite(t) || t <= 0) return;
 
@@ -162,5 +170,30 @@ async function loadWorkspace() {
 
 document.getElementById("ws-save").onclick = saveWorkspace;
 document.getElementById("ws-load").onclick = loadWorkspace;
+
+// 종목 전환: 화면의 선택 종목만 바꾼다. 전략 거래 대상은 바꾸지 않는다 (계획서 §18).
+async function switchSymbol() {
+  const shcode = document.getElementById("symbol").value.trim();
+  if (!shcode) return;
+  const token = await apiToken();
+  if (!token) return alert("토큰이 필요합니다.");
+  const res = await fetch("/api/symbols/select", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": token },
+    body: JSON.stringify({ shcode }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    if (res.status === 403) localStorage.removeItem("trader_token");
+    return alert(`전환 실패: ${data.error_code ?? data.error ?? res.status}`);
+  }
+  // 새 세대를 즉시 반영하고 화면을 비운다 (엔진의 다음 메시지부터 새 종목)
+  if (data.payload?.generation) generation = data.payload.generation;
+  bars.clear();
+  candleSeries.setData([]);
+  regSeries.setData([]);
+  predSeries.setData([]);
+}
+document.getElementById("symbol-apply").onclick = switchSymbol;
 
 connect();

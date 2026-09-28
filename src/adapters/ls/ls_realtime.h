@@ -69,6 +69,9 @@ void tr_ls_rt_close(tr_ls_rt_t *rt);
 /* 구독 등록. instrument_id는 이후 이벤트에 태깅된다. 재연결 시 자동 재구독된다. */
 bool tr_ls_rt_subscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key, uint64_t instrument_id);
 
+/* 구독 해지 (tr_type "4" = 실시간 시세 해제, 공식 명세). 재연결 시에도 복원되지 않는다. */
+bool tr_ls_rt_unsubscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key);
+
 /* 이벤트 루프 구동. timeout_ms 동안 대기할 수 있다. */
 int tr_ls_rt_service(tr_ls_rt_t *rt, int timeout_ms);
 

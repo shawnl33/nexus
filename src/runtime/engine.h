@@ -55,6 +55,7 @@ typedef struct {
     void *status_cb_ctx;
     const char *stream_id;
     uint64_t status_seq;
+    uint32_t generation;        /* 종목 전환 세대. 스냅숏·스트림 연결에 사용 (계획서 §18) */
     int64_t prev_trading_day;
     bool has_prev_day;
     tr_time_us_t prev_bar_open;
@@ -74,5 +75,9 @@ void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us);
 
 /* 호가 입력 (H1_/FH9). bids/asks는 총잔량(totbidrem/totofferrem). */
 void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, double asks);
+
+/* 종목 전환: 지표 상태를 새 종목 기준으로 재구성하고 generation을 올린다 (계획서 §18).
+   이전 세대의 늦은 응답과 새 화면이 섞이지 않게 한다. 전략의 거래 대상과는 무관하다(화면 상태 변경). */
+bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures);
 
 #endif

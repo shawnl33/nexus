@@ -57,16 +57,18 @@ static const cmd_spec_t *find_command(int argc, char **argv, int *consumed, cons
         const char *type, *fmt;
         int takes_arg;
     } MAP[] = {
-        {"status", 0, "status", 0, 0},
+        /* 두 단어 명령을 먼저 매칭한다 (단어 1개 접두사 명령보다 우선) */
         {"engine", "stop", "engine.stop", 0, 0},
-        {"market", 0, "market.instruments", 0, 0},
-        {"indicator", 0, "indicator.list", 0, 0},
+        {"market", "select", "market.select", "{\"shcode\":\"%s\"}", 1},
         {"strategy", "list", "strategy.list", 0, 0},
         {"strategy", "start", "strategy.start", "{\"strategy_id\":\"%s\"}", 1},
         {"strategy", "stop", "strategy.stop", "{\"strategy_id\":\"%s\"}", 1},
+        {"orders", "cancel", "orders.cancel", "{\"order_id\":\"%s\"}", 1},
+        {"status", 0, "status", 0, 0},
+        {"market", 0, "market.instruments", 0, 0},
+        {"indicator", 0, "indicator.list", 0, 0},
         {"risk", 0, "risk.limits", 0, 0},
         {"orders", 0, "orders.list", 0, 0},
-        {"orders", "cancel", "orders.cancel", "{\"order_id\":\"%s\"}", 1},
         {"positions", 0, "positions.list", 0, 0},
     };
     *consumed = 0;

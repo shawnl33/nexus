@@ -136,6 +136,24 @@ const server = createServer(async (req, res) => {
       return json(res, reply.error_code === "connection_error" ? 502 : 200, reply);
     }
 
+    if (req.method === "POST" && path === "/api/symbols/select") {
+      // 화면의 선택 종목 변경은 화면 상태 변경이며, 전략 거래 대상 변경이 아니다 (계획서 §18)
+      if (!mutationAllowed(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      let shcode;
+      try {
+        shcode = JSON.parse(body).shcode;
+      } catch {
+        return json(res, 400, { error: "invalid_json" });
+      }
+      if (typeof shcode !== "string" || shcode.length < 4 || shcode.length > 12) {
+        return json(res, 400, { error: "invalid_symbol" });
+      }
+      const reply = await engineCommand(`dash-select-${reqSeq}`, "market.select", JSON.stringify({ shcode }));
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
     if (path.startsWith("/api/workspaces")) {
       const name = decodeURIComponent(path.split("/")[3] ?? "");
       if (req.method === "GET" && !name) {
