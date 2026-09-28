@@ -49,17 +49,20 @@
 
 ## 바로 다음 작업
 
-- 단계 5 (Node 대시보드·차트·화면틀): replay 상태 스트림(tcp://127.0.0.1:5556)을 구독해 차트 표시
-- 병행 가능: 단계 6 LS 읽기 사전 확인
+- 단계 5 (Node 대시보드) — 1차 완료: WS 브리지·차트·화면틀 CRUD·인증. 잔여: 다중 패널/연결 그룹 UI, 종목 전환(generation) 실제 다중 종목 적용, 전략·계좌·로그 화면
+- 단계 6 LS 읽기 사전 확인 가능
+- 참고: replay는 완료 후 프로세스 종료. 대시보드와 지속 연결은 live/paper 모드(단계 6 이후)에서 의미 있음
 
-## 완료 항목 (단계 4 + 런타임 조립)
+## 완료 항목 (단계 4 + 런타임 + 대시보드 1차)
 
-- adapters/storage (SQLite 3.46.1): v1 스키마 13테이블 마이그레이션, WAL+FULL, revision upsert, 체결 트랜잭션, 명령 중복 검사
-- adapters/ipc (libzmq + yyjson 벤더): ROUTER/DEALER 명령 + PUB/SUB 상태, JSON 계약, 순번 추적, inproc 테스트
-- traderctl (src/cli): 11개 명령, --json, 종료 코드(0/2/3/4/5)
-- runtime/engine: 틱→봉→지표(lr3/htf/score1m)→상태 스트림 조립 (단일 실행 흐름, 세션 컨텍스트 주입, 호가 미지원 경로는 ob_dir=0)
-- `trading-engine --replay FILE`: CSV 리플레이 + 상태 발행 (인증정보 불필요), examples/ticks_sample.csv
-- CTest 30개 전부 통과
+- adapters/storage (SQLite): 스키마 13테이블, 체결 트랜잭션, 명령 중복 검사
+- adapters/ipc (libzmq + yyjson): ROUTER/DEALER + PUB/SUB, JSON 계약, 순번 추적
+- traderctl: 11개 명령, 종료 코드 계약
+- runtime/engine: 틱→봉→지표→상태 스트림, `--replay` 모드
+- web/ (Node 24, ES Modules): HTTP 정적·REST(/api/status 프록시, /api/workspaces CRUD),
+  WebSocket 브리지(엔진 상태 → 브라우저, restart/gap 감지 시 초기화), 인증 토큰+Origin 검사,
+  화면틀 원자 저장(schema_version 1), lightweight-charts 4.2.3 차트(캔들·회귀선·예측선, 예측은 생성 시점 표기)
+- CTest 30개 + web 테스트 5개 전부 통과
 
 ## 차단·미결 사항
 

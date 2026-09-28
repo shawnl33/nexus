@@ -1,6 +1,8 @@
 build/
 build-windows/
 build-windows-cross/
+node_modules/
+web/.runtime/
 .env
 *:Zone.Identifier
 *.user

@@ -81,10 +81,12 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
     char payload[768];
     int n = snprintf(payload, sizeof(payload),
         "{\"bar_open_time\":\"%lld\",\"closed\":%d,"
+        "\"ohlc\":[%lld,%lld,%lld,%lld],"
         "\"reg_valid\":%d,\"reg_line\":%.10g,\"reg_slope\":%.10g,\"reg_r2\":%.10g,"
         "\"pred\":[%.10g,%.10g,%.10g],\"pred_dir\":[%d,%d,%d],"
         "\"score\":%d,\"future_dir\":%.10g,\"market_dir\":%d,\"reg_dir\":%d,\"ob_dir\":%d}",
         (long long)bar->open_time_us, closed ? 1 : 0,
+        (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
         r->v4.pred_price[0], r->v4.pred_price[1], r->v4.pred_price[2],
         r->v4.pred_dir[0], r->v4.pred_dir[1], r->v4.pred_dir[2],

@@ -1,0 +1,19 @@
+{
+  "name": "trading-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "C Trading Engine 관리 대시보드 (로컬 전용)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "lightweight-charts": "^4.2.0",
+    "ws": "^8.18.0",
+    "zeromq": "^6.1.1"
+  }
+}
