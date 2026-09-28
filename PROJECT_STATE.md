@@ -21,13 +21,17 @@
     - linreg_predict_v4 — WSF_Mtf_LinRegPredictV4 포팅 (R² 계수, ATR 기울기/가속도/변위 클램프, 같은 방향 가속 억제)
     - orderbook_dir_v2 — WSF_OrderBookDirectionV2 포팅 (선물/주식 부호, 일자 리셋, 무효 시 미갱신)
     - linreg_v3 — WSF_Mtf_LinRegV3(제공 신형) 포팅 (주기별 n 자동 선택, 세션 리셋, 낶부 V4 연계)
+    - past_prediction — 과거예측 검증 (가변 룩백 [예측봉수k], 세션 교차 무효화)
+    - memory_lines — 회귀기억선(방향 전환 고정·호가 관성·틱 양자화) + 지속선(연속 봉수 == 조건 저장)
+    - market_profile — 분봉 마켓 (세션 봉수, VWAP, 가중표준편차, 중심단계)
+    - score_1m — 통합 점수 (방향 0 → −2 분기 보존, 세션 첫 봉 비교 항 페널티)
 - adapters/history: replay — 논리 시간 재생
-- CTest 13개 전부 통과: ring, units, model, civil_time, session, bar_builder, aggregator, replay,
-  linreg, htf_curve, lp4, obd2, lr3
+- CTest 17개 전부 통과: ring, units, model, civil_time, session, bar_builder, aggregator, replay,
+  linreg, htf_curve, lp4, obd2, lr3, past_prediction, memory_lines, market, score1m
 
 ## 검증 결과
 
-- `ctest --preset default` — 13/13 통과 (Linux, GCC 15.3.0, 경고 0)
+- `ctest --preset default` — 17/17 통과 (Linux, GCC 15.3.0, 경고 0)
 - Windows 크로스 컴파일 — 경고 0, exe 생성. Windows exe 실행 확인(사용자, 2026-09-28). 네이티브 ctest 미검증
 - 완료 수준 표기(계획서 §10.4): 제공 원본 포팅은 '부분 구현+수식 검증' 단계.
   원본 런타임 비교 자료(HTS 출력)가 없어 '봉 확정 출력 비교' 이상은 미검증
@@ -38,9 +42,9 @@
 
 ## 바로 다음 작업
 
-- 단계 3 잔여: 메인 지표의 독립 계산부(과거예측 검증 가변 룩백, 고정 기억선/지속선 상태 기계, 마켓 VWAP, 통합 점수) — 필요 시
 - 단계 4: 저장소·기록·IPC·CLI
 - 병행 가능: 단계 6 LS 읽기 사전 확인 (ATR 산식·Bids/Asks 범위 등 '불명' 해소에도 필요)
+- 남은 MISSING_DEPENDENCY: 구형 7인자 V3, 미제공 함수 6종 의존 출력(운영최종*, 호가 V1 경로)
 
 ## 차단·미결 사항
 

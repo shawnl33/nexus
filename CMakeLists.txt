@@ -26,7 +26,11 @@ add_library(core STATIC
     src/core/indicators/linreg.c
     src/core/indicators/linreg_predict_v4.c
     src/core/indicators/linreg_v3.c
+    src/core/indicators/market_profile.c
+    src/core/indicators/memory_lines.c
     src/core/indicators/orderbook_dir_v2.c
+    src/core/indicators/past_prediction.c
+    src/core/indicators/score_1m.c
     src/core/model/civil_time.c
     src/core/model/instrument.c
     src/core/model/time_us.c
@@ -58,7 +62,7 @@ target_compile_options(trading-engine PRIVATE ${TR_WARNINGS})
 enable_testing()
 
 # 0개 테스트 실행을 통과로 간주하지 않는다(계획서 §25).
-foreach(t IN ITEMS ring units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3)
+foreach(t IN ITEMS ring units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE core)
     target_compile_options(test_${t} PRIVATE ${TR_WARNINGS})
