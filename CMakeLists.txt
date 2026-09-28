@@ -83,12 +83,17 @@ find_path(ZMQ_INCLUDE_DIR NAMES zmq.h)
 if(ZMQ_LIBRARY AND ZMQ_INCLUDE_DIR)
     add_library(ipc STATIC
         src/adapters/ipc/ipc.c
+        src/adapters/ipc/ipc_client.c
         src/adapters/ipc/ipc_msg.c
     )
     target_link_libraries(ipc PUBLIC core yyjson ${ZMQ_LIBRARY})
     target_include_directories(ipc PUBLIC src ${ZMQ_INCLUDE_DIR})
     target_compile_options(ipc PRIVATE ${TR_WARNINGS})
     set(TR_IPC_FOUND TRUE)
+
+    add_executable(traderctl src/cli/traderctl.c)
+    target_link_libraries(traderctl PRIVATE ipc)
+    target_compile_options(traderctl PRIVATE ${TR_WARNINGS})
 else()
     message(STATUS "libzmq not found: ipc 어댑터와 ipc 테스트는 건성한다 (미검증 기록)")
 endif()
@@ -128,4 +133,14 @@ if(TR_IPC_FOUND)
     target_link_libraries(test_ipc PRIVATE ipc)
     target_compile_options(test_ipc PRIVATE ${TR_WARNINGS})
     add_test(NAME ipc COMMAND test_ipc)
+
+    add_executable(test_cli_client tests/test_cli_client.c)
+    target_link_libraries(test_cli_client PRIVATE ipc)
+    target_compile_options(test_cli_client PRIVATE ${TR_WARNINGS})
+    add_test(NAME cli_client COMMAND test_cli_client)
+
+    add_test(NAME cli_help COMMAND traderctl --help)
+    add_test(NAME cli_version COMMAND traderctl --version)
+    add_test(NAME cli_usage_error COMMAND traderctl frobnicate)
+    set_tests_properties(cli_usage_error PROPERTIES WILL_FAIL TRUE)
 endif()

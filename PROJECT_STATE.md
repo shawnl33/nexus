@@ -49,12 +49,20 @@
 
 ## 바로 다음 작업
 
-- 단계 4 진행 중:
-  - 저장소 어댑터(SQLite) ✅ — adapters/storage: 마이그레이션, instruments/candles/orders/order_events/fills/commands, 체결 트랜잭션, 명령 중복 검사
-  - IPC 어댑터(ZeroMQ) ✅ — adapters/ipc: ROUTER/DEALER 명령 + PUB/SUB 상태, JSON 계약(int64 문자열, 크기 상한, 버전 거절), 명령 결과 구분(accepted/applied/rejected), 순번 추적(GAP/RESTART), yyjson 0.10.0 벤더
-  - CLI(traderctl) — 다음 작업
-- 의존성 관리: vcpkg 도입 안 함 (MinGW 사용으로 이점 없음). Linux 시스템 패키지 + Windows 소스 빌드 — docs/THIRD_PARTY.md
-- 병행 가능: 단계 6 LS 읽기 사전 확인
+- 단계 4 (저장소·기록·IPC·CLI) — **완료**
+- 다음: 단계 5 (Node 대시보드·차트·화면틀) 또는 단계 6 앞당기기 (LS 읽기 사전 확인)
+- 병행 가능: 엔진 런타임 조립 (replay 모드에서 지표→IPC 발행 경로 시연) — 단계 5 전 준비 작업
+
+## 완료 항목 (단계 4)
+
+- adapters/storage (SQLite 3.46.1): v1 스키마 13테이블 마이그레이션, WAL+FULL, instruments/candles revision upsert,
+  orders/order_events/fills 체결 트랜잭션(중복 체결 롤백), commands 같은 ID·다른 내용 거절
+- adapters/ipc (libzmq + yyjson 벤더): ROUTER/DEALER 명령 + PUB/SUB 상태,
+  JSON 계약(protocol_version, int64 문자열, 1MiB/64KiB 상한, 버전·필수 필드 거절),
+  명령 결과 accepted/applied/rejected 구분, 순번 추적 GAP/RESTART, inproc 테스트
+- traderctl (src/cli): status/engine stop/market/indicator/strategy/risk/orders/positions/shell,
+  --json 출력, 종료 코드(0/2/3/4/5), send/recv 분리 클라이언트
+- 의존성 관리: vcpkg 미도입 결정 — docs/THIRD_PARTY.md (Linux 시스템 패키지, Windows MinGW 소스 빌드)
 
 ## 차단·미결 사항
 
