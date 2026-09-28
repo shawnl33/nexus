@@ -30,6 +30,7 @@
 | `WSF_OrderBookDirectionV1.txt` | [WSF_OrderBookDirectionV1.txt](yeslanguage/WSF_OrderBookDirectionV1.txt) | 5242 | 호가 기반 지표 V1 |
 | `WSF_AutoSessionADXV1.txt` | [WSF_AutoSessionADXV1.txt](yeslanguage/WSF_AutoSessionADXV1.txt) | 3552 | 세션 ADX |
 | `WSF_DailyMarketProfileV1.txt` | [WSF_DailyMarketProfileV1.txt](yeslanguage/WSF_DailyMarketProfileV1.txt) | 1600 | 일봉 이상 마켓 프로파일 |
+| `WSF_Daily_LinRegTrendV1.txt` | [WSF_Daily_LinRegTrendV1.txt](yeslanguage/WSF_Daily_LinRegTrendV1.txt) | 2491 | 일봉 회귀 추세 판정 (DailyTrendLinkV1 하위) |
 
 ## SHA-256
 
@@ -50,3 +51,4 @@
 | `reference/yeslanguage/WSF_OrderBookDirectionV1.txt` | `e0a0371797588da90a9492edcf7b5b7bd4fdee94f530dcfe7939fec3dc1fe19b` |
 | `reference/yeslanguage/WSF_AutoSessionADXV1.txt` | `4b5eed6903d0fdb12f85a86c70984868e76c086e96b3426d3b4ec7991fda3279` |
 | `reference/yeslanguage/WSF_DailyMarketProfileV1.txt` | `a0127e49e016db69120cb64117a0ebfae8f45e99f9201ed172a6a0707369368b` |
+| `reference/yeslanguage/WSF_Daily_LinRegTrendV1.txt` | `666a01c472146b725eed70d9a8103fb68b098fdb1641578e214875d9a44ddfdd` |

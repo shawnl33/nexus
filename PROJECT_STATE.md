@@ -25,13 +25,20 @@
     - memory_lines — 회귀기억선(방향 전환 고정·호가 관성·틱 양자화) + 지속선(연속 봉수 == 조건 저장)
     - market_profile — 분봉 마켓 (세션 봉수, VWAP, 가중표준편차, 중심단계)
     - score_1m — 통합 점수 (방향 0 → −2 분기 보존, 세션 첫 봉 비교 항 페널티)
+    - daily_linreg_trend_v1 — WSF_Daily_LinRegTrendV1 포팅 (무상태 추세 판정)
+    - daily_align_v2 — WSF_1m_DailyAlignV2 포팅 (합의·일반장/갭장 가감점·큰 갭 비중 복원)
+    - gap_regime_v1 — WSF_GapRegimeV1 포팅 (완성 세션 TR 평균·갭 등급/비중·자정 경과분)
+    - daily_trend_link_v1 — WSF_1m_DailyTrendLinkV1 포팅 (세션 집계 완성 일봉·1봉 투영 회귀)
+    - daily_market_profile_v1 — WSF_DailyMarketProfileV1 포팅 (기간 VWAP·세션 앵커 없음)
+    - auto_session_adx_v1 — WSF_AutoSessionADXV1 포팅 (Wilder ADX, 원본에서 죽은 체인)
+  - 구형 V3 확인: 신형과 회귀 코어 동일 → linreg_v3가 구형과 동치 (P01 해소)
+  - 호가 V1 = V2와 동일 로직 → obd2 재사용 (P05 해소)
 - adapters/history: replay — 논리 시간 재생
-- CTest 17개 전부 통과: ring, units, model, civil_time, session, bar_builder, aggregator, replay,
-  linreg, htf_curve, lp4, obd2, lr3, past_prediction, memory_lines, market, score1m
+- CTest 23개 전부 통과
 
 ## 검증 결과
 
-- `ctest --preset default` — 17/17 통과 (Linux, GCC 15.3.0, 경고 0)
+- `ctest --preset default` — 23/23 통과 (Linux, GCC 15.3.0, 경고 0)
 - Windows 크로스 컴파일 — 경고 0, exe 생성. Windows exe 실행 확인(사용자, 2026-09-28). 네이티브 ctest 미검증
 - 완료 수준 표기(계획서 §10.4): 제공 원본 포팅은 '부분 구현+수식 검증' 단계.
   원본 런타임 비교 자료(HTS 출력)가 없어 '봉 확정 출력 비교' 이상은 미검증
@@ -44,7 +51,7 @@
 
 - 단계 4: 저장소·기록·IPC·CLI
 - 병행 가능: 단계 6 LS 읽기 사전 확인 (ATR 산식·Bids/Asks 범위 등 '불명' 해소에도 필요)
-- 남은 MISSING_DEPENDENCY: 구형 7인자 V3, 미제공 함수 6종 의존 출력(운영최종*, 호가 V1 경로)
+- 미제공 원본 잔여: **없음** (전 함수 제공·포팅 완료). 남은 '불명'은 플랫폼 내장 의미(ATR 산식, Bids 단계 등)와 HTS 기준 출력 자료뿐
 
 ## 차단·미결 사항
 
