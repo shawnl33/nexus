@@ -172,8 +172,13 @@ document.getElementById("ws-save").onclick = saveWorkspace;
 document.getElementById("ws-load").onclick = loadWorkspace;
 
 // 종목 전환: 화면의 선택 종목만 바꾼다. 전략 거래 대상은 바꾸지 않는다 (계획서 §18).
+const symbolInput = document.getElementById("symbol");
+const symbolResults = document.getElementById("symbol-results");
+const symbolName = document.getElementById("symbol-name");
+let searchSeq = 0; // 늦게 도착한 검색 응답 폐기용
+
 async function switchSymbol() {
-  const shcode = document.getElementById("symbol").value.trim();
+  const shcode = symbolInput.value.trim();
   if (!shcode) return;
   const token = await apiToken();
   if (!token) return alert("토큰이 필요합니다.");
@@ -189,11 +194,77 @@ async function switchSymbol() {
   }
   // 새 세대를 즉시 반영하고 화면을 비운다 (엔진의 다음 메시지부터 새 종목)
   if (data.payload?.generation) generation = data.payload.generation;
+  if (data.payload?.name) symbolName.textContent = data.payload.name;
+  hideSymbolResults();
   bars.clear();
   candleSeries.setData([]);
   regSeries.setData([]);
   predSeries.setData([]);
 }
+
+function hideSymbolResults() {
+  symbolResults.hidden = true;
+  symbolResults.replaceChildren();
+}
+
+function showSymbolResults(items, seq) {
+  if (seq !== searchSeq) return; // 최신 검색만 반영
+  symbolResults.replaceChildren();
+  if (items.length === 0) {
+    const div = document.createElement("div");
+    div.className = "empty";
+    div.textContent = "일치하는 종목 없음";
+    symbolResults.append(div);
+  }
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const code = document.createElement("span");
+    code.className = "code";
+    code.textContent = it.shcode;
+    const name = document.createElement("span");
+    name.textContent = it.name;
+    const mkt = document.createElement("span");
+    mkt.className = "mkt";
+    mkt.textContent = it.fut ? "선물" : "";
+    row.append(code, name, mkt);
+    row.onclick = () => {
+      symbolInput.value = it.shcode;
+      symbolName.textContent = it.name;
+      hideSymbolResults();
+      switchSymbol();
+    };
+    symbolResults.append(row);
+  }
+  symbolResults.hidden = false;
+}
+
+let searchTimer = null;
+function onSymbolInput() {
+  clearTimeout(searchTimer);
+  const q = symbolInput.value.trim();
+  if (!q) return hideSymbolResults();
+  searchTimer = setTimeout(async () => {
+    const seq = ++searchSeq;
+    try {
+      const res = await fetch(`/api/market?q=${encodeURIComponent(q)}&limit=20`);
+      if (!res.ok) return hideSymbolResults();
+      const data = await res.json();
+      showSymbolResults(data.payload?.items ?? [], seq);
+    } catch {
+      /* 검색 실패는 드롭다욧만 닫는다 */
+    }
+  }, 200);
+}
+
+symbolInput.addEventListener("input", onSymbolInput);
+symbolInput.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") switchSymbol();
+  if (ev.key === "Escape") hideSymbolResults();
+});
+document.addEventListener("click", (ev) => {
+  if (!symbolResults.hidden && !ev.target.closest(".sym-picker")) hideSymbolResults();
+});
 document.getElementById("symbol-apply").onclick = switchSymbol;
 
 connect();

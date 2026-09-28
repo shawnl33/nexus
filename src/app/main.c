@@ -159,12 +159,41 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     }
 
     if (strstr(p, "\"type\":\"market.instruments\"") != 0) {
-        static char buf[40 * 128 + 256];
+        /* 검색: data.q(종목코드 접두사 또는 종목명 부분 문자열), data.limit(기본 50, 최대 100) */
+        static const ls_instrument_info_t *hits[100];
+        static char buf[100 * 128 + 256];
+        if (g_live_ctx.master == 0) {
+            cmd->status = "rejected";
+            cmd->error_code = "registry_unavailable";
+            cmd->payload_json = 0;
+            return;
+        }
+        const char *q = 0;
+        long limit = 50;
+        yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
+        if (doc != 0) {
+            yyjson_val *data = yyjson_obj_get(yyjson_doc_get_root(doc), "data");
+            yyjson_val *qv = data != 0 ? yyjson_obj_get(data, "q") : 0;
+            yyjson_val *lv = data != 0 ? yyjson_obj_get(data, "limit") : 0;
+            if (yyjson_is_str(qv)) {
+                q = yyjson_get_str(qv);
+            }
+            if (yyjson_is_num(lv)) {
+                limit = (long)yyjson_get_num(lv);
+            }
+            yyjson_doc_free(doc);
+        }
+        if (limit < 1) {
+            limit = 50;
+        }
+        if (limit > 100) {
+            limit = 100;
+        }
         size_t count = ls_master_count(g_live_ctx.master);
-        size_t shown = count < 40 ? count : 40;
-        int off = snprintf(buf, sizeof(buf), "{\"total\":%zu,\"items\":[", count);
-        for (size_t i = 0; i < shown && off < (int)sizeof(buf) - 130; i++) {
-            const ls_instrument_info_t *it = ls_master_at(g_live_ctx.master, i);
+        size_t n = ls_master_search(g_live_ctx.master, q, hits, (size_t)limit);
+        int off = snprintf(buf, sizeof(buf), "{\"total\":%zu,\"returned\":%zu,\"items\":[", count, n);
+        for (size_t i = 0; i < n && off < (int)sizeof(buf) - 130; i++) {
+            const ls_instrument_info_t *it = hits[i];
             off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s{\"shcode\":\"%s\",\"name\":\"%s\",\"fut\":%d}",
                             i > 0 ? "," : "", it->shcode, it->name, it->is_futures ? 1 : 0);
         }

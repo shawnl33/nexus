@@ -40,6 +40,10 @@ struct tr_ls_rt {
     size_t rx_len;
     bool sub_sent;
     int sub_sent_idx;
+    /* lws 4.x는 lws_service의 timeout 인자를 무시한다(lib/plat/unix/unix-service.c:
+     * 양수이면 LWS_POLL_WAIT_LIMIT으로 강제). poll 대기 상한은 sul 스케줄러로만
+     * 제한할 수 있어, service 호출마다 wake sul을 걸어 timeout을 보장한다. */
+    lws_sorted_usec_list_t sul_wake;
 };
 
 static int64_t default_now_us(void) {
@@ -326,6 +330,7 @@ void tr_ls_rt_close(tr_ls_rt_t *rt) {
         return;
     }
     if (rt->ctx != 0) {
+        lws_sul_cancel(&rt->sul_wake);
         lws_context_destroy(rt->ctx);
     }
     free(rt->queue);
@@ -423,20 +428,31 @@ static void start_connect(tr_ls_rt_t *rt) {
     }
 }
 
+static void sul_wake_cb(lws_sorted_usec_list_t *sul) {
+    (void)sul; /* 깨우는 것 자체가 목적 — 콜백 본문 없음 */
+}
+
+/* lws_service 호출 전에 timeout 시점의 wake sul을 건다 (timeout 인자 무시 우회) */
+static int service_bounded(tr_ls_rt_t *rt, int timeout_ms) {
+    lws_sul_schedule(rt->ctx, 0, &rt->sul_wake, sul_wake_cb,
+                     (lws_usec_t)(timeout_ms < 0 ? 0 : timeout_ms) * LWS_US_PER_MS);
+    return lws_service(rt->ctx, timeout_ms);
+}
+
 int tr_ls_rt_service(tr_ls_rt_t *rt, int timeout_ms) {
     if (rt == 0) {
         return -1;
     }
     if (rt->wsi == 0 && rt->state != LS_RT_FAILED) {
         if (rt->state == LS_RT_RECONNECTING && now_us(rt) < rt->next_retry_us) {
-            lws_service(rt->ctx, timeout_ms < 50 ? timeout_ms : 50);
+            service_bounded(rt, timeout_ms < 50 ? timeout_ms : 50);
             return 0;
         }
         if (rt->state == LS_RT_CONNECTING || rt->state == LS_RT_RECONNECTING) {
             start_connect(rt);
         }
     }
-    int rc = lws_service(rt->ctx, timeout_ms);
+    int rc = service_bounded(rt, timeout_ms);
     if (rc < 0) {
         rt->state = LS_RT_FAILED;
     }

@@ -23,10 +23,18 @@ before(async () => {
   publisher = new zmq.Publisher();
   await publisher.bind(process.env.ENGINE_PUB_ENDPOINT);
 
-  // 스텁 엔진: status 명령에 applied로 응답
+  // 스텁 엔진: status 명령에 applied로 응답, market.instruments는 검색어를 되돌려준다
   (async () => {
     for await (const [id, , body] of router) {
       const req = JSON.parse(body.toString());
+      const payload = req.payload?.type === "market.instruments"
+        ? {
+            total: 2,
+            returned: 1,
+            items: [{ shcode: "005930", name: "삼성전자", fut: 0 }],
+            echo_q: req.payload.data?.q ?? "",
+          }
+        : { mode: "replay", state: "ok" };
       const reply = {
         protocol_version: 1,
         message_type: "command_result",
@@ -39,7 +47,7 @@ before(async () => {
         emitted_at: "0",
         status: "applied",
         error_code: "none",
-        payload: { mode: "replay", state: "ok" },
+        payload,
       };
       await router.send([id, "", JSON.stringify(reply)]);
     }
@@ -63,6 +71,20 @@ test("GET /api/status forwards engine reply", async () => {
   const data = await res.json();
   assert.equal(data.status, "applied");
   assert.equal(data.payload.mode, "replay");
+});
+
+test("GET /api/market proxies registry search with query", async () => {
+  const res = await fetch(`${base}/api/market?q=${encodeURIComponent("삼성")}&limit=20`);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.status, "applied");
+  assert.equal(data.payload.echo_q, "삼성");
+  assert.equal(data.payload.items[0].shcode, "005930");
+});
+
+test("GET /api/market rejects overlong query", async () => {
+  const res = await fetch(`${base}/api/market?q=${"a".repeat(65)}`);
+  assert.equal(res.status, 400);
 });
 
 test("workspace save/load/list/delete with token", async () => {

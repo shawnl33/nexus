@@ -40,6 +40,12 @@ const ls_instrument_info_t *ls_master_find(tr_ls_master_t *m, const char *shcode
 size_t ls_master_count(tr_ls_master_t *m);
 const ls_instrument_info_t *ls_master_at(tr_ls_master_t *m, size_t index);
 
+/* 종목 검색: shcode 접두사 또는 종목명 부분 문자열(대소문자 무시, ASCII 기준)에
+ * 일치하는 종목을 out에 최대 cap개 기록하고 기록된 수를 반환한다.
+ * q가 NULL이거나 빈 문자열이면 전체가 일치한 것으로 본다. */
+size_t ls_master_search(const tr_ls_master_t *m, const char *q,
+                        const ls_instrument_info_t **out, size_t cap);
+
 /* 파서 (테스트 가능하도록 분리). 반환값은 기록된 종목 수, 실패 시 -1. */
 int ls_master_parse_stock(const char *body, size_t len, ls_instrument_info_t *out, size_t cap);
 int ls_master_parse_fut(const char *body, size_t len, ls_instrument_info_t *out, size_t cap);

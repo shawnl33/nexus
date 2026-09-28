@@ -57,9 +57,40 @@ static void test_find_and_at(void) {
     free(m);
 }
 
+static void test_search(void) {
+    tr_ls_master_t *m = (tr_ls_master_t *)calloc(1, sizeof(*m));
+    m->items = g_items;
+    int n = ls_master_parse_stock(STOCK_RESP, strlen(STOCK_RESP), g_items, CAP);
+    m->count = (size_t)n;
+
+    const ls_instrument_info_t *hits[CAP];
+
+    /* 빈 검색어/NULL: 전체 */
+    TR_CHECK(ls_master_search(m, "", hits, CAP) == 4);
+    TR_CHECK(ls_master_search(m, 0, hits, CAP) == 4);
+
+    /* 종목코드 접두사 */
+    size_t k = ls_master_search(m, "005", hits, CAP);
+    TR_CHECK(k == 1 && strcmp(hits[0]->shcode, "005930") == 0);
+    TR_CHECK(ls_master_search(m, "000", hits, CAP) == 2); /* 000020, 000660 */
+
+    /* 종목명 부분 문자열 */
+    k = ls_master_search(m, "삼성", hits, CAP);
+    TR_CHECK(k == 1 && strcmp(hits[0]->name, "삼성전자") == 0);
+    k = ls_master_search(m, "sk", hits, CAP); /* 대소문자 무시 */
+    TR_CHECK(k == 1 && strcmp(hits[0]->shcode, "000660") == 0);
+
+    /* 일치 없음, cap 제한 */
+    TR_CHECK(ls_master_search(m, "없는종목", hits, CAP) == 0);
+    TR_CHECK(ls_master_search(m, "", hits, 2) == 2);
+
+    free(m);
+}
+
 int main(void) {
     test_parse_stock();
     test_parse_fut();
     test_find_and_at();
+    test_search();
     TR_TEST_SUMMARY();
 }

@@ -154,6 +154,16 @@ const server = createServer(async (req, res) => {
       return json(res, code, reply);
     }
 
+    if (req.method === "GET" && path === "/api/market") {
+      // 읽기 전용 종목 검색: 엔진 레지스트리 프록시 (인증 불필요, 계획서 §15)
+      const q = url.searchParams.get("q") ?? "";
+      if (q.length > 64) return json(res, 400, { error: "invalid_query" });
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 100);
+      const reply = await engineCommand(`dash-market-${reqSeq}`, "market.instruments", JSON.stringify({ q, limit }));
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
     if (path.startsWith("/api/workspaces")) {
       const name = decodeURIComponent(path.split("/")[3] ?? "");
       if (req.method === "GET" && !name) {

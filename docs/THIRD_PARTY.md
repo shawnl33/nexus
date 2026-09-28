@@ -34,9 +34,12 @@ vcpkg는 도입하지 않는다. 이 프로젝트는 Windows에서도 MSVC가 �
 ### libwebsockets 검증 기록 (2026-09-28)
 
 - 실제 LS 서버(wss://openapi.ls-sec.co.kr:9443) 대상 TLS 연결·구독·틱 수신 검증 완료 (tests/test_ls_rt_live.c).
-- 이 정적 빌드는 낶부 상태 기계(netlink coldplug)와 poll 지연 특성이 있어, 테스트 목적의 이중 컨텍스트
-  루프백 스텁에서는 간헐 정지를 일으켰다. 따라서 통합 검증은 라이브 경로로 수행하고
-  단위 테스트는 결정적인 파서 테스트로 유지한다.
+- ~~이 정적 빌드는 낶부 상태 기계(netlink coldplug)와 poll 지연 특성이 있어 이중 컨텍스트에서 간헐 정지~~
+  → **근본 원인 규명(2026-09-28)**: lws 4.3.5 upstream이 lws_service의 timeout 인자를 무시한다
+  (양수이면 LWS_POLL_WAIT_LIMIT≈23일로 강제, lib/plat/unix/unix-service.c:99-104).
+  netlink와 무관. poll 대기 상한은 sul 스케줄러로만 제한 가능하므로 tr_ls_rt_service가
+  호출마다 wake sul(lws_sul_schedule)을 걸어 timeout을 보장한다. 이로써 명령 응답 지연이
+  3~15초에서 17~27ms로 해소됐다.
 - 컨텍스트 생성 시 `LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT` 사용, 클라이언트 TLS는 `LCCSCF_USE_SSL`.
 
 ## Windows 독립 MinGW 빌드 절차 (미검증 기록)

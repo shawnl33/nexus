@@ -1,5 +1,6 @@
 #include "adapters/ls/ls_master.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -181,4 +182,43 @@ size_t ls_master_count(tr_ls_master_t *m) {
 
 const ls_instrument_info_t *ls_master_at(tr_ls_master_t *m, size_t index) {
     return (m != 0 && index < m->count) ? &m->items[index] : 0;
+}
+
+/* ASCII 대소문자 무시 부분 문자열 검색 (한글 종목명은 바이트열 비교라 그대로 동작) */
+static bool str_contains_ci(const char *hay, const char *needle) {
+    size_t nlen = strlen(needle);
+    if (nlen == 0) {
+        return true;
+    }
+    for (const char *h = hay; *h != 0; h++) {
+        size_t i = 0;
+        while (i < nlen && h[i] != 0 &&
+               tolower((unsigned char)h[i]) == tolower((unsigned char)needle[i])) {
+            i++;
+        }
+        if (i == nlen) {
+            return true;
+        }
+        if (h[i] == 0) {
+            break;
+        }
+    }
+    return false;
+}
+
+size_t ls_master_search(const tr_ls_master_t *m, const char *q,
+                        const ls_instrument_info_t **out, size_t cap) {
+    if (m == 0 || out == 0 || cap == 0) {
+        return 0;
+    }
+    size_t n = 0;
+    size_t qlen = q != 0 ? strlen(q) : 0;
+    for (size_t i = 0; i < m->count && n < cap; i++) {
+        const ls_instrument_info_t *it = &m->items[i];
+        bool match = qlen == 0 || strncmp(it->shcode, q, qlen) == 0 || str_contains_ci(it->name, q);
+        if (match) {
+            out[n++] = it;
+        }
+    }
+    return n;
 }
