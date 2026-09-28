@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 4,
   "cmakeMinimumRequired": {
     "major": 3,
     "minor": 24,
@@ -7,12 +7,36 @@
   },
   "configurePresets": [
     {
-      "name": "default",
-      "displayName": "기본 Debug 구성 (Ninja)",
-      "binaryDir": "${sourceDir}/build",
+      "name": "base",
+      "hidden": true,
       "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "default",
+      "displayName": "기본 Debug 구성 (Linux, Ninja)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "windows",
+      "displayName": "Windows Debug 구성 (MinGW GCC, Ninja)",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build-windows",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
       }
     }
   ],
@@ -20,12 +44,23 @@
     {
       "name": "default",
       "configurePreset": "default"
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows"
     }
   ],
   "testPresets": [
     {
       "name": "default",
       "configurePreset": "default",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows",
       "output": {
         "outputOnFailure": true
       }

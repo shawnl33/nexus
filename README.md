@@ -14,7 +14,9 @@ C 기반 개인용 자동매매 시스템. 기준 명세는 [C_TRADING_MASTER_PL
 
 ## 빌드
 
-프리셋 사용 (짧은 명령):
+프리셋 사용 (짧은 명령). **프로젝트 루트에서 실행한다.**
+
+Linux:
 
 ```sh
 cmake --preset default        # 구성 (최초 1회 또는 CMake 변경 시)
@@ -22,22 +24,23 @@ cmake --build --preset default
 ctest --preset default
 ```
 
-동일한 긴 명령 (Ninja 사용):
+Windows (MinGW GCC + Ninja, MSYS2 환경 또는 gcc/ninja가 PATH에 있는 상태):
 
-```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-ctest --test-dir build --output-on-failure --no-tests=error
+```bat
+cmake --preset windows
+cmake --build --preset windows
+ctest --preset windows
 ```
 
-core 테스트가 있으므로 0개 테스트 실행을 통과로 간주하지 않는다(긴 명령의 `--no-tests=error`).
+빌드 디렉터리는 OS별로 분리된다: Linux는 `build/`, Windows는 `build-windows/`.
+WSL 공유 폴터처럼 양쪽 OS가 같은 소스를 보는 환경에서도 충돌하지 않는다.
+
+core 테스트가 있으므로 0개 테스트 실행을 통과로 간주하지 않는다(`ctest --no-tests=error`).
 
 ## 실행
 
-```sh
-./build/trading-engine --help
-./build/trading-engine --version
-```
+Linux: `./build/trading-engine --help`
+Windows: `build-windows\trading-engine.exe --help`
 
 ## 비밀정보
 
