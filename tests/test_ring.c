@@ -112,6 +112,22 @@ static void test_clear(void) {
     TR_CHECK(!tr_ring_at(&rb, 0, &out));
 }
 
+static void test_get_mut(void) {
+    tr_ring rb;
+    tr_ring_init(&rb, storage, sizeof(int), CAP);
+    for (int i = 1; i <= 3; i++) {
+        tr_ring_push(&rb, &i);
+    }
+    TR_CHECK(tr_ring_get_mut(&rb, 3) == 0); /* 범위 초과 */
+    int *p = (int *)tr_ring_get_mut(&rb, 0);
+    TR_CHECK(p != 0 && *p == 3);
+    *p = 30; /* 제자리 수정이 조회에 반영되어야 한다 */
+    int out;
+    TR_CHECK(tr_ring_at(&rb, 0, &out) && out == 30);
+    p = (int *)tr_ring_get_mut(&rb, 2);
+    TR_CHECK(p != 0 && *p == 1);
+}
+
 int main(void) {
     test_empty_state();
     test_invalid_init();
@@ -120,5 +136,6 @@ int main(void) {
     test_capacity_one();
     test_update_newest_keeps_history();
     test_clear();
+    test_get_mut();
     TR_TEST_SUMMARY();
 }

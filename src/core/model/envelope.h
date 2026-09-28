@@ -31,6 +31,7 @@ typedef uint32_t tr_quality_flags_t;
 #define TR_QUALITY_SUSPECT   ((tr_quality_flags_t)1u << 2) /* 값 자체 의심 */
 #define TR_QUALITY_GAP       ((tr_quality_flags_t)1u << 3) /* 앞 입력 누락 감지 */
 #define TR_QUALITY_CORRECTED ((tr_quality_flags_t)1u << 4) /* 과거 데이터 정정분 */
+#define TR_QUALITY_FILLED_EMPTY ((tr_quality_flags_t)1u << 5) /* 무거래 채움 봉 (수신 누락과 구분) */
 
 typedef struct {
     tr_event_kind_t kind;

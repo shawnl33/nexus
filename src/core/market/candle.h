@@ -19,6 +19,9 @@ typedef enum {
     TR_CANDLE_CLOSED = 1  /* 확정. 이후 변경은 revision 증가와 함께 정정으로 처리 */
 } tr_candle_state_t;
 
+/* 일봉 주기. 초 단위가 아니라 트레이딩 데이(세션 개장일) 정렬을 의미한다 (계획서 §8). */
+#define TR_TF_DAY UINT32_C(0xFFFFFFFF)
+
 typedef struct {
     uint64_t instrument_id;
     uint32_t timeframe_sec;       /* 주기(초). 60=1분봉 */

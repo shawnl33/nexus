@@ -51,6 +51,14 @@ bool tr_ring_at(const tr_ring *rb, size_t back_index, void *out) {
     return true;
 }
 
+void *tr_ring_get_mut(tr_ring *rb, size_t back_index) {
+    if (rb == 0 || back_index >= rb->count) {
+        return 0;
+    }
+    size_t slot = (rb->head + rb->count - 1 - back_index) % rb->capacity;
+    return (char *)rb->storage + slot * rb->elem_size;
+}
+
 size_t tr_ring_count(const tr_ring *rb) {
     return rb == 0 ? 0 : rb->count;
 }

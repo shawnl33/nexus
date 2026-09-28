@@ -36,6 +36,10 @@ bool tr_ring_update_newest(tr_ring *rb, const void *elem);
 /* back_index(0=최신)의 요소를 out으로 복사한다. 범위 초과 시 false. */
 bool tr_ring_at(const tr_ring *rb, size_t back_index, void *out);
 
+/* back_index(0=최신)의 요소에 대한 가변 포인터. 범위 초과 시 NULL.
+ * 버퍼를 다시 push/update하기 전까지만 유효하다. */
+void *tr_ring_get_mut(tr_ring *rb, size_t back_index);
+
 size_t tr_ring_count(const tr_ring *rb);
 bool tr_ring_is_full(const tr_ring *rb);
 void tr_ring_clear(tr_ring *rb);

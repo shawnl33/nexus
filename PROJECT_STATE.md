@@ -5,33 +5,36 @@
 
 ## 현재 단계
 
-단계 1 (공통 모델·종목·시간·이벤트·Ring Buffer) — 완료
+단계 2 (Tick/Candle 처리·세션·상위 봉 집계·과거 입력 재생) — 완료
 
 ## 완료 항목
 
-- CMake 3.24+ 프로젝트 골격, C17 / extensions 비활성 / GCC·MSVC 경고 분리
-- `trading-engine` 실행 파일: `--help`, `--version`, `--data-dir`(예약) — `src/app/main.c`
-- `.gitignore` (`build/`, `.env`, `*:Zone.Identifier` 제외)
+- CMake 3.24+ 프로젝트 골격, C17 / extensions 비활성 / GCC·MSVC 경고 분리, Ninja 프리셋(Linux `default`, Windows `windows`, 크로스 `windows-cross`)
+- `trading-engine` 실행 파일: `--help`, `--version`, `--data-dir`(예약)
 - core 정적 라이브러리 (외부 의존성 없음, 표준 라이브러리만):
-  - `src/core/model/units` — 스케일 정수 가격·수량, `tr_validity_t`(값 부재와 0 구분), 스케일 검증
-  - `src/core/model/time_us` — UTC epoch µs int64, overflow 검사 덧셈
-  - `src/core/model/instrument` — 종목 모델·유효성 검사
-  - `src/core/model/envelope.h` — 이벤트 봉투·품질 플래그
-  - `src/core/market/candle` — 봉 모델(OPEN/CLOSED, revision)·불변식 검사
-  - `src/core/market/ring` — 고정 용량 Ring Buffer (최신 기준 상대 인덱스, 제자리 갱신)
-- CTest 테스트 3개: `ring`(빈 상태/용량 1/순환/덮어쓰기/범위 초과/반복 갱신), `units`(스케일·변환·overflow), `model`(종목·봉 불변식·품질 플래그)
+  - `model/units` — 스케일 정수 가격·수량, `tr_validity_t`, 스케일 검증
+  - `model/time_us` — UTC epoch µs int64, overflow 검사 덧셈
+  - `model/civil_time` — UTC ↔ 현지 역법 변환(오프셋, 윤년, pre-1970)
+  - `model/instrument` — 종목 모델·유효성 검사
+  - `model/envelope.h` — 이벤트 봉투·품질 플래그 (LATE/DUPLICATE/GAP/CORRECTED/FILLED_EMPTY)
+  - `market/candle` — 봉 모델(OPEN/CLOSED, revision), TR_TF_DAY
+  - `market/tick.h` — 체결 모델(원본 체결 ID, 거래량 의미)
+  - `market/session` — 세션 정책(야간장·요일 마스크·트레이딩 데이)
+  - `market/ring` — 고정 용량 Ring Buffer (최신 기준 상대 인덱스, 제자리 갱신, 가변 접근)
+  - `market/bar_builder` — 틱→봉: 중복 제거, 경계/타이머/세션 폐장 확정, 늦은 입력 정정(revision+CORRECTED), 무거래 채움(FILLED_EMPTY)과 누락 구분
+  - `market/bar_aggregator` — 확정 하위 봉→상위 봉: 세션 개장 정렬(UTC 나머지 아님), 일봉 트레이딩 데이(야간 자정 무시), 미확정 표시
+- adapters/history 라이브러리: `replay` — 기록된 틱의 논리 시간 재생(순서 검증 포함)
+- CTest 8개: ring, units, model, civil_time, session, bar_builder, aggregator, replay(동일 입력 재생)
 
 ## 검증 결과
 
-- 환경: Linux, CMake 3.28.1, GCC 15.3.0
-- `cmake -S . -B build && cmake --build build --config Debug` 경고 없이 통과
-- `ctest --test-dir build -C Debug --output-on-failure --no-tests=error` — 3/3 통과
-- `./build/trading-engine --help` / `--version` 정상 동작
-- Windows: 크로스 컴파일된 `trading-engine.exe` 실행 확인 (사용자 확인, 2026-09-28). Windows 네이티브 ctest 실행은 미검증
+- 환경: Linux, CMake 3.28.1, GCC 15.3.0, Ninja 1.11.1
+- `ctest --preset default` — 8/8 통과
+- Windows 크로스 컴파일(`windows-cross`) — 경고 없이 exe 생성 확인. Windows에서 exe 실행 확인(사용자, 2026-09-28). Windows 네이티브 ctest는 미검증
 
 ## 바로 다음 작업
 
-- 단계 2: Tick/Candle 처리·세션·상위 봉 집계·과거 입력 재생 (`src/core/market/` 확장, `src/runtime/` 시작)
+- 단계 3: 기본 지표와 미래곡선의 독립 계산부 (지표 API, 원본 의존성별 구현)
 - 병행 가능: 단계 6의 LS 읽기 전용 사전 확인 (토큰 발급, TR 매핑 문서화) — `.env`의 키 사용
 
 ## 차단·미결 사항
