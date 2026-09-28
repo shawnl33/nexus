@@ -54,7 +54,8 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
                          score_mid_storage, score_mid_capacity)) {
         return false;
     }
-    return true;
+    /* 호가 지표: 원본 기본값 관심 10 / 강세 35, 부호반전 없음 */
+    return tr_obd2_init(&e->obd2, 10.0, 35.0, false, cfg->is_futures);
 }
 
 void tr_engine_attach_ipc(tr_engine_t *e, tr_ipc_t *ipc, const char *stream_id) {
@@ -84,13 +85,15 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         "\"ohlc\":[%lld,%lld,%lld,%lld],"
         "\"reg_valid\":%d,\"reg_line\":%.10g,\"reg_slope\":%.10g,\"reg_r2\":%.10g,"
         "\"pred\":[%.10g,%.10g,%.10g],\"pred_dir\":[%d,%d,%d],"
-        "\"score\":%d,\"future_dir\":%.10g,\"market_dir\":%d,\"reg_dir\":%d,\"ob_dir\":%d}",
+        "\"score\":%d,\"future_dir\":%.10g,\"market_dir\":%d,\"reg_dir\":%d,\"ob_dir\":%d,"
+        "\"ob_valid\":%d,\"ob_score\":%.10g}",
         (long long)bar->open_time_us, closed ? 1 : 0,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
         r->v4.pred_price[0], r->v4.pred_price[1], r->v4.pred_price[2],
         r->v4.pred_dir[0], r->v4.pred_dir[1], r->v4.pred_dir[2],
-        sc->score, sc->future_dir, sc->market_dir, sc->reg_dir, sc->ob_dir);
+        sc->score, sc->future_dir, sc->market_dir, sc->reg_dir, sc->ob_dir,
+        e->obd2.validity == TR_VALIDITY_VALID ? 1 : 0, e->obd2.score);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -144,7 +147,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     sin.reg_valid = e->lr3.reg_valid;
     sin.reg_r2 = e->lr3.r2;
     sin.reg_flat_line = e->lr3.line;
-    sin.ob_score = 0.0; /* 호가 입력이 없는 경로: 구성요소 미지원 → 0 (유효로 위장하지 않음) */
+    /* 호가 유효할 때만 점수를 사용한다. 없는 경로(파일 재생)에서는 0 (유효로 위장하지 않음) */
+    sin.ob_score = e->obd2.validity == TR_VALIDITY_VALID ? e->obd2.score : 0.0;
     tr_score1m_on_bar(&e->score, &sin);
 
     publish_status(e, bar, closed);
@@ -167,4 +171,15 @@ void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us) {
         return;
     }
     tr_bar_builder_on_timer(&e->bb, now_us);
+}
+
+void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, double asks) {
+    if (e == 0) {
+        return;
+    }
+    int64_t day = -1;
+    if (!tr_session_trading_day(&e->cfg.session, event_time_us, &day)) {
+        day = e->has_prev_day ? e->prev_trading_day : -1;
+    }
+    tr_obd2_eval(&e->obd2, bids, asks, day);
 }

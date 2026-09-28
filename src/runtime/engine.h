@@ -18,6 +18,7 @@
 #include "adapters/ipc/ipc.h"
 #include "core/indicators/htf_curve_predict.h"
 #include "core/indicators/linreg_v3.h"
+#include "core/indicators/orderbook_dir_v2.h"
 #include "core/indicators/score_1m.h"
 #include "core/market/bar_builder.h"
 
@@ -27,6 +28,7 @@ typedef struct {
     tr_session_policy_t session;
     uint32_t timeframe_sec;      /* 기본 봉 주기(초) */
     tr_no_trade_policy_t no_trade;
+    bool is_futures;             /* 호가 부호 규칙(선물=매수 우세 양수)에 사용 */
     /* 지표 파라미터 (메인 원본 기본값 대응) */
     int32_t predict_bars[3];     /* 예측봉수1~3 (기본 5/10/15) */
     int32_t htf_ticks;           /* 예측변수 (기본 10) */
@@ -46,6 +48,7 @@ typedef struct {
     tr_bar_builder_t bb;
     tr_lr3_t lr3;
     tr_htf_curve_t htf;
+    tr_obd2_t obd2;
     tr_score1m_t score;
     tr_ipc_t *ipc;              /* NULL이면 status_cb 사용 */
     tr_engine_status_fn status_cb;
@@ -68,5 +71,8 @@ void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ct
 /* 틱/타이머 입력. replay 어댑터가 순서대로 호출한다. */
 tr_bb_status_t tr_engine_on_tick(tr_engine_t *e, const tr_event_envelope_t *env, const tr_tick_t *tick);
 void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us);
+
+/* 호가 입력 (H1_/FH9). bids/asks는 총잔량(totbidrem/totofferrem). */
+void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, double asks);
 
 #endif

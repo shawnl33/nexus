@@ -115,6 +115,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     ecfg.session = is_fut ? SESS_FUT : SESS_STOCK;
     ecfg.timeframe_sec = 60;
     ecfg.no_trade = TR_NO_TRADE_SKIP;
+    ecfg.is_futures = is_fut;
     ecfg.predict_bars[0] = 5;
     ecfg.predict_bars[1] = 10;
     ecfg.predict_bars[2] = 15;
@@ -174,7 +175,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         return 3;
     }
     const char *tr_cd = is_fut ? "FC9" : "S3_";
-    if (!tr_ls_rt_subscribe(rt, tr_cd, shcode, ecfg.instrument_id)) {
+    const char *ob_tr_cd = is_fut ? "FH9" : "H1_";
+    if (!tr_ls_rt_subscribe(rt, tr_cd, shcode, ecfg.instrument_id) ||
+        !tr_ls_rt_subscribe(rt, ob_tr_cd, shcode, ecfg.instrument_id)) {
         fprintf(stderr, "error: subscribe failed\n");
         tr_ls_rt_close(rt);
         tr_ipc_close(ipc);
@@ -194,7 +197,10 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         tr_ls_rt_service(rt, 20);
         ls_rt_event_t ev;
         while (tr_ls_rt_next(rt, &ev)) {
-            if (ev.kind == LS_RT_TICK && ev.instrument_id == ecfg.instrument_id) {
+            if (ev.instrument_id != ecfg.instrument_id) {
+                continue;
+            }
+            if (ev.kind == LS_RT_TICK) {
                 tr_event_envelope_t env;
                 memset(&env, 0, sizeof(env));
                 env.kind = TR_EVENT_TICK;
@@ -209,6 +215,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                 tk.volume_meaning = ev.volume_meaning;
                 tr_engine_on_tick(&engine, &env, &tk);
                 tr_engine_on_timer(&engine, ev.event_time_us);
+            } else if (ev.kind == LS_RT_ORDERBOOK) {
+                tr_engine_on_orderbook(&engine, ev.event_time_us,
+                                       (double)ev.bid_total, (double)ev.ask_total);
             }
         }
         tr_ipc_poll(ipc, 0, 4, live_command_handler, 0);

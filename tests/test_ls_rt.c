@@ -41,15 +41,16 @@ static void test_parse_fut_tick(void) {
 }
 
 static void test_parse_orderbook(void) {
+    /* 2026-09-28 H1_ 실측 필드 구조 */
     const char *msg =
         "{\"header\":{\"tr_cd\":\"H1_\",\"tr_key\":\"005930\"},"
-        "\"body\":{\"bidvolsum\":\"100000\",\"askvolsum\":\"90000\",\"chetime\":\"124500\","
-        "\"bidho1\":\"272500\",\"bidvol1\":\"1000\",\"askho1\":\"273000\",\"askvol1\":\"900\"}}";
+        "\"body\":{\"totbidrem\":\"1257710\",\"totofferrem\":\"306757\",\"hotime\":\"142351\","
+        "\"bidho1\":\"272500\",\"bidrem1\":\"1000\",\"offerho1\":\"273000\",\"offerrem1\":\"900\"}}";
     ls_rt_event_t ev;
     TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 42, 1790567100000000LL, &ev));
     TR_CHECK(ev.kind == LS_RT_ORDERBOOK);
-    TR_CHECK(ev.bid_total == 100000);
-    TR_CHECK(ev.ask_total == 90000);
+    TR_CHECK(ev.bid_total == 1257710);
+    TR_CHECK(ev.ask_total == 306757);
     TR_CHECK(ev.level_count == 1);
     TR_CHECK(ev.levels[0].price == 27250000);
     TR_CHECK(ev.levels[5].price == 27300000);

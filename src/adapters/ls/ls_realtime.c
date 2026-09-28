@@ -124,22 +124,22 @@ bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id
     } else if (strcmp(out->tr_cd, "H1_") == 0 || strcmp(out->tr_cd, "HA_") == 0 ||
                strcmp(out->tr_cd, "FH9") == 0) {
         out->kind = LS_RT_ORDERBOOK;
-        out->event_time_us = parse_chetime(yyjson_obj_get(b, "chetime"), recv_time_us);
-        /* 총잔량: 매수총잔량(bidvolsum)/매도총잔량(askvolsum) 추정 필드명.
-           실제 필드가 다륩면 라이브 검증으로 교정한다 (docs/ls_api_mapping.md §4). */
-        out->bid_total = parse_i64(yyjson_obj_get(b, "bidvolsum"));
-        out->ask_total = parse_i64(yyjson_obj_get(b, "askvolsum"));
+        out->event_time_us = parse_chetime(yyjson_obj_get(b, "hotime"), recv_time_us);
+        /* 실제 필드명(2026-09-28 H1_ 실측): totbidrem=총매수잔량, totofferrem=총매도잔량.
+           Bids/Asks(예스랭귀지 매수/매도잔량)에 각각 대응한다 (docs/ls_api_mapping.md §4). */
+        out->bid_total = parse_i64(yyjson_obj_get(b, "totbidrem"));
+        out->ask_total = parse_i64(yyjson_obj_get(b, "totofferrem"));
         out->level_count = 0;
-        /* 우선호가 1~5단계 (있으면 기록) */
-        for (int i = 1; i <= 5 && out->level_count < 5; i++) {
+        /* 우선호가 1~5단계: bidhoN/bidremN(매수), offerhoN/offerremN(매도) */
+        for (int i = 1; i <= 5; i++) {
             char key[16];
             snprintf(key, sizeof(key), "bidho%d", i);
             yyjson_val *bp = yyjson_obj_get(b, key);
-            snprintf(key, sizeof(key), "bidvol%d", i);
+            snprintf(key, sizeof(key), "bidrem%d", i);
             yyjson_val *bv = yyjson_obj_get(b, key);
-            snprintf(key, sizeof(key), "askho%d", i);
+            snprintf(key, sizeof(key), "offerho%d", i);
             yyjson_val *ap = yyjson_obj_get(b, key);
-            snprintf(key, sizeof(key), "askvol%d", i);
+            snprintf(key, sizeof(key), "offerrem%d", i);
             yyjson_val *av = yyjson_obj_get(b, key);
             if (bp == 0 || ap == 0) {
                 break;

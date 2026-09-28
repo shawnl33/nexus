@@ -48,6 +48,7 @@ static void init_engine(tr_engine_t *e, capture_t *cap) {
     cfg.htf_ticks = 10;
     cfg.min_r2 = 0.40;
     cfg.market_period = 20;
+    cfg.is_futures = true; /* 호가 부호 규칙 테스트 기본값 (매수 우세 = 양수) */
     memset(cap, 0, sizeof(*cap));
     TR_CHECK(tr_engine_init(e, &cfg, g_bb_storage, BB_CAP, g_score_mid, 32));
     tr_engine_attach_status_cb(e, capture_cb, cap);
@@ -123,8 +124,27 @@ static void test_session_first_reset(void) {
     TR_CHECK(strstr(cap.payloads[0], "\"score\":") != 0);
 }
 
+static void test_orderbook_path(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap);
+
+    /* 호가가 없는 초기에는 ob_valid=0 */
+    feed(&e, 0, 0, 100, 1);
+    TR_CHECK(any_payload_contains(&cap, "\"ob_valid\":0"));
+
+    /* 매수 우세 호가(선물 부호 규칙): bids >> asks → 양수 점수가 ob_score에 반영된다 */
+    for (int i = 0; i < 6; i++) {
+        tr_engine_on_orderbook(&e, kst(9, 0, (unsigned)(10 + i)), 800000.0, 200000.0);
+    }
+    feed(&e, 0, 30, 101, 2);
+    TR_CHECK(any_payload_contains(&cap, "\"ob_valid\":1"));
+    TR_CHECK(any_payload_contains(&cap, "\"ob_dir\":1"));
+}
+
 int main(void) {
     test_replay_pipeline();
     test_session_first_reset();
+    test_orderbook_path();
     TR_TEST_SUMMARY();
 }

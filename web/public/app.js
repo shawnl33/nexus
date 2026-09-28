@@ -25,6 +25,7 @@ const el = {
   score: document.getElementById("score"),
   reg: document.getElementById("reg"),
   pred: document.getElementById("pred"),
+  ob: document.getElementById("ob"),
   wsName: document.getElementById("ws-name"),
 };
 
@@ -72,6 +73,14 @@ function applyStatus(msg) {
   if (typeof p.score === "number") {
     el.score.textContent = String(p.score);
     el.score.style.color = scoreColor(p.score);
+  }
+
+  if (p.ob_valid === 1 && typeof p.ob_score === "number") {
+    el.ob.textContent = `호가 ${p.ob_score.toFixed(1)}`;
+    el.ob.className = p.ob_score > 0 ? "badge ok" : "badge err";
+  } else {
+    el.ob.textContent = "호가: 미지원";
+    el.ob.className = "badge";
   }
 }
 

@@ -66,6 +66,12 @@ S3_ 실측 body 필드: `price`, `cvolume`(개별 체결량), `mdchecnt`/`mschec
 - `cvolume`은 **개별 체결량**, `mdvolume`은 누적 — Tick 모델의 `volume_meaning`과 매핑 시 구분한다.
 - 선물 가격은 소수점 문자열.
 
+H1_ 실측 body 필드 (2026-09-28 005930 확인):
+- **총매수잔량 `totbidrem`, 총매도잔량 `totofferrem`** — 예스랭귀지 Bids/Asks에 각각 대응 (obd2 입력).
+- 호가 시각 `hotime` (HHMMSS).
+- 단계별: `bidho1..10`/`bidrem1..10` (매수 호가/잔량), `offerho1..10`/`offerrem1..10` (매도 호가/잔량). 값은 문자열.
+- `volume`(누적거래량), `midsumremgubun`, `donsigubun` 등 부가 필드.
+
 ## 5. 계좌 (읽기, 단계 6 후반)
 
 | TR | 내용 | 경로 |
