@@ -132,13 +132,28 @@ function collectWorkspace() {
   };
 }
 
+let cachedToken = null;
 async function apiToken() {
+  if (cachedToken) return cachedToken;
+  // 서버가 같은 출처에 자동 발급해준다 (수동 입력 불필요)
+  try {
+    const res = await fetch("/api/token");
+    if (res.ok) {
+      cachedToken = (await res.json()).token;
+      return cachedToken;
+    }
+  } catch { /* 서버 미응답이면 수동 입력으로 대체 */ }
   let token = localStorage.getItem("trader_token");
   if (!token) {
     token = prompt("대시보드 인증 토큰 (web/.runtime/token 파일 내용):", "");
     if (token) localStorage.setItem("trader_token", token.trim());
   }
   return token?.trim();
+}
+
+function resetToken() {
+  cachedToken = null;
+  localStorage.removeItem("trader_token");
 }
 
 async function saveWorkspace() {
@@ -152,7 +167,7 @@ async function saveWorkspace() {
   });
   const data = await res.json();
   if (!res.ok) {
-    if (res.status === 403) localStorage.removeItem("trader_token");
+    if (res.status === 403) resetToken();
     return alert(`저장 실패: ${data.error}`);
   }
   alert(`화면틀 '${name}' 저장됨`);
@@ -189,7 +204,7 @@ async function switchSymbol() {
   });
   const data = await res.json();
   if (!res.ok) {
-    if (res.status === 403) localStorage.removeItem("trader_token");
+    if (res.status === 403) resetToken();
     return alert(`전환 실패: ${data.error_code ?? data.error ?? res.status}`);
   }
   // 새 세대를 즉시 반영하고 화면을 비운다 (엔진의 다음 메시지부터 새 종목)

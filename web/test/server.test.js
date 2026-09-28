@@ -73,6 +73,23 @@ test("GET /api/status forwards engine reply", async () => {
   assert.equal(data.payload.mode, "replay");
 });
 
+test("GET /api/token issues token to same-origin/local clients", async () => {
+  // 헤더 없음(curl 등 로컬 도구) → 발급
+  let res = await fetch(`${base}/api/token`);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).token, AUTH_TOKEN);
+
+  // 같은 출처 브라우저 → 발급
+  res = await fetch(`${base}/api/token`, { headers: { "sec-fetch-site": "same-origin" } });
+  assert.equal(res.status, 200);
+
+  // 교차 출처 브라우저 → 거부
+  res = await fetch(`${base}/api/token`, { headers: { "sec-fetch-site": "cross-site" } });
+  assert.equal(res.status, 403);
+  res = await fetch(`${base}/api/token`, { headers: { origin: "http://evil.example" } });
+  assert.equal(res.status, 403);
+});
+
 test("GET /api/market proxies registry search with query", async () => {
   const res = await fetch(`${base}/api/market?q=${encodeURIComponent("삼성")}&limit=20`);
   assert.equal(res.status, 200);

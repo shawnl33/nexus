@@ -131,6 +131,19 @@ const server = createServer(async (req, res) => {
       // 토큰 자체는 낸지 않고 설정 유묻만 알린다
       return json(res, 200, { auth_required: true });
     }
+    if (req.method === "GET" && path === "/api/token") {
+      // 같은 출처의 페이지에만 토큰을 준다. 교차 출처 JS는 CORS 정책상 응답을 읽지 못하므로
+      // CSRF 보호(계획서 §18)가 유지되고, 브라우저 아닌 로컬 도구는 어차피 토큰 파일을 읽을 수 있다.
+      const sfs = req.headers["sec-fetch-site"];
+      if (sfs != null && sfs !== "same-origin" && sfs !== "same-site" && sfs !== "none") {
+        return json(res, 403, { error: "forbidden" });
+      }
+      const origin = req.headers.origin;
+      if (origin != null && !origin.startsWith(`http://${HOST}`) && !origin.startsWith("http://localhost")) {
+        return json(res, 403, { error: "forbidden" });
+      }
+      return json(res, 200, { token: AUTH_TOKEN });
+    }
     if (req.method === "GET" && path === "/api/status") {
       const reply = await engineCommand(`dash-status-${reqSeq}`, "status", null);
       return json(res, reply.error_code === "connection_error" ? 502 : 200, reply);
