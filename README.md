@@ -8,8 +8,8 @@ C 기반 개인용 자동매매 시스템. 기준 명세는 [C_TRADING_MASTER_PL
 
 ## 요구 환경
 
-- CMake 3.24 이상
-- Linux: GCC / Windows: MSVC (Clang·MinGW는 별도 매트릭스)
+- CMake 3.24 이상, Ninja
+- Linux: GCC / Windows: MinGW-w64 또는 MSVC (Clang은 별도 매트릭스)
 - C17, compiler extensions 비활성
 
 ## 빌드
@@ -22,12 +22,12 @@ cmake --build --preset default
 ctest --preset default
 ```
 
-동일한 긴 명령:
+동일한 긴 명령 (Ninja 사용):
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure --no-tests=error
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+ctest --test-dir build --output-on-failure --no-tests=error
 ```
 
 core 테스트가 있으므로 0개 테스트 실행을 통과로 간주하지 않는다(긴 명령의 `--no-tests=error`).

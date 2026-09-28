@@ -8,8 +8,9 @@
   "configurePresets": [
     {
       "name": "default",
-      "displayName": "기본 Debug 구성",
+      "displayName": "기본 Debug 구성 (Ninja)",
       "binaryDir": "${sourceDir}/build",
+      "generator": "Ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
@@ -18,15 +19,13 @@
   "buildPresets": [
     {
       "name": "default",
-      "configurePreset": "default",
-      "configuration": "Debug"
+      "configurePreset": "default"
     }
   ],
   "testPresets": [
     {
       "name": "default",
       "configurePreset": "default",
-      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }
