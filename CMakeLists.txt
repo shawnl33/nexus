@@ -21,6 +21,12 @@ add_library(core STATIC
     src/core/market/candle.c
     src/core/market/ring.c
     src/core/market/session.c
+    src/core/indicators/atr.c
+    src/core/indicators/htf_curve_predict.c
+    src/core/indicators/linreg.c
+    src/core/indicators/linreg_predict_v4.c
+    src/core/indicators/linreg_v3.c
+    src/core/indicators/orderbook_dir_v2.c
     src/core/model/civil_time.c
     src/core/model/instrument.c
     src/core/model/time_us.c
@@ -28,6 +34,10 @@ add_library(core STATIC
 )
 target_include_directories(core PUBLIC src)
 target_compile_options(core PRIVATE ${TR_WARNINGS})
+# 지표 계산은 double을 사용한다(계획서 §6). MSVC는 libm이 없다.
+if(NOT MSVC)
+    target_link_libraries(core PUBLIC m)
+endif()
 
 # adapters 계층: core 인터페이스와 외부 세계를 연결한다.
 add_library(history STATIC
@@ -48,7 +58,7 @@ target_compile_options(trading-engine PRIVATE ${TR_WARNINGS})
 enable_testing()
 
 # 0개 테스트 실행을 통과로 간주하지 않는다(계획서 §25).
-foreach(t IN ITEMS ring units model civil_time session bar_builder aggregator)
+foreach(t IN ITEMS ring units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE core)
     target_compile_options(test_${t} PRIVATE ${TR_WARNINGS})

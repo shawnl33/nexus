@@ -5,44 +5,42 @@
 
 ## 현재 단계
 
-단계 2 (Tick/Candle 처리·세션·상위 봉 집계·과거 입력 재생) — 완료
+단계 3 (기본 지표와 미래곡선의 독립 계산부) — 1차 완료 (제공된 원본 전부 포팅)
 
 ## 완료 항목
 
-- CMake 3.24+ 프로젝트 골격, C17 / extensions 비활성 / GCC·MSVC 경고 분리, Ninja 프리셋(Linux `default`, Windows `windows`, 크로스 `windows-cross`)
-- `trading-engine` 실행 파일: `--help`, `--version`, `--data-dir`(예약)
-- core 정적 라이브러리 (외부 의존성 없음, 표준 라이브러리만):
-  - `model/units` — 스케일 정수 가격·수량, `tr_validity_t`, 스케일 검증
-  - `model/time_us` — UTC epoch µs int64, overflow 검사 덧셈
-  - `model/civil_time` — UTC ↔ 현지 역법 변환(오프셋, 윤년, pre-1970)
-  - `model/instrument` — 종목 모델·유효성 검사
-  - `model/envelope.h` — 이벤트 봉투·품질 플래그 (LATE/DUPLICATE/GAP/CORRECTED/FILLED_EMPTY)
-  - `market/candle` — 봉 모델(OPEN/CLOSED, revision), TR_TF_DAY
-  - `market/tick.h` — 체결 모델(원본 체결 ID, 거래량 의미)
-  - `market/session` — 세션 정책(야간장·요일 마스크·트레이딩 데이)
-  - `market/ring` — 고정 용량 Ring Buffer (최신 기준 상대 인덱스, 제자리 갱신, 가변 접근)
-  - `market/bar_builder` — 틱→봉: 중복 제거, 경계/타이머/세션 폐장 확정, 늦은 입력 정정(revision+CORRECTED), 무거래 채움(FILLED_EMPTY)과 누락 구분
-  - `market/bar_aggregator` — 확정 하위 봉→상위 봉: 세션 개장 정렬(UTC 나머지 아님), 일봉 트레이딩 데이(야간 자정 무시), 미확정 표시
-- adapters/history 라이브러리: `replay` — 기록된 틱의 논리 시간 재생(순서 검증 포함)
-- CTest 8개: ring, units, model, civil_time, session, bar_builder, aggregator, replay(동일 입력 재생)
+- CMake/Ninja 프리셋(Linux `default`, Windows `windows`, 크로스 `windows-cross`), `trading-engine --help/--version`
+- core 정적 라이브러리 (외부 의존성 없음, 표준 라이브러리+libm만):
+  - model: units(스케일 정수·유효성), time_us(UTC µs), civil_time(역법 변환), instrument, envelope(품질 플래그)
+  - market: candle, tick, session(야간장·트레이딩 데이), ring(제자리 갱신·가변 접근),
+    bar_builder(중복 제거·타이머/세션 확정·늦은 입력 정정·무거래 채움), bar_aggregator(세션 정렬·일봉)
+  - indicators (계획서 §9 계약 + docs/yeslanguage_mapping.md §5 순서):
+    - linreg — OLS 유틸 (V3·Htf 공유, 이력 비공유)
+    - atr — Wilder 평활 (원본 내장 ATR(14) 산식 불명 → Wilder 채택, 버전 기록 대상)
+    - htf_curve_predict — WSF_Htf_CurvePredict 포팅 (19표본, 원시 외삽, 방향=가격 수치, 워밍업 19/20)
+    - linreg_predict_v4 — WSF_Mtf_LinRegPredictV4 포팅 (R² 계수, ATR 기울기/가속도/변위 클램프, 같은 방향 가속 억제)
+    - orderbook_dir_v2 — WSF_OrderBookDirectionV2 포팅 (선물/주식 부호, 일자 리셋, 무효 시 미갱신)
+    - linreg_v3 — WSF_Mtf_LinRegV3(제공 신형) 포팅 (주기별 n 자동 선택, 세션 리셋, 낶부 V4 연계)
+- adapters/history: replay — 논리 시간 재생
+- CTest 13개 전부 통과: ring, units, model, civil_time, session, bar_builder, aggregator, replay,
+  linreg, htf_curve, lp4, obd2, lr3
 
 ## 검증 결과
 
-- 환경: Linux, CMake 3.28.1, GCC 15.3.0, Ninja 1.11.1
-- `ctest --preset default` — 8/8 통과
-- Windows 크로스 컴파일(`windows-cross`) — 경고 없이 exe 생성 확인. Windows에서 exe 실행 확인(사용자, 2026-09-28). Windows 네이티브 ctest는 미검증
-
-## 바로 다음 작업
-
-- 단계 3: 기본 지표와 미래곡선의 독립 계산부 — [docs/yeslanguage_mapping.md](docs/yeslanguage_mapping.md) §5 포팅 단위 순서로 구현 (회귀 유틸 → Htf → V4 → 호가 V2 → 신형 V3)
-- 병행 가능: 단계 6의 LS 읽기 전용 사전 확인 (토큰 발급, TR 매핑 문서화) — `.env`의 키 사용
+- `ctest --preset default` — 13/13 통과 (Linux, GCC 15.3.0, 경고 0)
+- Windows 크로스 컴파일 — 경고 0, exe 생성. Windows exe 실행 확인(사용자, 2026-09-28). 네이티브 ctest 미검증
+- 완료 수준 표기(계획서 §10.4): 제공 원본 포팅은 '부분 구현+수식 검증' 단계.
+  원본 런타임 비교 자료(HTS 출력)가 없어 '봉 확정 출력 비교' 이상은 미검증
 
 ## 완료된 분석
 
-- YesLanguage 원본 6개 전수 분석 완료: [docs/yeslanguage_mapping.md](docs/yeslanguage_mapping.md)
-  - 호출 그래프, 함수별 계약(인자/상태/출력/워밍업), P01~P06 갱신, 미제공 함수 영향, 포팅 단위 제안
-  - 핵심 확인: V3 7인자 호출 vs 19인자 정의 불일치(메인은 구형 V3+외부 V4 체계), Htf `%1` 항상 참, 방향 출력은 수치, 점수에서 방향 0은 −2 분기
-  - 원본 8개 해시 전부 SOURCE_INDEX와 일치
+- YesLanguage 원본 6개 전수 분석: docs/yeslanguage_mapping.md (호출 그래프, P01~P06 갱신, 미제공 함수 영향)
+
+## 바로 다음 작업
+
+- 단계 3 잔여: 메인 지표의 독립 계산부(과거예측 검증 가변 룩백, 고정 기억선/지속선 상태 기계, 마켓 VWAP, 통합 점수) — 필요 시
+- 단계 4: 저장소·기록·IPC·CLI
+- 병행 가능: 단계 6 LS 읽기 사전 확인 (ATR 산식·Bids/Asks 범위 등 '불명' 해소에도 필요)
 
 ## 차단·미결 사항
 
