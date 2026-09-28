@@ -20,7 +20,7 @@ cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure --no-tests=error
 ```
 
-테스트는 아직 없다. core 테스트가 추가된 이후에는 0개 테스트 실행을 통과로 간주하지 않는다.
+core 테스트가 있으므로 0개 테스트 실행을 통과로 간주하지 않는다(`--no-tests=error`).
 
 ## 실행
 
