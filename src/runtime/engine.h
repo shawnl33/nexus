@@ -47,6 +47,9 @@ typedef struct {
     bool reg_valid;
     double reg_line, reg_r2;
     double pred[3];
+    int pred_dir[3];            /* 예측방향1~3 (과거 채점의 방향 비교에 사용) */
+    double residual;            /* 회귀잔차 (미래 목표선 오차 띠) */
+    double pvol;                /* 예측변동성 ATR(14) (오차 띠) */
     int score;
     bool ob_valid;
     double ob_score;

@@ -289,7 +289,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         /* 늦게 접속한 대시보드의 과거 봉 시딩용. PUB/SUB는 과거 메시지를 보존하지 않으므로
          * 엔진의 봉 링에서 직접 돌려준다. data.back_index(최신 기준 건너뜀, 기본 0)로
          * 페이지를 나누고, 이어지면 next_back_index != 0 을 돌려준다 (페이지당 300봉, 오름차순). */
-        static char buf[48 * 1024];
+        static char buf[60 * 1024];
         tr_engine_t *eng = g_live_ctx.engine;
         long back_index = 0;
         yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
@@ -307,14 +307,14 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         size_t n = tr_ring_count(&eng->bb.bars);
         size_t from = (size_t)back_index;
         size_t remain = from < n ? n - from : 0;
-        size_t take = remain < 300 ? remain : 300;
+        size_t take = remain < 200 ? remain : 200;
         size_t next = from + take < n ? from + take : 0;
         int off = snprintf(buf, sizeof(buf),
                            "{\"shcode\":\"%s\",\"generation\":%u,\"timeframe_sec\":%u,\"total\":%zu,"
                            "\"next_back_index\":%zu,\"bars\":[",
                            g_live_ctx.shcode, eng->generation, (unsigned)eng->cfg.timeframe_sec, n, next);
         bool first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 96;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 160;) {
             tr_candle_t c;
             tr_ring_at(&eng->bb.bars, k, &c);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%lld,%lld,%lld,%lld,%lld,%lld]",
@@ -327,16 +327,18 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
          * 미래곡선 보조지표도 복원하기 위한 값이다 */
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ind\":[");
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 220;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 260;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_status_at(eng, k, &st);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off,
-                            "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g]",
+                            "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d]",
                             first ? "" : ",",
                             st.closed ? 1 : 0, st.reg_valid ? 1 : 0, st.reg_line, st.reg_r2,
                             st.pred[0], st.pred[1], st.pred[2],
-                            st.score, st.ob_valid ? 1 : 0, st.ob_score);
+                            st.score, st.ob_valid ? 1 : 0, st.ob_score,
+                            st.residual, st.pvol,
+                            st.pred_dir[0], st.pred_dir[1], st.pred_dir[2]);
             first = false;
         }
         snprintf(buf + off, sizeof(buf) - (size_t)off, "]}");

@@ -10,3 +10,4 @@ web/.runtime/
 *.deb
 .playwright-mcp/
 dash-*.png
+original-indicator.png

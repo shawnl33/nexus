@@ -109,6 +109,7 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         "\"ohlc\":[%lld,%lld,%lld,%lld],"
         "\"reg_valid\":%d,\"reg_line\":%.10g,\"reg_slope\":%.10g,\"reg_r2\":%.10g,"
         "\"pred\":[%.10g,%.10g,%.10g],\"pred_dir\":[%d,%d,%d],"
+        "\"resid\":%.10g,\"pvol\":%.10g,"
         "\"score\":%d,\"future_dir\":%.10g,\"market_dir\":%d,\"reg_dir\":%d,\"ob_dir\":%d,"
         "\"ob_valid\":%d,\"ob_score\":%.10g,\"generation\":%u}",
         (long long)bar->open_time_us, closed ? 1 : 0,
@@ -116,6 +117,7 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
         r->v4.pred_price[0], r->v4.pred_price[1], r->v4.pred_price[2],
         r->v4.pred_dir[0], r->v4.pred_dir[1], r->v4.pred_dir[2],
+        r->residual, r->v4.volatility,
         sc->score, sc->future_dir, sc->market_dir, sc->reg_dir, sc->ob_dir,
         e->obd2.validity == TR_VALIDITY_VALID ? 1 : 0, e->obd2.score, e->generation);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
@@ -188,6 +190,11 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         st.pred[0] = e->lr3.v4.pred_price[0];
         st.pred[1] = e->lr3.v4.pred_price[1];
         st.pred[2] = e->lr3.v4.pred_price[2];
+        st.pred_dir[0] = e->lr3.v4.pred_dir[0];
+        st.pred_dir[1] = e->lr3.v4.pred_dir[1];
+        st.pred_dir[2] = e->lr3.v4.pred_dir[2];
+        st.residual = e->lr3.residual;
+        st.pvol = e->lr3.v4.volatility;
         st.score = e->score.score;
         st.ob_valid = e->obd2.validity == TR_VALIDITY_VALID;
         st.ob_score = e->obd2.score;

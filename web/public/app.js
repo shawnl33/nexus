@@ -41,7 +41,9 @@ const candleSeries = chart.addCandlestickSeries({
   borderUpColor: "#ef5350", borderDownColor: "#2962ff",
   wickUpColor: "#ef5350", wickDownColor: "#2962ff",
 });
-const regSeries = chart.addLineSeries({ color: "#f0b90b", lineWidth: 2, priceLineVisible: false });
+const regUp = chart.addLineSeries({ color: "#c2452d", lineWidth: 2, priceLineVisible: false });
+const regFlat = chart.addLineSeries({ color: "#9aa3ae", lineWidth: 2, priceLineVisible: false });
+const regDn = chart.addLineSeries({ color: "#2d5a80", lineWidth: 2, priceLineVisible: false });
 // 예측은 원본처럼 지평(5/10/15봉)별 3개 트랙으로 분리한다 — 하나로 합치면 지그재그로 보인다
 const predStyles = [
   { color: "#26a69a", lineStyle: LightweightCharts.LineStyle.Dashed },
@@ -50,6 +52,31 @@ const predStyles = [
 ];
 const predSeries = predStyles.map((s) =>
   chart.addLineSeries({ color: s.color, lineWidth: 1, lineStyle: s.lineStyle, priceLineVisible: false }));
+// ① 통합 점수 막대: 아래 보조 칸의 세로 색 막대 (진한 빨강/파랑 = 강, 회색 = 관망)
+const scoreSeries = chart.addHistogramSeries({ priceScaleId: "score", priceLineVisible: false, lastValueVisible: false });
+chart.priceScale("score").applyOptions({ scaleMargins: { top: 0.84, bottom: 0.02 } });
+// ③ 미래 목표선: 기준 봉에서 미래로 뻗는 부채꼴 — 목표 3선(실선) + 오차 띠 상·하(점선)
+const fanMid = predStyles.map((s) =>
+  chart.addLineSeries({ color: s.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }));
+const fanHi = chart.addLineSeries({ color: "#7d8590", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
+const fanLo = chart.addLineSeries({ color: "#7d8590", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
+
+const SPANS = [5, 10, 15];
+function scoreBarColor(v) {
+  if (v >= 4) return "#c2452d";
+  if (v >= 2) return "#d98a7a";
+  if (v >= 1) return "#e6c3ba";
+  if (v <= -4) return "#2d5a80";
+  if (v <= -2) return "#6c93b5";
+  if (v <= -1) return "#a9c3d8";
+  return "#9aa3ae";
+}
+function regSeriesFor(score) {
+  return score > 0 ? regUp : score < 0 ? regDn : regFlat;
+}
+function clearIndicatorSeries() {
+  for (const s of [regUp, regFlat, regDn, fanHi, fanLo, scoreSeries, ...predSeries, ...fanMid]) s.setData([]);
+}
 
 const el = {
   wsState: document.getElementById("ws-state"),
@@ -66,15 +93,66 @@ function scoreColor(v) {
   return "#7d8590";
 }
 
+// ③ 미래 목표선(부채꼴) 갱신: 기준 봉 (t, regLine)에서 목표 3선과 오차 띠를 미래로 그린다.
+// 오차 띠 = max(잔차, 변동성×0.25) × √지평 (원본 MTF기준오차·MTF범위)
+function updateFan(t, regLine, preds, resid, pvol) {
+  const base = Math.max(Math.abs(resid), Math.abs(pvol) * 0.25);
+  const hi = [{ time: t, value: regLine }];
+  const lo = [{ time: t, value: regLine }];
+  for (let i = 0; i < 3; i++) {
+    const ft = t + SPANS[i] * 60;
+    const band = base * Math.sqrt(SPANS[i]);
+    fanMid[i].setData([{ time: t, value: regLine }, { time: ft, value: preds[i] }]);
+    hi.push({ time: ft, value: preds[i] + band });
+    lo.push({ time: ft, value: preds[i] - band });
+  }
+  fanHi.setData(hi);
+  fanLo.setData(lo);
+}
+function clearFan() {
+  for (const s of [...fanMid, fanHi, fanLo]) s.setData([]);
+}
+
+// ④ 과거 채점: 지난 예측방향과 실제 움직임 방향을 비교해 목표 봉에 ●/○를 찍는다
+let gradeMarkers = [];
+const barInd = new Map(); // time → { pred_dir, reg_valid } (시딩·라이브 공통)
+function addGradeMarker(t) {
+  let hits = 0, dirSum = 0, evaluated = 0;
+  for (let i = 0; i < 3; i++) {
+    const src = barInd.get(t - SPANS[i] * 60);
+    const dst = bars.get(t);
+    const srcBar = bars.get(t - SPANS[i] * 60);
+    if (!src?.reg_valid || !dst || !srcBar) continue;
+    const d = src.pred_dir[i];
+    if (d === 0) continue;
+    const actual = Math.sign(dst.close - srcBar.close);
+    evaluated++;
+    if (d === actual) { hits++; dirSum += d; }
+  }
+  if (evaluated === 0) return;
+  const hit = hits * 2 > evaluated; /* 과반 적중 */
+  const up = dirSum > 0;
+  gradeMarkers.push({
+    time: t,
+    position: up ? "aboveBar" : "belowBar",
+    color: hit ? (up ? "#c2452d" : "#2d5a80") : "#9aa3ae",
+    shape: "circle",
+    text: hit ? "●" : "○",
+  });
+  gradeMarkers.sort((a, b) => a.time - b.time);
+  candleSeries.setMarkers(gradeMarkers);
+}
+
 function applyStatus(msg) {
   const p = msg.payload ?? {};
   // 세대 확인: 종목 전환 이후 새 세대가 오면 로컬 이력을 지우고 다시 쌓는다 (혼합 방지, 계획서 §18)
   if (typeof p.generation === "number" && p.generation > generation) {
     generation = p.generation;
     bars.clear();
+    barInd.clear();
+    gradeMarkers = [];
     candleSeries.setData([]);
-    regSeries.setData([]);
-    for (const s of predSeries) s.setData([]);
+    clearIndicatorSeries();
   }
   const t = Number(p.bar_open_time) / 1e6;
   if (!Number.isFinite(t) || t <= 0) return;
@@ -89,31 +167,39 @@ function applyStatus(msg) {
     if (p.closed) bars.set(t, bar);
     void prev;
   }
+  if (Array.isArray(p.pred_dir)) {
+    barInd.set(t, { pred_dir: p.pred_dir, reg_valid: p.reg_valid === 1 });
+  }
 
   if (p.reg_valid === 1 && Number.isFinite(p.reg_line)) {
-    regSeries.update({ time: t, value: p.reg_line });
+    // ② 회귀선: 색은 그 시점 통합 점수의 색 (빨강=매수 우세, 파랑=매도 우세)
+    regSeriesFor(p.score ?? 0).update({ time: t, value: p.reg_line });
     el.reg.textContent = `회귀선 ${p.reg_line.toFixed(1)} (R² ${p.reg_r2.toFixed(2)})`;
     el.reg.className = "badge ok";
   } else {
     el.reg.textContent = "회귀: 워밍업";
     el.reg.className = "badge";
+    clearFan();
   }
 
   // 예측: 생성 시점 기준 n봉 앞 위치에 표시한다. 미래 가격 데이터가 있는 것처럼 연결하지 않는다.
   // 지평(5/10/15봉)별로 원본처럼 별개 트랙에 찍는다.
   const preds = p.pred ?? [];
   if (p.reg_valid === 1 && preds.length === 3) {
-    const spans = [5, 10, 15];
     for (let i = 0; i < 3; i++) {
-      predSeries[i].update({ time: t + spans[i] * 60, value: preds[i] });
+      predSeries[i].update({ time: t + SPANS[i] * 60, value: preds[i] });
     }
     el.pred.textContent = `예측 ${preds.map((v) => v.toFixed(1)).join(" / ")}`;
+    updateFan(t, p.reg_line, preds, p.resid ?? 0, p.pvol ?? 0);
   }
 
   if (typeof p.score === "number") {
     el.score.textContent = String(p.score);
     el.score.style.color = scoreColor(p.score);
+    scoreSeries.update({ time: t, value: p.score, color: scoreBarColor(p.score) });
   }
+
+  if (p.closed) addGradeMarker(t);
 
   if (p.ob_valid === 1 && typeof p.ob_score === "number") {
     el.ob.textContent = `호가 ${p.ob_score.toFixed(1)}`;
@@ -151,24 +237,36 @@ async function seedChart() {
     all.sort((a, b) => a.time - b.time);
     const dedup = all.filter((b, i) => i === 0 || b.time !== all[i - 1].time);
     bars.clear();
+    barInd.clear();
     for (const b of dedup) bars.set(b.time, b);
     candleSeries.setData(dedup);
 
-    // 봉별 지표 복원: 스냅샷의 ind 배열로 과거 구간의 회귀선·예측선·배지를 다시 그린다
-    const regData = [];
+    // 봉별 지표 복원: 스냅샷의 ind 배열로 과거 구간의 보조지표를 다시 그린다
+    const regBySign = { up: [], flat: [], dn: [] };
     const predTracks = [[], [], []]; // 지평(5/10/15봉)별 트랙 — 원본의 3개 분리 표시
-    const spans = [5, 10, 15];
+    const scoreData = [];
     for (const b of dedup) {
       const ind = b.ind;
-      if (!ind || ind[1] !== 1) continue; // reg_valid 아닌 봉은 건너뜀
-      if (Number.isFinite(ind[2])) regData.push({ time: b.time, value: ind[2] });
+      if (!ind) continue;
+      barInd.set(b.time, { pred_dir: [ind[12], ind[13], ind[14]], reg_valid: ind[1] === 1 });
+      if (typeof ind[7] === "number") {
+        scoreData.push({ time: b.time, value: ind[7], color: scoreBarColor(ind[7]) });
+      }
+      if (ind[1] !== 1) continue;
+      if (Number.isFinite(ind[2])) {
+        const bucket = ind[7] > 0 ? "up" : ind[7] < 0 ? "dn" : "flat";
+        regBySign[bucket].push({ time: b.time, value: ind[2] });
+      }
       for (let i = 0; i < 3; i++) {
         if (Number.isFinite(ind[4 + i])) {
-          predTracks[i].push({ time: b.time + spans[i] * 60, value: ind[4 + i] });
+          predTracks[i].push({ time: b.time + SPANS[i] * 60, value: ind[4 + i] });
         }
       }
     }
-    regSeries.setData(regData);
+    regUp.setData(regBySign.up);
+    regFlat.setData(regBySign.flat);
+    regDn.setData(regBySign.dn);
+    scoreSeries.setData(scoreData);
     // setData는 시간 오름차순·중복 불가 — 각 트랙을 정렬하고 같은 시각은 최신 봉의 값을 남긴다
     for (let i = 0; i < 3; i++) {
       const track = predTracks[i];
@@ -177,8 +275,13 @@ async function seedChart() {
       predSeries[i].setData(dedupT);
     }
 
-    // 마지막 봉의 값으로 배지를 복원한다
-    const last = dedup[dedup.length - 1]?.ind;
+    // ④ 과거 채점 복원: 각 봉에서 지난 예측방향과 실제 움직임을 비교한다
+    gradeMarkers = [];
+    for (const b of dedup) addGradeMarker(b.time);
+
+    // 마지막 봉의 값으로 배지·미래 목표선(부채꼴)을 복원한다
+    const lastBar = dedup[dedup.length - 1];
+    const last = lastBar?.ind;
     if (last) {
       el.score.textContent = String(last[7]);
       el.score.style.color = scoreColor(last[7]);
@@ -186,6 +289,7 @@ async function seedChart() {
         el.reg.textContent = `회귀선 ${last[2].toFixed(1)} (R² ${last[3].toFixed(2)})`;
         el.reg.className = "badge ok";
         el.pred.textContent = `예측 ${last[4].toFixed(1)} / ${last[5].toFixed(1)} / ${last[6].toFixed(1)}`;
+        updateFan(lastBar.time, last[2], [last[4], last[5], last[6]], last[10], last[11]);
       }
       if (last[8] === 1) {
         el.ob.textContent = `호가 ${last[9].toFixed(1)}`;
@@ -213,9 +317,10 @@ function connect() {
     if (data.stream_event === "restart" || data.stream_event === "gap") {
       // 엔진 재시작/순번 공백: 로컬 이력을 비우고 새 기준으로 쌓는다 (혼합 표시 방지)
       bars.clear();
+      barInd.clear();
+      gradeMarkers = [];
       candleSeries.setData([]);
-      regSeries.setData([]);
-      for (const s of predSeries) s.setData([]);
+      clearIndicatorSeries();
       seedChart(); // 재시작한 엔진의 봉 링으로 다시 시딩
     }
     try {
@@ -320,9 +425,10 @@ async function switchSymbol() {
   if (data.payload?.name) symbolName.textContent = data.payload.name;
   hideSymbolResults();
   bars.clear();
+  barInd.clear();
+  gradeMarkers = [];
   candleSeries.setData([]);
-  regSeries.setData([]);
-  for (const s of predSeries) s.setData([]);
+  clearIndicatorSeries();
   seedChart(); // 엔진이 새 종목을 백필해 두었으므로 스냅샷으로 채운다
 }
 
