@@ -47,4 +47,29 @@ int ls_chart_parse_page(const char *body, size_t body_len, ls_chart_kind_t kind,
                         tr_candle_t *out, size_t out_cap, ls_chart_page_t *page,
                         char *errbuf, size_t errlen);
 
+/* 가장 최근 KRX야간파생 세션의 기준일(개장일, 평일, days since epoch, KST 기준). */
+int64_t ls_fut_night_session_day(tr_time_us_t now_us);
+
+/* t8461(KRX야간파생 틱분별, 분봉) 응답 파서 (테스트 가능하도록 분리).
+ * 행은 최신→과거 내림차순이고 날짜 필드가 없으므로(chetime HHMMSS만),
+ * newest_session_day(최신 행이 속한 세션의 기준일)에서 뒤로 걸며
+ * 저녁(18:00~)→아침(~05:00) 전이마다 기준일을 **직전 거래일**로 옮겨 날짜를 부여한다.
+ * 거래일 목록(trading_days, 오름차순)은 t8465 주간 봉에서 추출한다 — 추석 같은
+ * 연휴가 끼면 평일 추정이 어긋나므로 반드시 실제 거래일을 쓴다 (2026-09-28 실측 사건).
+ * out에는 open_time 오름차순으로 기록된다. 반환값은 기록된 봉 수, 실패 시 -1. */
+int ls_chart_parse_fut_night(const char *body, size_t body_len,
+                             const int64_t *trading_days, size_t n_trading_days,
+                             int64_t newest_session_day,
+                             uint64_t instrument_id, uint64_t source_id,
+                             tr_candle_t *out, size_t out_cap, char *errbuf, size_t errlen);
+
+/* t8461 분봉 조회 (1 TPS 스로틀 적용). cnt는 1~999 (서버 상한, 연속 조회 없음).
+ * t8465와 달리 야간 세션(18:00~익일 05:00) 봉을 준다.
+ * trading_days는 날짜 부여에 쓰는 실제 거래일 목록(오름차순, t8465 주간 봉에서 추출). */
+int ls_chart_fetch_fut_night(ls_auth_t *auth, const char *focode, int32_t cnt,
+                             const int64_t *trading_days, size_t n_trading_days,
+                             uint64_t instrument_id, uint64_t source_id,
+                             tr_candle_t *out, size_t out_cap, size_t *out_count,
+                             char *errbuf, size_t errlen);
+
 #endif

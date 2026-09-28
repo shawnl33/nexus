@@ -98,10 +98,62 @@ static void test_duplicate_detected(void) {
     TR_CHECK(rc == LS_HTTP_PARSE_ERR);
 }
 
+/* 실제 t8461 응답 형식 (2026-09-28 캡처 기반): 내림차순, chetime만 있고 날짜 없음 */
+static const char *NIGHT_RESP =
+    "{\"t8461OutBlock1\":["
+    "{\"chetime\":\"213800\",\"price\":\"1089.70\",\"open\":\"1089.90\",\"high\":\"1090.10\",\"low\":\"1089.70\",\"cvolume\":10},"
+    "{\"chetime\":\"180500\",\"price\":\"1087.15\",\"open\":\"1087.00\",\"high\":\"1087.30\",\"low\":\"1086.90\",\"cvolume\":32},"
+    "{\"chetime\":\"051000\",\"price\":\"1090.00\",\"open\":\"1090.10\",\"high\":\"1090.20\",\"low\":\"1089.90\",\"cvolume\":5},"
+    "{\"chetime\":\"003000\",\"price\":\"1091.00\",\"open\":\"1090.90\",\"high\":\"1091.10\",\"low\":\"1090.80\",\"cvolume\":7},"
+    "{\"chetime\":\"235000\",\"price\":\"1092.00\",\"open\":\"1091.90\",\"high\":\"1092.10\",\"low\":\"1091.80\",\"cvolume\":12},"
+    "{\"chetime\":\"181000\",\"price\":\"1093.00\",\"open\":\"1092.90\",\"high\":\"1093.10\",\"low\":\"1092.80\",\"cvolume\":20}],"
+    "\"rsp_cd\":\"00000\",\"rsp_msg\":\"정상적으로 조회가 완료되었습니다.\"}";
+
+static int64_t kst_us(int y, unsigned mo, unsigned d, unsigned h, unsigned mi, unsigned s) {
+    tr_civil_t c = {y, mo, d, h, mi, s};
+    tr_time_us_t t = 0;
+    tr_time_us_from_civil(&c, 540, &t);
+    return t;
+}
+
+static void test_fut_night_session_day(void) {
+    /* 월 21:40 → 월 세션 / 화 03:00 → 월 세션 / 월 10:00(주간) → 금 세션 / 토 10:00 → 금 세션 */
+    TR_CHECK(ls_fut_night_session_day(kst_us(2026, 9, 28, 21, 40, 0)) == tr_days_from_civil(2026, 9, 28));
+    TR_CHECK(ls_fut_night_session_day(kst_us(2026, 9, 29, 3, 0, 0)) == tr_days_from_civil(2026, 9, 28));
+    TR_CHECK(ls_fut_night_session_day(kst_us(2026, 9, 28, 10, 0, 0)) == tr_days_from_civil(2026, 9, 25));
+    TR_CHECK(ls_fut_night_session_day(kst_us(2026, 9, 26, 10, 0, 0)) == tr_days_from_civil(2026, 9, 25));
+}
+
+static void test_fut_night_parse(void) {
+    char err[128] = {0};
+    /* 09-24/25는 추석 연휴(무세션)라는 시나리오: 거래일은 09-23, 09-28 뿐 */
+    int64_t tdays[] = {tr_days_from_civil(2026, 9, 23), tr_days_from_civil(2026, 9, 28)};
+    int n = ls_chart_parse_fut_night(NIGHT_RESP, strlen(NIGHT_RESP),
+                                     tdays, 2,
+                                     tr_days_from_civil(2026, 9, 28), /* 앵커(최신 세션) */
+                                     9, 7, g_bars, CAP, err, sizeof(err));
+    TR_CHECK(n == 6);
+    /* 오름차순: 09-23 18:10, 09-23 23:50, 09-24 00:30, 09-24 05:10, 09-28 18:05, 09-28 21:38
+     * (연휴가 껴 있으면 09-23 세션의 아침 봉 날짜는 09-24다 — 평일 추정이면 09-26으로 오판) */
+    TR_CHECK(g_bars[0].open_time_us == kst_us(2026, 9, 23, 18, 10, 0));
+    TR_CHECK(g_bars[1].open_time_us == kst_us(2026, 9, 23, 23, 50, 0));
+    TR_CHECK(g_bars[2].open_time_us == kst_us(2026, 9, 24, 0, 30, 0));
+    TR_CHECK(g_bars[3].open_time_us == kst_us(2026, 9, 24, 5, 10, 0));
+    TR_CHECK(g_bars[4].open_time_us == kst_us(2026, 9, 28, 18, 5, 0));
+    TR_CHECK(g_bars[5].open_time_us == kst_us(2026, 9, 28, 21, 38, 0));
+    /* 가격(price=종가) ×100 스케일과 봉 속성 */
+    TR_CHECK(g_bars[5].close == 108970);
+    TR_CHECK(g_bars[5].open == 108990 && g_bars[5].high == 109010 && g_bars[5].low == 108970);
+    TR_CHECK(g_bars[5].volume == 10);
+    TR_CHECK(g_bars[5].state == TR_CANDLE_CLOSED && g_bars[5].timeframe_sec == 60);
+}
+
 int main(void) {
     test_stock_parse();
     test_futures_string_prices();
     test_empty_is_not_error();
     test_duplicate_detected();
+    test_fut_night_session_day();
+    test_fut_night_parse();
     TR_TEST_SUMMARY();
 }
