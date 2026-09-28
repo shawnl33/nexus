@@ -27,7 +27,7 @@
 - `cmake -S . -B build && cmake --build build --config Debug` 경고 없이 통과
 - `ctest --test-dir build -C Debug --output-on-failure --no-tests=error` — 3/3 통과
 - `./build/trading-engine --help` / `--version` 정상 동작
-- Windows(MSVC) 빌드: 미검증
+- Windows: 크로스 컴파일된 `trading-engine.exe` 실행 확인 (사용자 확인, 2026-09-28). Windows 네이티브 ctest 실행은 미검증
 
 ## 바로 다음 작업
 
