@@ -1,5 +1,6 @@
 #include "runtime/engine.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -57,7 +58,19 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
         return false;
     }
     /* 호가 지표: 원본 기본값 관심 10 / 강세 35, 부호반전 없음 */
-    return tr_obd2_init(&e->obd2, 10.0, 35.0, false, cfg->is_futures);
+    if (!tr_obd2_init(&e->obd2, 10.0, 35.0, false, cfg->is_futures)) {
+        return false;
+    }
+    /* ⑥ 방향 기억·⑦ 지속 사진 (메인 원본 기본값: 가파른기울기틱 4, 추가확인봉 1, 지속봉수 5).
+     * price_scale은 원본 틱 양자화 대응 — raw ×100 단위에서 선물 1틱=1, 주식 1원=100 */
+    {
+        double ps = cfg->is_futures ? 1.0 : 100.0;
+        tr_regmem_config_t rcfg = {ps, 4.0, 1, true};
+        tr_regmem_init(&e->regmem, &rcfg);
+        tr_persist_config_t pcfg = {ps, 5, cfg->min_r2};
+        tr_persist_init(&e->persist, &pcfg);
+    }
+    return true;
 }
 
 void tr_engine_attach_ipc(tr_engine_t *e, tr_ipc_t *ipc, const char *stream_id) {
@@ -100,10 +113,25 @@ bool tr_engine_status_at(const tr_engine_t *e, size_t back_index, tr_bar_status_
     return tr_ring_at(&e->status_ring, back_index, out);
 }
 
+bool tr_engine_attach_market(tr_engine_t *e, tr_candle_t *storage, size_t capacity) {
+    if (e == 0 || storage == 0 || capacity == 0) {
+        return false;
+    }
+    double ps = e->cfg.is_futures ? 1.0 : 100.0;
+    if (!tr_market_init(&e->mkt, e->cfg.market_period, 1.0, ps, storage, capacity)) {
+        return false;
+    }
+    e->mkt_on = true;
+    return true;
+}
+
 static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) {
     const tr_lr3_t *r = &e->lr3;
     const tr_score1m_t *sc = &e->score;
-    char payload[768];
+    const tr_market_t *m = &e->mkt;
+    const tr_regmem_t *rm = &e->regmem;
+    const tr_persist_t *ps = &e->persist;
+    char payload[1408];
     int n = snprintf(payload, sizeof(payload),
         "{\"bar_open_time\":\"%lld\",\"closed\":%d,"
         "\"ohlc\":[%lld,%lld,%lld,%lld],"
@@ -111,7 +139,10 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         "\"pred\":[%.10g,%.10g,%.10g],\"pred_dir\":[%d,%d,%d],"
         "\"resid\":%.10g,\"pvol\":%.10g,"
         "\"score\":%d,\"future_dir\":%.10g,\"market_dir\":%d,\"reg_dir\":%d,\"ob_dir\":%d,"
-        "\"ob_valid\":%d,\"ob_score\":%.10g,\"generation\":%u}",
+        "\"ob_valid\":%d,\"ob_score\":%.10g,\"generation\":%u,"
+        "\"mkt\":[%d,%.10g,%.10g,%.10g,%.10g,%.10g],"
+        "\"mem\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
+        "\"pst\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g]}",
         (long long)bar->open_time_us, closed ? 1 : 0,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
@@ -119,7 +150,17 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         r->v4.pred_dir[0], r->v4.pred_dir[1], r->v4.pred_dir[2],
         r->residual, r->v4.volatility,
         sc->score, sc->future_dir, sc->market_dir, sc->reg_dir, sc->ob_dir,
-        e->obd2.validity == TR_VALIDITY_VALID ? 1 : 0, e->obd2.score, e->generation);
+        e->obd2.validity == TR_VALIDITY_VALID ? 1 : 0, e->obd2.score, e->generation,
+        (e->mkt_on && m->valid) ? 1 : 0, m->center, m->upper1, m->lower1, m->upper2, m->lower2,
+        rm->mem_valid ? 1 : 0, rm->updated ? 1 : 0, rm->mem_dir, rm->mem_price,
+        rm->mem_target[0], rm->mem_target[1], rm->mem_target[2],
+        rm->mem_upper[0], rm->mem_upper[1], rm->mem_upper[2],
+        rm->mem_lower[0], rm->mem_lower[1], rm->mem_lower[2],
+        ps->streak == ps->cfg.persist_bars && ps->saved_valid ? 1 : 0,
+        ps->saved_valid ? 1 : 0, ps->saved_dir,
+        ps->target[0], ps->target[1], ps->target[2],
+        ps->upper[0], ps->upper[1], ps->upper[2],
+        ps->lower[0], ps->lower[1], ps->lower[2]);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -177,6 +218,90 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     sin.ob_score = e->obd2.validity == TR_VALIDITY_VALID ? e->obd2.score : 0.0;
     tr_score1m_on_bar(&e->score, &sin);
 
+    /* MTF상단/하단1~3 (원본 메인의 오차 띠 공식, 부채꼴·기억선 공용):
+     * 기준오차 = max(회귀잔차, 예측변동성×0.25), 범위 = 기준오차 × √예측봉수 */
+    double band_base = e->lr3.residual > e->lr3.v4.volatility * 0.25
+                           ? e->lr3.residual
+                           : e->lr3.v4.volatility * 0.25;
+    double upper[3], lower[3];
+    for (int i = 0; i < 3; i++) {
+        double span = (double)e->cfg.predict_bars[i];
+        double band = band_base * sqrt(span > 1.0 ? span : 1.0);
+        upper[i] = e->lr3.v4.pred_price[i] + band;
+        lower[i] = e->lr3.v4.pred_price[i] - band;
+    }
+
+    /* 곡선회귀선_평탄: 원본 틱 양자화 */
+    double ps = e->cfg.is_futures ? 1.0 : 100.0;
+    double line_flat = floor(e->lr3.line / ps + 0.5) * ps;
+
+    /* ⑧ 마켓 밴드 */
+    if (e->mkt_on) {
+        tr_market_on_bar(&e->mkt, bar, session_first, line_flat);
+    }
+
+    /* 최근 5봉 H/L ([0]=현재) — 기억선 이탈 검사용 */
+    double h5[5], l5[5];
+    size_t hl_count = 0;
+    {
+        size_t nb = tr_ring_count(&e->bb.bars);
+        if (nb > 5) {
+            nb = 5;
+        }
+        for (size_t i = 0; i < nb; i++) {
+            tr_candle_t c;
+            if (tr_ring_at(&e->bb.bars, i, &c)) {
+                h5[i] = (double)c.high;
+                l5[i] = (double)c.low;
+                hl_count++;
+            }
+        }
+    }
+
+    /* ⑥ 방향 기억 (운영최종방향 미제공 → final_dir=0, 회귀선_구분 부호 사용) */
+    {
+        tr_regmem_input_t rin;
+        memset(&rin, 0, sizeof(rin));
+        rin.reg_valid = e->lr3.reg_valid;
+        rin.line_flat = line_flat;
+        rin.line_sign = e->lr3.line_sign;
+        rin.slope = e->lr3.slope;
+        rin.final_dir = 0; /* 운영최종방향 = 일봉 체인 (미구현, MISSING_DEPENDENCY) */
+        rin.final_dir_valid = false;
+        rin.pred_price[0] = e->lr3.v4.pred_price[0];
+        rin.pred_price[1] = e->lr3.v4.pred_price[1];
+        rin.pred_price[2] = e->lr3.v4.pred_price[2];
+        memcpy(rin.upper, upper, sizeof(upper));
+        memcpy(rin.lower, lower, sizeof(lower));
+        rin.session_no = (uint64_t)(day > 0 ? day : 0);
+        rin.compress_min = true;
+        rin.compress_min_le30 = e->cfg.timeframe_sec <= 1800;
+        rin.ob_applicable = e->obd2.validity == TR_VALIDITY_VALID;
+        rin.ob_state = e->score.ob_dir;
+        rin.h5 = h5;
+        rin.l5 = l5;
+        rin.hl_count = hl_count;
+        tr_regmem_on_bar(&e->regmem, &rin);
+    }
+
+    /* ⑦ 지속 사진 */
+    {
+        tr_persist_input_t pin;
+        memset(&pin, 0, sizeof(pin));
+        pin.reg_valid = e->lr3.reg_valid;
+        pin.r2 = e->lr3.r2;
+        pin.pred_dir2 = e->lr3.v4.pred_dir[1];
+        pin.pred_price[0] = e->lr3.v4.pred_price[0];
+        pin.pred_price[1] = e->lr3.v4.pred_price[1];
+        pin.pred_price[2] = e->lr3.v4.pred_price[2];
+        memcpy(pin.upper, upper, sizeof(upper));
+        memcpy(pin.lower, lower, sizeof(lower));
+        pin.h5 = h5;
+        pin.l5 = l5;
+        pin.hl_count = hl_count;
+        tr_persist_on_bar(&e->persist, &pin);
+    }
+
     /* 봉 링과 open_time 기준으로 정합을 맞춰 봉별 지표를 기록한다 (스냅샷 복원용).
      * 새 봉이면 push, 현재 봉 갱신이면 최신 교체, 늦은 정정은 해당 슬롯만 고친다. */
     if (e->status_ring_on) {
@@ -195,9 +320,34 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         st.pred_dir[2] = e->lr3.v4.pred_dir[2];
         st.residual = e->lr3.residual;
         st.pvol = e->lr3.v4.volatility;
+        memcpy(st.upper, upper, sizeof(upper));
+        memcpy(st.lower, lower, sizeof(lower));
         st.score = e->score.score;
         st.ob_valid = e->obd2.validity == TR_VALIDITY_VALID;
         st.ob_score = e->obd2.score;
+        st.mkt_valid = e->mkt_on && e->mkt.valid;
+        st.mkt_center = e->mkt.center;
+        st.mkt_u1 = e->mkt.upper1;
+        st.mkt_l1 = e->mkt.lower1;
+        st.mkt_u2 = e->mkt.upper2;
+        st.mkt_l2 = e->mkt.lower2;
+        st.mem_valid = e->regmem.mem_valid;
+        st.mem_updated = e->regmem.updated;
+        st.mem_dir = e->regmem.mem_dir;
+        st.mem_price = e->regmem.mem_price;
+        memcpy(st.mem_target, e->regmem.mem_target, sizeof(st.mem_target));
+        memcpy(st.mem_upper, e->regmem.mem_upper, sizeof(st.mem_upper));
+        memcpy(st.mem_lower, e->regmem.mem_lower, sizeof(st.mem_lower));
+        st.mem_show_targets = e->regmem.show_targets;
+        st.mem_show_upper = e->regmem.show_upper;
+        st.mem_show_lower = e->regmem.show_lower;
+        st.pst_saved = e->persist.streak == e->persist.cfg.persist_bars &&
+                       e->persist.saved_valid;
+        st.pst_valid = e->persist.saved_valid;
+        st.pst_dir = e->persist.saved_dir;
+        memcpy(st.pst_target, e->persist.target, sizeof(st.pst_target));
+        memcpy(st.pst_upper, e->persist.upper, sizeof(st.pst_upper));
+        memcpy(st.pst_lower, e->persist.lower, sizeof(st.pst_lower));
         tr_bar_status_t newest;
         if (tr_ring_count(&e->status_ring) == 0 ||
             (tr_ring_at(&e->status_ring, 0, &newest) && bar->open_time_us > newest.open_time_us)) {

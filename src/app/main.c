@@ -54,6 +54,7 @@ static uint64_t make_engine_instance_id(void) {
 #define BB_CAP 2560 /* 2일치 1분봉(선물 주간+야간 2,130) + 라이브 여유 */
 static tr_candle_t g_bb_storage[BB_CAP];
 static tr_bar_status_t g_status_storage[BB_CAP]; /* 봉별 지표 링 (스냅샷 복원용) */
+static tr_candle_t g_mkt_storage[64];            /* ⑧ 마켓 밴드용 (마켓계산기간 20의 3배 여유) */
 static double g_score_mid[64];
 
 static volatile sig_atomic_t g_stop = 0;
@@ -268,6 +269,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         tr_engine_select_symbol(lc->engine, new_id, new_fut);
         /* 재초기화로 링이 끊기므로 다시 부착한다 (백필 주입 전에) */
         tr_engine_attach_status_ring(lc->engine, g_status_storage, BB_CAP);
+        tr_engine_attach_market(lc->engine, g_mkt_storage, sizeof(g_mkt_storage) / sizeof(g_mkt_storage[0]));
         snprintf(lc->shcode, sizeof(lc->shcode), "%s", new_code);
         snprintf(lc->tick_cd, sizeof(lc->tick_cd), "%s", new_tick);
         snprintf(lc->ob_cd, sizeof(lc->ob_cd), "%s", new_ob);
@@ -307,7 +309,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         size_t n = tr_ring_count(&eng->bb.bars);
         size_t from = (size_t)back_index;
         size_t remain = from < n ? n - from : 0;
-        size_t take = remain < 200 ? remain : 200;
+        size_t take = remain < 150 ? remain : 150;
         size_t next = from + take < n ? from + take : 0;
         int off = snprintf(buf, sizeof(buf),
                            "{\"shcode\":\"%s\",\"generation\":%u,\"timeframe_sec\":%u,\"total\":%zu,"
@@ -332,13 +334,56 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             memset(&st, 0, sizeof(st));
             tr_engine_status_at(eng, k, &st);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off,
-                            "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d]",
+                            "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d,"
+                            "%d,%.10g,%.10g,%.10g,%.10g,%.10g]",
                             first ? "" : ",",
                             st.closed ? 1 : 0, st.reg_valid ? 1 : 0, st.reg_line, st.reg_r2,
                             st.pred[0], st.pred[1], st.pred[2],
                             st.score, st.ob_valid ? 1 : 0, st.ob_score,
                             st.residual, st.pvol,
-                            st.pred_dir[0], st.pred_dir[1], st.pred_dir[2]);
+                            st.pred_dir[0], st.pred_dir[1], st.pred_dir[2],
+                            st.mkt_valid ? 1 : 0, st.mkt_center, st.mkt_u1, st.mkt_l1,
+                            st.mkt_u2, st.mkt_l2);
+            first = false;
+        }
+        /* ⑥ 방향 기억 갱신 이벤트 (updated 봉만, 창 안에서 오름차순) */
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"mem\":[");
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 320;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_status_at(eng, k, &st);
+            if (!st.mem_updated) {
+                continue;
+            }
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s[%lld,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d]",
+                            first ? "" : ",", (long long)st.open_time_us,
+                            st.mem_valid ? 1 : 0, st.mem_dir, st.mem_price,
+                            st.mem_target[0], st.mem_target[1], st.mem_target[2],
+                            st.mem_upper[0], st.mem_upper[1], st.mem_upper[2],
+                            st.mem_lower[0], st.mem_lower[1], st.mem_lower[2],
+                            st.mem_show_targets ? 1 : 0, st.mem_show_upper ? 1 : 0,
+                            st.mem_show_lower ? 1 : 0);
+            first = false;
+        }
+        /* ⑦ 지속 사진 저장 이벤트 (saved 봉만) */
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"pst\":[");
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 260;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_status_at(eng, k, &st);
+            if (!st.pst_saved) {
+                continue;
+            }
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s[%lld,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g]",
+                            first ? "" : ",", (long long)st.open_time_us,
+                            st.pst_valid ? 1 : 0, st.pst_dir,
+                            st.pst_target[0], st.pst_target[1], st.pst_target[2],
+                            st.pst_upper[0], st.pst_upper[1], st.pst_upper[2],
+                            st.pst_lower[0], st.pst_lower[1], st.pst_lower[2]);
             first = false;
         }
         snprintf(buf + off, sizeof(buf) - (size_t)off, "]}");
@@ -463,6 +508,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     }
     tr_engine_attach_ipc(&engine, ipc, "display");
     tr_engine_attach_status_ring(&engine, g_status_storage, BB_CAP);
+    tr_engine_attach_market(&engine, g_mkt_storage, sizeof(g_mkt_storage) / sizeof(g_mkt_storage[0]));
 
     /* 4) 워밍업 백필 (market select 시에도 같은 경로로 다시 채운다) */
     {
@@ -636,6 +682,7 @@ static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep, 
     }
     tr_engine_attach_ipc(&engine, ipc, "display");
     tr_engine_attach_status_ring(&engine, g_status_storage, BB_CAP);
+    tr_engine_attach_market(&engine, g_mkt_storage, sizeof(g_mkt_storage) / sizeof(g_mkt_storage[0]));
 
     if (delay_ms > 0) {
         /* 느린 재생: 대시보드가 실시간으로 관찰할 수 있게 한다 (논리 시간은 기록값 유지) */

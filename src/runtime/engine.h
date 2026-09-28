@@ -18,6 +18,8 @@
 #include "adapters/ipc/ipc.h"
 #include "core/indicators/htf_curve_predict.h"
 #include "core/indicators/linreg_v3.h"
+#include "core/indicators/market_profile.h"
+#include "core/indicators/memory_lines.h"
 #include "core/indicators/orderbook_dir_v2.h"
 #include "core/indicators/score_1m.h"
 #include "core/market/bar_builder.h"
@@ -50,9 +52,22 @@ typedef struct {
     int pred_dir[3];            /* 예측방향1~3 (과거 채점의 방향 비교에 사용) */
     double residual;            /* 회귀잔차 (미래 목표선 오차 띠) */
     double pvol;                /* 예측변동성 ATR(14) (오차 띠) */
+    double upper[3], lower[3];  /* MTF상단/하단1~3 (엔진 계산, 부채꼴·기억선 공용) */
     int score;
     bool ob_valid;
     double ob_score;
+    /* ⑧ 마켓 밴드 */
+    bool mkt_valid;
+    double mkt_center, mkt_u1, mkt_l1, mkt_u2, mkt_l2;
+    /* ⑥ 방향 기억 (updated 봉에만 신규 세트. 나머지 봉은 이전 세트 유지 의미) */
+    bool mem_valid, mem_updated;
+    int mem_dir;
+    double mem_price, mem_target[3], mem_upper[3], mem_lower[3];
+    bool mem_show_targets, mem_show_upper, mem_show_lower;
+    /* ⑦ 지속 사진 (saved 봉에만 신규 촬영) */
+    bool pst_saved, pst_valid;
+    int pst_dir;
+    double pst_target[3], pst_upper[3], pst_lower[3];
 } tr_bar_status_t;
 
 typedef struct {
@@ -78,6 +93,10 @@ typedef struct {
     bool has_prev_bar;
     tr_ring status_ring;        /* tr_bar_status_t 링. attached일 때만 기록 */
     bool status_ring_on;
+    tr_market_t mkt;            /* ⑧ 마켓 밴드 (attach_market 시에만 평가) */
+    bool mkt_on;
+    tr_regmem_t regmem;         /* ⑥ 방향 기억 (운영최종방향 미제공 → 회귀선_구분 부호 사용) */
+    tr_persist_t persist;       /* ⑦ 지속 사진 */
 } tr_engine_t;
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
@@ -92,6 +111,10 @@ void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ct
 bool tr_engine_attach_status_ring(tr_engine_t *e, tr_bar_status_t *storage, size_t capacity);
 size_t tr_engine_status_count(const tr_engine_t *e);
 bool tr_engine_status_at(const tr_engine_t *e, size_t back_index, tr_bar_status_t *out);
+
+/* ⑧ 마켓 밴드 평가 부착 (호출자 소유 캔들 저장소, 마켓계산기간×2 권장).
+ * 재부착 시 마켓 상태가 초기화된다 (종목 전환 후 재사용). */
+bool tr_engine_attach_market(tr_engine_t *e, tr_candle_t *storage, size_t capacity);
 
 /* 틱/타이머 입력. replay 어댑터가 순서대로 호출한다. */
 tr_bb_status_t tr_engine_on_tick(tr_engine_t *e, const tr_event_envelope_t *env, const tr_tick_t *tick);

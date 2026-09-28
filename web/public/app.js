@@ -60,6 +60,27 @@ const fanMid = predStyles.map((s) =>
   chart.addLineSeries({ color: s.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }));
 const fanHi = chart.addLineSeries({ color: "#7d8590", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
 const fanLo = chart.addLineSeries({ color: "#7d8590", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
+// ⑧ 마켓 밴드: 당일 VWAP 중심 + 표준편차 밴드 2쌍 (원본 Plot51~55)
+const mktCenter = chart.addLineSeries({ color: "#b07d28", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+const mktU1 = chart.addLineSeries({ color: "#d9b26a", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+const mktL1 = chart.addLineSeries({ color: "#d9b26a", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+const mktU2 = chart.addLineSeries({ color: "#d9b26a", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
+const mktL2 = chart.addLineSeries({ color: "#d9b26a", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
+// ⑥ 방향 기억: 방향 확정 시점의 가격·목표 3선(굵은 수평선) + 범위 6선(점선). 새 확정 전까지 유지
+const memPrice = chart.addLineSeries({ color: "#c2452d", lineWidth: 3, priceLineVisible: false, lastValueVisible: false });
+const memTarget = [0, 1, 2].map(() => chart.addLineSeries({ color: "#c2452d", lineWidth: 2, priceLineVisible: false, lastValueVisible: false }));
+const memUpper = [0, 1, 2].map(() => chart.addLineSeries({ color: "#9aa3ae", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }));
+const memLower = [0, 1, 2].map(() => chart.addLineSeries({ color: "#9aa3ae", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }));
+// ⑦ 지속 사진: 시험 통과 순간의 목표 3선(가는 수평선) + 범위 6선 — 지난 사진도 모두 유지
+const pstT = [0, 1, 2].map(() => chart.addLineSeries({ color: "#6b7280", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }));
+const pstU = [0, 1, 2].map(() => chart.addLineSeries({ color: "#9aa3ae", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }));
+const pstL = [0, 1, 2].map(() => chart.addLineSeries({ color: "#9aa3ae", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }));
+
+// ⑥⑦의 오래된 수평선은 현재 가격과 멀 수 있어 자동 스케일에서 제외한다
+// (제외하지 않으면 주간 고가 사진 한 장이 차트 전체를 눌러버린다)
+for (const s of [memPrice, ...memTarget, ...memUpper, ...memLower, ...pstT, ...pstU, ...pstL]) {
+  s.applyOptions({ autoscaleInfoProvider: () => null });
+}
 
 const SPANS = [5, 10, 15];
 function scoreBarColor(v) {
@@ -75,7 +96,63 @@ function regSeriesFor(score) {
   return score > 0 ? regUp : score < 0 ? regDn : regFlat;
 }
 function clearIndicatorSeries() {
-  for (const s of [regUp, regFlat, regDn, fanHi, fanLo, scoreSeries, ...predSeries, ...fanMid]) s.setData([]);
+  for (const s of [regUp, regFlat, regDn, fanHi, fanLo, scoreSeries, mktCenter, mktU1, mktL1, mktU2, mktL2,
+                   memPrice, ...predSeries, ...fanMid, ...memTarget, ...memUpper, ...memLower,
+                   ...pstT, ...pstU, ...pstL]) s.setData([]);
+}
+
+// ⑥ 방향 기억 세트: 확정 시점부터 현재까지 이어지는 수평선들. 새 확정이 오면 교체한다.
+let memSet = null; // { time, dir, price, target[3], upper[3], lower[3], showT, showU, showL }
+function applyMemSet(nowT) {
+  if (!memSet) {
+    for (const s of [memPrice, ...memTarget, ...memUpper, ...memLower]) s.setData([]);
+    return;
+  }
+  const color = memSet.dir > 0 ? "#c2452d" : "#2d5a80";
+  memPrice.applyOptions({ color });
+  memPrice.setData([{ time: memSet.time, value: memSet.price }, { time: nowT, value: memSet.price }]);
+  for (let i = 0; i < 3; i++) {
+    memTarget[i].applyOptions({ color });
+    memTarget[i].setData(memSet.showT
+      ? [{ time: memSet.time, value: memSet.target[i] }, { time: nowT, value: memSet.target[i] }]
+      : []);
+    memUpper[i].setData(memSet.showU
+      ? [{ time: memSet.time, value: memSet.upper[i] }, { time: nowT, value: memSet.upper[i] }]
+      : []);
+    memLower[i].setData(memSet.showL
+      ? [{ time: memSet.time, value: memSet.lower[i] }, { time: nowT, value: memSet.lower[i] }]
+      : []);
+  }
+}
+
+// ⑦ 지속 사진: 저장된 촬영의 목표선을 시각 오름차순 폴리라인으로 그린다.
+// (구간별 흰줄 끊기는 setData의 시간 오름차순·중복 불가 제약에 걸리므로 연결선 방식)
+const pstPhotos = []; // { time, dir, target[3], upper[3], lower[3] }
+function rebuildPhotos(nowT) {
+  const tracks = [[], [], []];
+  const ups = [[], [], []];
+  const lows = [[], [], []];
+  const sorted = [...pstPhotos].sort((a, b) => a.time - b.time);
+  for (const ph of sorted) {
+    for (let i = 0; i < 3; i++) {
+      tracks[i].push({ time: ph.time, value: ph.target[i] });
+      ups[i].push({ time: ph.time, value: ph.upper[i] });
+      lows[i].push({ time: ph.time, value: ph.lower[i] });
+    }
+  }
+  if (sorted.length > 0) {
+    const last = sorted[sorted.length - 1];
+    for (let i = 0; i < 3; i++) {
+      tracks[i].push({ time: nowT, value: last.target[i] });
+      ups[i].push({ time: nowT, value: last.upper[i] });
+      lows[i].push({ time: nowT, value: last.lower[i] });
+    }
+  }
+  for (let i = 0; i < 3; i++) {
+    pstT[i].setData(tracks[i]);
+    pstU[i].setData(ups[i]);
+    pstL[i].setData(lows[i]);
+  }
 }
 
 const el = {
@@ -151,6 +228,8 @@ function applyStatus(msg) {
     bars.clear();
     barInd.clear();
     gradeMarkers = [];
+    memSet = null;
+    pstPhotos.length = 0;
     candleSeries.setData([]);
     clearIndicatorSeries();
   }
@@ -201,6 +280,31 @@ function applyStatus(msg) {
 
   if (p.closed) addGradeMarker(t);
 
+  // ⑧ 마켓 밴드: [valid, center, u1, l1, u2, l2]
+  if (Array.isArray(p.mkt) && p.mkt[0] === 1) {
+    mktCenter.update({ time: t, value: p.mkt[1] });
+    mktU1.update({ time: t, value: p.mkt[2] });
+    mktL1.update({ time: t, value: p.mkt[3] });
+    mktU2.update({ time: t, value: p.mkt[4] });
+    mktL2.update({ time: t, value: p.mkt[5] });
+  }
+
+  // ⑥ 방향 기억: [valid, updated, dir, price, t1..3, u1..3, l1..3] — 갱신 봉에 새 세트
+  if (Array.isArray(p.mem) && p.mem[1] === 1) {
+    memSet = p.mem[0] === 1
+      ? { time: t, dir: p.mem[2], price: p.mem[3], target: p.mem.slice(4, 7), upper: p.mem.slice(7, 10),
+          lower: p.mem.slice(10, 13), showT: true, showU: true, showL: true }
+      : null;
+  }
+  applyMemSet(t); // 현재 세트를 새 봉 시각까지 연장 (없으면 지움)
+
+  // ⑦ 지속 사진: [saved, valid, dir, t1..3, u1..3, l1..3] — 저장 봉에 촬영 추가
+  if (Array.isArray(p.pst) && p.pst[0] === 1 && p.pst[1] === 1) {
+    pstPhotos.push({ time: t, dir: p.pst[2], target: p.pst.slice(3, 6), upper: p.pst.slice(6, 9),
+                     lower: p.pst.slice(9, 12) });
+    rebuildPhotos(t);
+  }
+
   if (p.ob_valid === 1 && typeof p.ob_score === "number") {
     el.ob.textContent = `호가 ${p.ob_score.toFixed(1)}`;
     el.ob.className = p.ob_score > 0 ? "badge ok" : "badge err";
@@ -215,6 +319,8 @@ function applyStatus(msg) {
 async function seedChart() {
   try {
     const all = [];
+    const memEvents = [];
+    const pstEvents = [];
     let back = 0;
     for (let pages = 0; pages < 16; pages++) {
       const res = await fetch(`/api/chart?back_index=${back}`);
@@ -230,6 +336,9 @@ async function seedChart() {
         const [t, o, h, l, c] = rows[ri];
         all.push({ time: Number(t) / 1e6, open: o, high: h, low: l, close: c, ind: inds[ri] });
       }
+      // ⑥⑦ 갱신·저장 이벤트 (희소) — 페이지 경계에서 중복되지 않게 시각으로 모은다
+      for (const e of p.mem ?? []) memEvents.push(e);
+      for (const e of p.pst ?? []) pstEvents.push(e);
       if (!p.next_back_index) break;
       back = p.next_back_index;
     }
@@ -245,12 +354,21 @@ async function seedChart() {
     const regBySign = { up: [], flat: [], dn: [] };
     const predTracks = [[], [], []]; // 지평(5/10/15봉)별 트랙 — 원본의 3개 분리 표시
     const scoreData = [];
+    const mktData = { c: [], u1: [], l1: [], u2: [], l2: [] };
     for (const b of dedup) {
       const ind = b.ind;
       if (!ind) continue;
       barInd.set(b.time, { pred_dir: [ind[12], ind[13], ind[14]], reg_valid: ind[1] === 1 });
       if (typeof ind[7] === "number") {
         scoreData.push({ time: b.time, value: ind[7], color: scoreBarColor(ind[7]) });
+      }
+      // ⑧ 마켓 밴드: [valid, center, u1, l1, u2, l2]
+      if (ind[15] === 1) {
+        mktData.c.push({ time: b.time, value: ind[16] });
+        mktData.u1.push({ time: b.time, value: ind[17] });
+        mktData.l1.push({ time: b.time, value: ind[18] });
+        mktData.u2.push({ time: b.time, value: ind[19] });
+        mktData.l2.push({ time: b.time, value: ind[20] });
       }
       if (ind[1] !== 1) continue;
       if (Number.isFinite(ind[2])) {
@@ -267,6 +385,11 @@ async function seedChart() {
     regFlat.setData(regBySign.flat);
     regDn.setData(regBySign.dn);
     scoreSeries.setData(scoreData);
+    mktCenter.setData(mktData.c);
+    mktU1.setData(mktData.u1);
+    mktL1.setData(mktData.l1);
+    mktU2.setData(mktData.u2);
+    mktL2.setData(mktData.l2);
     // setData는 시간 오름차순·중복 불가 — 각 트랙을 정렬하고 같은 시각은 최신 봉의 값을 남긴다
     for (let i = 0; i < 3; i++) {
       const track = predTracks[i];
@@ -278,6 +401,29 @@ async function seedChart() {
     // ④ 과거 채점 복원: 각 봉에서 지난 예측방향과 실제 움직임을 비교한다
     gradeMarkers = [];
     for (const b of dedup) addGradeMarker(b.time);
+
+    // ⑥⑦ 이벤트 복원: ⑥은 마지막 확정 세트, ⑦은 누적 촬영 전부
+    const lastT = dedup[dedup.length - 1]?.time ?? 0;
+    memSet = null;
+    if (memEvents.length > 0) {
+      const e = memEvents[memEvents.length - 1];
+      // [time, valid, dir, price, t1..3, u1..3, l1..3, showT, showU, showL]
+      if (e[1] === 1) {
+        memSet = { time: Number(e[0]) / 1e6, dir: e[2], price: e[3], target: e.slice(4, 7),
+                   upper: e.slice(7, 10), lower: e.slice(10, 13),
+                   showT: e[13] === 1, showU: e[14] === 1, showL: e[15] === 1 };
+      }
+    }
+    applyMemSet(lastT);
+    pstPhotos.length = 0;
+    for (const e of pstEvents) {
+      // [time, valid, dir, t1..3, u1..3, l1..3]
+      if (e[1] === 1) {
+        pstPhotos.push({ time: Number(e[0]) / 1e6, dir: e[2], target: e.slice(3, 6),
+                         upper: e.slice(6, 9), lower: e.slice(9, 12) });
+      }
+    }
+    rebuildPhotos(lastT);
 
     // 마지막 봉의 값으로 배지·미래 목표선(부채꼴)을 복원한다
     const lastBar = dedup[dedup.length - 1];
@@ -319,6 +465,8 @@ function connect() {
       bars.clear();
       barInd.clear();
       gradeMarkers = [];
+      memSet = null;
+      pstPhotos.length = 0;
       candleSeries.setData([]);
       clearIndicatorSeries();
       seedChart(); // 재시작한 엔진의 봉 링으로 다시 시딩
@@ -427,6 +575,8 @@ async function switchSymbol() {
   bars.clear();
   barInd.clear();
   gradeMarkers = [];
+  memSet = null;
+  pstPhotos.length = 0;
   candleSeries.setData([]);
   clearIndicatorSeries();
   seedChart(); // 엔진이 새 종목을 백필해 두었으므로 스냅샷으로 채운다
