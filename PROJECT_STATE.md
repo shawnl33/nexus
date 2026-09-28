@@ -49,20 +49,17 @@
 
 ## 바로 다음 작업
 
-- 단계 4 (저장소·기록·IPC·CLI) — **완료**
-- 다음: 단계 5 (Node 대시보드·차트·화면틀) 또는 단계 6 앞당기기 (LS 읽기 사전 확인)
-- 병행 가능: 엔진 런타임 조립 (replay 모드에서 지표→IPC 발행 경로 시연) — 단계 5 전 준비 작업
+- 단계 5 (Node 대시보드·차트·화면틀): replay 상태 스트림(tcp://127.0.0.1:5556)을 구독해 차트 표시
+- 병행 가능: 단계 6 LS 읽기 사전 확인
 
-## 완료 항목 (단계 4)
+## 완료 항목 (단계 4 + 런타임 조립)
 
-- adapters/storage (SQLite 3.46.1): v1 스키마 13테이블 마이그레이션, WAL+FULL, instruments/candles revision upsert,
-  orders/order_events/fills 체결 트랜잭션(중복 체결 롤백), commands 같은 ID·다른 내용 거절
-- adapters/ipc (libzmq + yyjson 벤더): ROUTER/DEALER 명령 + PUB/SUB 상태,
-  JSON 계약(protocol_version, int64 문자열, 1MiB/64KiB 상한, 버전·필수 필드 거절),
-  명령 결과 accepted/applied/rejected 구분, 순번 추적 GAP/RESTART, inproc 테스트
-- traderctl (src/cli): status/engine stop/market/indicator/strategy/risk/orders/positions/shell,
-  --json 출력, 종료 코드(0/2/3/4/5), send/recv 분리 클라이언트
-- 의존성 관리: vcpkg 미도입 결정 — docs/THIRD_PARTY.md (Linux 시스템 패키지, Windows MinGW 소스 빌드)
+- adapters/storage (SQLite 3.46.1): v1 스키마 13테이블 마이그레이션, WAL+FULL, revision upsert, 체결 트랜잭션, 명령 중복 검사
+- adapters/ipc (libzmq + yyjson 벤더): ROUTER/DEALER 명령 + PUB/SUB 상태, JSON 계약, 순번 추적, inproc 테스트
+- traderctl (src/cli): 11개 명령, --json, 종료 코드(0/2/3/4/5)
+- runtime/engine: 틱→봉→지표(lr3/htf/score1m)→상태 스트림 조립 (단일 실행 흐름, 세션 컨텍스트 주입, 호가 미지원 경로는 ob_dir=0)
+- `trading-engine --replay FILE`: CSV 리플레이 + 상태 발행 (인증정보 불필요), examples/ticks_sample.csv
+- CTest 30개 전부 통과
 
 ## 차단·미결 사항
 

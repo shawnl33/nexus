@@ -49,8 +49,21 @@ core 테스트가 있으므로 0개 테스트 실행을 통과로 간주하지 �
 
 ## 실행
 
-Linux: `./build/trading-engine --help`
-Windows: `build-windows\trading-engine.exe --help`
+리플레이 (인증정보 불필요):
+
+```sh
+./build/trading-engine --replay examples/ticks_sample.csv
+```
+
+틱 CSV(`epoch_us,price,qty`)를 재생해 봉·지표를 계산하고 상태 스트림을 발행한다.
+구독은 `tcp://127.0.0.1:5556` (변경: `--pub-endpoint`), 명령은 `tcp://127.0.0.1:5555` (`--cmd-endpoint`).
+
+도움말·버전:
+
+```sh
+./build/trading-engine --help
+./build/trading-engine --version
+```
 
 ## 비밀정보
 

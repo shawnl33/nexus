@@ -98,13 +98,29 @@ else()
     message(STATUS "libzmq not found: ipc 어댑터와 ipc 테스트는 건성한다 (미검증 기록)")
 endif()
 
-add_executable(trading-engine
-    src/app/main.c
-)
-target_compile_definitions(trading-engine
-    PRIVATE TRADING_ENGINE_VERSION="${PROJECT_VERSION}"
-)
-target_compile_options(trading-engine PRIVATE ${TR_WARNINGS})
+# 엔진 런타임 (core + adapters 조립).
+if(TR_IPC_FOUND)
+    add_library(runtime STATIC
+        src/runtime/engine.c
+        src/adapters/history/csv_ticks.c
+    )
+    target_link_libraries(runtime PUBLIC core ipc history)
+    target_include_directories(runtime PUBLIC src)
+    target_compile_options(runtime PRIVATE ${TR_WARNINGS})
+endif()
+
+if(TR_IPC_FOUND)
+    add_executable(trading-engine
+        src/app/main.c
+    )
+    target_compile_definitions(trading-engine
+        PRIVATE TRADING_ENGINE_VERSION="${PROJECT_VERSION}"
+    )
+    target_compile_options(trading-engine PRIVATE ${TR_WARNINGS})
+    target_link_libraries(trading-engine PRIVATE runtime)
+else()
+    message(STATUS "libzmq not found: trading-engine은 건성한다 (미검증 기록)")
+endif()
 
 enable_testing()
 
@@ -120,6 +136,14 @@ add_executable(test_replay tests/test_replay.c)
 target_link_libraries(test_replay PRIVATE history)
 target_compile_options(test_replay PRIVATE ${TR_WARNINGS})
 add_test(NAME replay COMMAND test_replay)
+
+# 엔진 런타임 테스트.
+if(TR_IPC_FOUND)
+    add_executable(test_engine tests/test_engine.c)
+    target_link_libraries(test_engine PRIVATE runtime)
+    target_compile_options(test_engine PRIVATE ${TR_WARNINGS})
+    add_test(NAME engine COMMAND test_engine)
+endif()
 
 if(SQLite3_FOUND)
     add_executable(test_store tests/test_store.c)
