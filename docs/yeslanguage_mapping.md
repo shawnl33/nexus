@@ -153,8 +153,8 @@ DailyAlignV2 인자 수는 이전 기록(메인 21 vs FullOutput 22 불일치)�
 
 1. ~~구형 7인자 WSF_Mtf_LinRegV3 정의~~ → 해소 (§6-1)
 2. ~~미제공 6종 함수 낶부 로직~~ → 6종 해소, 잔여: `WSF_Daily_LinRegTrendV1` 1종
-3. ~~내장 ATR(14) 산식~~ → 2026-09-28 해소: 커뮤니티 인용 내장 함수식 기준 **TR의 단순이동평균(SMA)** 으로 구현 (`atr.h`에 출처 기록, 공식 매뉴얼 대조는 미검증). 차트 초기 봉의 `[n]` 평가값은 계속 불명.
-4. Bids/Asks의 호가 단계 범위(총잔량 가정, LS TR 필드로 확정 필요), CodeCategory 값 체계(4=선물 외).
-5. YesLanguage 내장 값 의미: DataCompress(분봉=2, V3 43줄 주석으로 확인), BarInterval, Index(0-base 추정), PriceScale, stime 포맷(HHMM 추정, GapRegimeV1 주석).
+3. ~~내장 ATR(14) 산식~~ → **공식 매뉴얼(YLHelp.pdf)로 확정**: "ATR = TrueRange의 Period 기간 이동평균 값" (단순이평). `atr.h` 구현과 일치. 차트 초기 봉의 `[n]` 평가값은 계속 불명.
+4. ~~Bids/Asks 호가 단계 범위~~ → 공식 매뉴얼: "Bids = 매수잔량, Asks = 매도잔량". 단계 수는 데이터 피드 정의에 따륾며(해외선물은 미제공 명시), 국내 주식/선물의 총잔량 필드로 LS TR 매핑 시 확정. CodeCategory 값 체계(4=선물 외).
+5. ~~YesLanguage 내장 값 의미~~ → 매뉴얼로 상당부분 해소: DayIndex = "분봉에서 당일의 봉번호, 첫봉 0부터 1씩 증가" (공식, 계획서 §8과 일치), bDate = 영업일, sTime/Time = 봉 시작/끝시간, Index = 봉 번호. DataCompress(분봉=2는 V3 주석)·PriceScale·stime 포맷은 원본 주석 수준.
 6. ~~GapRegimeV1 첫 인자 리터럴 10의 의미~~ → 해소 (변동기간)
 7. 무효 봉에서의 var 이월 규약(호가 V2 평균 계산에 영향).
