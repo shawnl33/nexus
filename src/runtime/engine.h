@@ -39,6 +39,19 @@ typedef struct {
 typedef void (*tr_engine_status_fn)(void *ctx, const char *stream_id, uint64_t sequence,
                                     const char *payload_json);
 
+/* 봉별 지표 스냅샷 (스냅샷 명령으로 과거 봉의 회귀·예측·점수를 복원하기 위한 기록).
+ * 봉 링과 같은 순서·같은 용량으로 유지한다 (push/update 패턴 동일). */
+typedef struct {
+    tr_time_us_t open_time_us;  /* 봉 링과의 정합 검사용 */
+    bool closed;
+    bool reg_valid;
+    double reg_line, reg_r2;
+    double pred[3];
+    int score;
+    bool ob_valid;
+    double ob_score;
+} tr_bar_status_t;
+
 typedef struct {
     tr_engine_config_t cfg;
     tr_candle_t *bb_storage;
@@ -60,6 +73,8 @@ typedef struct {
     bool has_prev_day;
     tr_time_us_t prev_bar_open;
     bool has_prev_bar;
+    tr_ring status_ring;        /* tr_bar_status_t 링. attached일 때만 기록 */
+    bool status_ring_on;
 } tr_engine_t;
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
@@ -68,6 +83,12 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
 
 void tr_engine_attach_ipc(tr_engine_t *e, tr_ipc_t *ipc, const char *stream_id);
 void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ctx);
+
+/* 봉별 지표 기록 링 부착 (호출자 소유 저장소). 봉 링과 같은 용량을 권장한다.
+ * 부착 시점부터 기록한다. 재부착하면 링이 초기화된다 (종목 전환 후 재사용). */
+bool tr_engine_attach_status_ring(tr_engine_t *e, tr_bar_status_t *storage, size_t capacity);
+size_t tr_engine_status_count(const tr_engine_t *e);
+bool tr_engine_status_at(const tr_engine_t *e, size_t back_index, tr_bar_status_t *out);
 
 /* 틱/타이머 입력. replay 어댑터가 순서대로 호출한다. */
 tr_bb_status_t tr_engine_on_tick(tr_engine_t *e, const tr_event_envelope_t *env, const tr_tick_t *tick);

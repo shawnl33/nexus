@@ -130,8 +130,11 @@ async function seedChart() {
       if (typeof p.generation === "number" && p.generation > generation) {
         generation = p.generation;
       }
-      for (const [t, o, h, l, c] of p.bars ?? []) {
-        all.push({ time: Number(t) / 1e6, open: o, high: h, low: l, close: c });
+      const rows = p.bars ?? [];
+      const inds = p.ind ?? [];
+      for (let ri = 0; ri < rows.length; ri++) {
+        const [t, o, h, l, c] = rows[ri];
+        all.push({ time: Number(t) / 1e6, open: o, high: h, low: l, close: c, ind: inds[ri] });
       }
       if (!p.next_back_index) break;
       back = p.next_back_index;
@@ -142,8 +145,41 @@ async function seedChart() {
     bars.clear();
     for (const b of dedup) bars.set(b.time, b);
     candleSeries.setData(dedup);
-    regSeries.setData([]);
-    predSeries.setData([]);
+
+    // 봉별 지표 복원: 스냅샷의 ind 배열로 과거 구간의 회귀선·예측선·배지를 다시 그린다
+    const regData = [];
+    const predData = [];
+    const spans = [5, 10, 15];
+    for (const b of dedup) {
+      const ind = b.ind;
+      if (!ind || ind[1] !== 1) continue; // reg_valid 아닌 봉은 건너뜀
+      regData.push({ time: b.time, value: ind[2] });
+      for (let i = 0; i < 3; i++) {
+        predData.push({ time: b.time + spans[i] * 60, value: ind[4 + i] });
+      }
+    }
+    // setData는 시간 오름차순·중복 불가 — 예측점은 봉마다 +5/+10/+15분이라 뒤섞이므로
+    // 정렬하고 같은 시각은 최신 봉의 값(뒤쪽)을 남긴다
+    predData.sort((a, b) => a.time - b.time);
+    const predDedup = predData.filter((p, i) => i === predData.length - 1 || p.time !== predData[i + 1].time);
+    regSeries.setData(regData.filter((p) => Number.isFinite(p.value)));
+    predSeries.setData(predDedup.filter((p) => Number.isFinite(p.value)));
+
+    // 마지막 봉의 값으로 배지를 복원한다
+    const last = dedup[dedup.length - 1]?.ind;
+    if (last) {
+      el.score.textContent = String(last[7]);
+      el.score.style.color = scoreColor(last[7]);
+      if (last[1] === 1) {
+        el.reg.textContent = `회귀선 ${last[2].toFixed(1)} (R² ${last[3].toFixed(2)})`;
+        el.reg.className = "badge ok";
+        el.pred.textContent = `예측 ${last[4].toFixed(1)} / ${last[5].toFixed(1)} / ${last[6].toFixed(1)}`;
+      }
+      if (last[8] === 1) {
+        el.ob.textContent = `호가 ${last[9].toFixed(1)}`;
+        el.ob.className = last[9] > 0 ? "badge ok" : "badge err";
+      }
+    }
   } catch { /* 시딩 실패는 라이브 스트림으로 진행 */ }
 }
 
@@ -170,7 +206,11 @@ function connect() {
       predSeries.setData([]);
       seedChart(); // 재시작한 엔진의 봉 링으로 다시 시딩
     }
-    applyStatus(data.message ?? {});
+    try {
+      applyStatus(data.message ?? {});
+    } catch {
+      /* 시딩 직후 과거 봉의 늦은 갱신 등 표시상 무해한 순서 오류는 무시한다 */
+    }
   };
 }
 

@@ -167,10 +167,51 @@ static void test_select_symbol_generation(void) {
     TR_CHECK(any_payload_contains(&cap, "\"generation\":3"));
 }
 
+static void test_status_ring_alignment(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap);
+    static tr_bar_status_t ring[BB_CAP];
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+
+    /* 8개 봉, 봉마다 저·고 2틱 (갱신 포함) — 상태 링도 8개로 정합이어야 한다 */
+    for (int i = 1; i <= 8; i++) {
+        int mid = 98 + 2 * i;
+        feed(&e, (unsigned)i, 0, mid - 2, (uint64_t)(i * 2 - 1));
+        feed(&e, (unsigned)i, 30, mid + 2, (uint64_t)(i * 2));
+    }
+    TR_CHECK(tr_engine_status_count(&e) == 8);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 8);
+
+    /* open_time이 봉 링과 1:1로 정렬된다 */
+    for (size_t i = 0; i < 8; i++) {
+        tr_candle_t c;
+        tr_bar_status_t st;
+        TR_CHECK(tr_ring_at(&e.bb.bars, i, &c));
+        TR_CHECK(tr_engine_status_at(&e, i, &st));
+        TR_CHECK(st.open_time_us == c.open_time_us);
+    }
+
+    /* 회귀가 유효해진 이후 봉에는 값이 기록된다 (봉 8: 창 {106,108,110,112,114} 우측 끝 114) */
+    tr_bar_status_t last;
+    TR_CHECK(tr_engine_status_at(&e, 0, &last));
+    TR_CHECK(last.reg_valid);
+    TR_CHECK(last.reg_line == 114.0);
+
+    /* 미부착 엔진은 0/false */
+    tr_engine_t e2;
+    capture_t cap2;
+    init_engine(&e2, &cap2);
+    tr_bar_status_t st;
+    TR_CHECK(tr_engine_status_count(&e2) == 0);
+    TR_CHECK(!tr_engine_status_at(&e2, 0, &st));
+}
+
 int main(void) {
     test_replay_pipeline();
     test_session_first_reset();
     test_orderbook_path();
     test_select_symbol_generation();
+    test_status_ring_alignment();
     TR_TEST_SUMMARY();
 }

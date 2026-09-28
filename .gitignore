@@ -8,3 +8,5 @@ web/.runtime/
 *.user
 .vscode/
 *.deb
+.playwright-mcp/
+dash-*.png

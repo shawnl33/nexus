@@ -28,6 +28,7 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
     e->has_prev_day = false;
     e->prev_bar_open = 0;
     e->has_prev_bar = false;
+    e->status_ring_on = false;
 
     tr_bar_builder_config_t bbcfg;
     memset(&bbcfg, 0, sizeof(bbcfg));
@@ -75,6 +76,28 @@ void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ct
     }
     e->status_cb = cb;
     e->status_cb_ctx = ctx;
+}
+
+bool tr_engine_attach_status_ring(tr_engine_t *e, tr_bar_status_t *storage, size_t capacity) {
+    if (e == 0 || storage == 0 || capacity == 0) {
+        return false;
+    }
+    if (!tr_ring_init(&e->status_ring, storage, sizeof(tr_bar_status_t), capacity)) {
+        return false;
+    }
+    e->status_ring_on = true;
+    return true;
+}
+
+size_t tr_engine_status_count(const tr_engine_t *e) {
+    return (e != 0 && e->status_ring_on) ? tr_ring_count(&e->status_ring) : 0;
+}
+
+bool tr_engine_status_at(const tr_engine_t *e, size_t back_index, tr_bar_status_t *out) {
+    if (e == 0 || out == 0 || !e->status_ring_on) {
+        return false;
+    }
+    return tr_ring_at(&e->status_ring, back_index, out);
 }
 
 static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) {
@@ -151,6 +174,46 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     /* 호가 유효할 때만 점수를 사용한다. 없는 경로(파일 재생)에서는 0 (유효로 위장하지 않음) */
     sin.ob_score = e->obd2.validity == TR_VALIDITY_VALID ? e->obd2.score : 0.0;
     tr_score1m_on_bar(&e->score, &sin);
+
+    /* 봉 링과 open_time 기준으로 정합을 맞춰 봉별 지표를 기록한다 (스냅샷 복원용).
+     * 새 봉이면 push, 현재 봉 갱신이면 최신 교체, 늦은 정정은 해당 슬롯만 고친다. */
+    if (e->status_ring_on) {
+        tr_bar_status_t st;
+        memset(&st, 0, sizeof(st));
+        st.open_time_us = bar->open_time_us;
+        st.closed = closed;
+        st.reg_valid = e->lr3.reg_valid;
+        st.reg_line = e->lr3.line;
+        st.reg_r2 = e->lr3.r2;
+        st.pred[0] = e->lr3.v4.pred_price[0];
+        st.pred[1] = e->lr3.v4.pred_price[1];
+        st.pred[2] = e->lr3.v4.pred_price[2];
+        st.score = e->score.score;
+        st.ob_valid = e->obd2.validity == TR_VALIDITY_VALID;
+        st.ob_score = e->obd2.score;
+        tr_bar_status_t newest;
+        if (tr_ring_count(&e->status_ring) == 0 ||
+            (tr_ring_at(&e->status_ring, 0, &newest) && bar->open_time_us > newest.open_time_us)) {
+            tr_ring_push(&e->status_ring, &st);
+        } else if (bar->open_time_us == newest.open_time_us) {
+            tr_ring_update_newest(&e->status_ring, &st);
+        } else {
+            for (size_t i = 1; i < tr_ring_count(&e->status_ring); i++) {
+                tr_bar_status_t old;
+                if (!tr_ring_at(&e->status_ring, i, &old) || old.open_time_us < bar->open_time_us) {
+                    break;
+                }
+                if (old.open_time_us == bar->open_time_us) {
+                    /* 해당 과거 슬롯만 정정한다 (구조는 바꾸지 않음) */
+                    tr_bar_status_t *slot = (tr_bar_status_t *)tr_ring_get_mut(&e->status_ring, i);
+                    if (slot != 0) {
+                        *slot = st;
+                    }
+                    break;
+                }
+            }
+        }
+    }
 
     publish_status(e, bar, closed);
 
