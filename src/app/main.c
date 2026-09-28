@@ -1,6 +1,25 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+static void sleep_ms(int ms) {
+    Sleep((DWORD)ms);
+}
+#else
+#include <time.h>
+static void sleep_ms(int ms) {
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    nanosleep(&ts, 0);
+}
+#endif
 
 #include "adapters/history/csv_ticks.h"
 #include "adapters/ipc/ipc.h"
@@ -20,6 +39,7 @@ static void print_usage(const char *prog) {
     printf("  -v, --version           Show version and exit\n");
     printf("      --data-dir DIR      Engine data directory (reserved; not used yet)\n");
     printf("      --replay FILE       Replay CSV ticks (epoch_us,price,qty) and publish status\n");
+    printf("      --replay-delay MS   Slow replay: delay between ticks (default 0)\n");
     printf("      --cmd-endpoint EP   Command endpoint (default tcp://127.0.0.1:5555)\n");
     printf("      --pub-endpoint EP   Status stream endpoint (default tcp://127.0.0.1:5556)\n");
     printf("\n");
@@ -34,7 +54,7 @@ static void print_version(void) {
 static tr_candle_t g_bb_storage[BB_CAP];
 static double g_score_mid[64];
 
-static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep) {
+static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep, int delay_ms) {
     size_t n = 0;
     tr_replay_tick_t *ticks = tr_csv_ticks_load(path, 1, &n);
     if (ticks == 0) {
@@ -84,6 +104,31 @@ static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep) 
     }
     tr_engine_attach_ipc(&engine, ipc, "display");
 
+    if (delay_ms > 0) {
+        /* 느린 재생: 대시보드가 실시간으로 관찰할 수 있게 한다 (논리 시간은 기록값 유지) */
+        tr_replay_result_t result;
+        result.fed = 0;
+        result.rejected = 0;
+        result.first_bad_index = (size_t)-1;
+        for (size_t i = 0; i < n; i++) {
+            tr_engine_on_timer(&engine, ticks[i].env.event_time_us);
+            tr_bb_status_t st = tr_engine_on_tick(&engine, &ticks[i].env, &ticks[i].tick);
+            if (st == TR_BB_ERROR || st == TR_BB_REJECTED_OUT_OF_SESSION) {
+                result.rejected++;
+            } else {
+                result.fed++;
+            }
+            sleep_ms(delay_ms);
+        }
+        tr_engine_on_timer(&engine, ticks[n - 1].env.event_time_us + 60000000);
+        printf("replay done: %zu ticks fed, %zu rejected, %llu status messages published\n",
+               result.fed, result.rejected, (unsigned long long)(engine.status_seq - 1));
+        printf("cmd endpoint: %s, pub endpoint: %s\n", cmd_ep, pub_ep);
+        tr_ipc_close(ipc);
+        tr_csv_ticks_free(ticks);
+        return 0;
+    }
+
     tr_replay_result_t result;
     if (!tr_replay_run(&engine.bb, ticks, n, ticks[n - 1].env.event_time_us + 60000000, &result)) {
         fprintf(stderr, "error: replay failed at event %zu (out of order input)\n", result.first_bad_index);
@@ -105,6 +150,7 @@ int main(int argc, char **argv) {
     const char *replay_file = 0;
     const char *cmd_ep = "tcp://127.0.0.1:5555";
     const char *pub_ep = "tcp://127.0.0.1:5556";
+    int replay_delay_ms = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -117,6 +163,13 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--replay") == 0 && i + 1 < argc) {
             replay_file = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "--replay-delay") == 0 && i + 1 < argc) {
+            replay_delay_ms = atoi(argv[++i]);
+            if (replay_delay_ms < 0) {
+                replay_delay_ms = 0;
+            }
             continue;
         }
         if (strcmp(argv[i], "--cmd-endpoint") == 0 && i + 1 < argc) {
@@ -140,7 +193,7 @@ int main(int argc, char **argv) {
     }
 
     if (replay_file != 0) {
-        return run_replay(replay_file, cmd_ep, pub_ep);
+        return run_replay(replay_file, cmd_ep, pub_ep, replay_delay_ms);
     }
 
     fprintf(stderr, "error: no mode specified; see --help\n");
