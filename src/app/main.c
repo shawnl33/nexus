@@ -27,6 +27,7 @@ static void sleep_ms(int ms) {
 #include "adapters/ls/ls_auth.h"
 #include "adapters/ls/ls_chart.h"
 #include "adapters/ls/ls_http.h"
+#include "adapters/ls/ls_master.h"
 #include "adapters/ls/ls_realtime.h"
 #include "runtime/engine.h"
 #include "yyjson.h"
@@ -69,6 +70,7 @@ static const tr_session_policy_t SESS_FUT = {540, 525, 945, TR_SESSION_WEEKDAYS}
 typedef struct {
     tr_ls_rt_t *rt;
     tr_engine_t *engine;
+    tr_ls_master_t *master;
     char shcode[16];
     bool is_fut;
 } live_ctx_t;
@@ -85,10 +87,19 @@ static uint64_t instrument_id_of(const char *shcode) {
     return h != 0 ? h : 1;
 }
 
-/* 종목 유형 추정: 6자리 초과 코드(선물, 예: A016C000)는 선물로 본다.
-   제한: 주식선물 등 다른 코드 체계는 별도 레지스트리가 필요하다 (capability 기록) */
-static bool shcode_is_fut(const char *shcode) {
-    return strlen(shcode) > 6;
+/* 종목 유형 판별: 마스터 레지스트리 우선, 없으면 코드 길이 추정(폐기 예정 경고) */
+static bool resolve_is_fut(tr_ls_master_t *master, const char *shcode, const char **name_out) {
+    const ls_instrument_info_t *info = ls_master_find(master, shcode);
+    if (info != 0) {
+        if (name_out != 0) {
+            *name_out = info->name;
+        }
+        return info->is_futures;
+    }
+    if (name_out != 0) {
+        *name_out = 0;
+    }
+    return strlen(shcode) > 6; /* 폐기 예정: 마스터에 없는 코드의 추정 */
 }
 
 static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
@@ -118,7 +129,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             return;
         }
         const char *new_code = yyjson_get_str(sh);
-        bool new_fut = shcode_is_fut(new_code);
+        const char *new_name = 0;
+        bool new_fut = resolve_is_fut(g_live_ctx.master, new_code, &new_name);
         live_ctx_t *lc = &g_live_ctx;
 
         /* 이전 구독 해지 → 새 구독 (전략 거래 대상과 무관한 화면 상태 변경) */
@@ -137,12 +149,29 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         snprintf(lc->shcode, sizeof(lc->shcode), "%s", new_code);
         lc->is_fut = new_fut;
 
-        snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"generation\":%u}",
-                 new_code, lc->engine->generation);
+        snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u}",
+                 new_code, new_name != 0 ? new_name : "", lc->engine->generation);
         cmd->status = "applied";
         cmd->error_code = "none";
         cmd->payload_json = payload;
         yyjson_doc_free(doc);
+        return;
+    }
+
+    if (strstr(p, "\"type\":\"market.instruments\"") != 0) {
+        static char buf[40 * 128 + 256];
+        size_t count = ls_master_count(g_live_ctx.master);
+        size_t shown = count < 40 ? count : 40;
+        int off = snprintf(buf, sizeof(buf), "{\"total\":%zu,\"items\":[", count);
+        for (size_t i = 0; i < shown && off < (int)sizeof(buf) - 130; i++) {
+            const ls_instrument_info_t *it = ls_master_at(g_live_ctx.master, i);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s{\"shcode\":\"%s\",\"name\":\"%s\",\"fut\":%d}",
+                            i > 0 ? "," : "", it->shcode, it->name, it->is_futures ? 1 : 0);
+        }
+        snprintf(buf + off, sizeof(buf) - (size_t)off, "]}");
+        cmd->status = "applied";
+        cmd->error_code = "none";
+        cmd->payload_json = buf;
         return;
     }
 
@@ -163,6 +192,19 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     if (!ls_auth_ensure(&auth, &token)) {
         fprintf(stderr, "error: LS auth: %s\n", auth.last_error);
         return 3;
+    }
+
+    /* 1-1) 종목 레지스트리 (t8436 + t8467). 실패 시 추정으로 계속한다 */
+    char merr[128] = {0};
+    tr_ls_master_t *master = ls_master_fetch(&auth, merr, sizeof(merr));
+    if (master != 0) {
+        const char *found_name = 0;
+        bool resolved = resolve_is_fut(master, shcode, &found_name);
+        printf("instruments: %zu registered, %s=%s (%s)\n", ls_master_count(master),
+               shcode, resolved ? "FUT" : "STK", found_name != 0 ? found_name : "unknown");
+        is_fut = resolved;
+    } else {
+        fprintf(stderr, "instrument master unavailable: %s (fallback to heuristic)\n", merr);
     }
 
     /* 2) IPC */
@@ -266,6 +308,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     g_live_ctx.is_fut = is_fut;
     g_live_ctx.rt = rt;
     g_live_ctx.engine = &engine;
+    g_live_ctx.master = master;
 
     printf("live %s %s: streaming (Ctrl+C 또는 'traderctl engine stop'으로 중지)\n",
            is_fut ? "FUT" : "STK", shcode);
@@ -311,6 +354,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
 
     tr_ls_rt_close(rt);
     tr_ipc_close(ipc);
+    ls_master_free(master);
     return rc;
 }
 

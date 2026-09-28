@@ -88,6 +88,7 @@ if(CURL_INCLUDE_DIR AND CURL_LIBRARY)
         src/adapters/ls/ls_auth.c
         src/adapters/ls/ls_chart.c
         src/adapters/ls/ls_http.c
+        src/adapters/ls/ls_master.c
     )
     target_link_libraries(ls PUBLIC core yyjson ${CURL_LIBRARY})
     target_include_directories(ls PUBLIC src ${CURL_INCLUDE_DIR})
@@ -201,6 +202,11 @@ if(TR_LS_FOUND)
     target_link_libraries(test_ls PRIVATE ls)
     target_compile_options(test_ls PRIVATE ${TR_WARNINGS})
     add_test(NAME ls COMMAND test_ls)
+
+    add_executable(test_ls_master tests/test_ls_master.c)
+    target_link_libraries(test_ls_master PRIVATE ls)
+    target_compile_options(test_ls_master PRIVATE ${TR_WARNINGS})
+    add_test(NAME ls_master COMMAND test_ls_master)
 
     # 라이브 테스트: 실제 키·네트워크 필요. 키가 없으면 77로 skip.
     add_executable(test_ls_live tests/test_ls_live.c)
