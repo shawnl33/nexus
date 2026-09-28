@@ -13,6 +13,7 @@ static void sleep_ms(int ms) {
 }
 #else
 #include <time.h>
+#include <unistd.h>
 static void sleep_ms(int ms) {
     struct timespec ts;
     ts.tv_sec = ms / 1000;
@@ -50,6 +51,22 @@ static void print_version(void) {
     printf("trading-engine %s\n", TRADING_ENGINE_VERSION);
 }
 
+/* 실행마다 고유한 엔진 실행 ID. 재시작을 구독자가 식별하는 값이다 (계획서 §16). */
+static uint64_t make_engine_instance_id(void) {
+#ifdef _WIN32
+    uint64_t pid = (uint64_t)GetCurrentProcessId();
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    uint64_t t100ns = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (t100ns << 16) ^ pid;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ((uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL) << 16 ^
+           (uint64_t)getpid();
+#endif
+}
+
 #define BB_CAP 512
 static tr_candle_t g_bb_storage[BB_CAP];
 static double g_score_mid[64];
@@ -68,11 +85,12 @@ static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep, 
     }
 
     char err[256] = {0};
+    uint64_t engine_instance_id = make_engine_instance_id();
     tr_ipc_config_t icfg;
     memset(&icfg, 0, sizeof(icfg));
     icfg.cmd_endpoint = cmd_ep;
     icfg.pub_endpoint = pub_ep;
-    icfg.engine_instance_id = 1;
+    icfg.engine_instance_id = engine_instance_id;
     icfg.pub_sndhwm = 1000;
     tr_ipc_t *ipc = tr_ipc_open(&icfg, err, sizeof(err));
     if (ipc == 0) {
@@ -83,7 +101,7 @@ static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep, 
 
     tr_engine_config_t ecfg;
     memset(&ecfg, 0, sizeof(ecfg));
-    ecfg.engine_instance_id = 1;
+    ecfg.engine_instance_id = engine_instance_id;
     ecfg.instrument_id = 1;
     ecfg.session = (tr_session_policy_t){540, 540, 930, TR_SESSION_WEEKDAYS};
     ecfg.timeframe_sec = 60;
