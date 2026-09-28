@@ -1,11 +1,18 @@
 #ifndef TR_ATR_H
 #define TR_ATR_H
 
-/* ATR (Average True Range) — Wilder 평활.
+/* ATR (Average True Range).
  *
  * WSF_Mtf_LinRegPredictV4의 내장 ATR(14) 대응 구현.
- * 원본의 내장 ATR 산식은 미제공으로 불명(docs/yeslanguage_mapping.md §7)이므로
- * 표준 Wilder 평활로 구현하고, 산식이 다륩으로 확인되면 버전을 올려 교정한다.
+ *
+ * 산식 근거: 예스스탁 공식 커뮤니티에 인용된 예스랭귀지 내장 ATR 함수식
+ * (https://www.yesstock.com/community/qna-type1-dtl?postNo=128609):
+ *   TrueHigh = max(C[1], H), TrueLow = min(C[1], L), TrueRange = TrueHigh-TrueLow,
+ *   ATR = Ma(TrueRange, Period) — 즉 **TR의 단순이동평균(SMA)**.
+ * Wilder 평활이 아니므로 SMA를 기본 모드로 하고, 비교·대조용으로 Wilder 모드를 남긴다.
+ * 공식 매뉴얼 원문 대조가 남은 미검증 항목이다.
+ *
+ * 시딩(기간 미만): 가용 봉의 평균을 사용한다 (원본 Ma()의 초기 동작은 불명, 기록).
  *
  * 갱신 계약:
  * - 확정된 봉은 tr_atr_on_bar로 한 번만 반영한다 (증분).
@@ -15,25 +22,42 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef enum {
+    TR_ATR_SMA = 0,   /* 예스랭귀지 내장 산식 (기본) */
+    TR_ATR_WILDER = 1 /* 비교용 Wilder 평활 */
+} tr_atr_mode_t;
+
+#define TR_ATR_MAX_PERIOD 250
+
 typedef struct {
+    tr_atr_mode_t mode;
     uint32_t period;
     double prev_close;
     bool has_prev_close;
-    double atr;      /* 시딩 완료 후 Wilder 값 */
-    double tr_sum;   /* 시딩 중 누적 */
-    uint32_t count;  /* 반영된 봉 수 */
-    bool seeded;
+    /* SMA 모드: 최근 period개 TR의 링 */
+    double sma_hist[TR_ATR_MAX_PERIOD];
+    uint32_t sma_count;   /* <= period */
+    double sma_sum;
+    /* Wilder 모드 */
+    double wilder_atr;
+    double wilder_seed_sum;
+    uint32_t wilder_count;
+    bool wilder_seeded;
 } tr_atr_t;
 
+/* mode: TR_ATR_SMA(기본) 또는 TR_ATR_WILDER. */
+bool tr_atr_init_ex(tr_atr_t *a, uint32_t period, tr_atr_mode_t mode);
+
+/* SMA 기본 모드. */
 bool tr_atr_init(tr_atr_t *a, uint32_t period);
 
-/* 확정된 봉 반영. 현재 ATR 추정값 반환. */
+/* 확정된 봉 반영. */
 double tr_atr_on_bar(tr_atr_t *a, double high, double low, double close);
 
 /* 진행 중 봉 포함 추정 (상태 변경 없음). */
 double tr_atr_candidate(const tr_atr_t *a, double high, double low, double close);
 
-/* 현재 ATR. 시딩 전이면 누적 단순 평균, 데이터 없으면 0. */
+/* 현재 ATR. 시딩 전이면 가용 봉 평균, 데이터 없으면 0. */
 double tr_atr_value(const tr_atr_t *a);
 
 #endif

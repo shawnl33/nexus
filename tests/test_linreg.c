@@ -66,26 +66,53 @@ static void test_x0_offset(void) {
     TR_CHECK(fabs(r.current - 33.0) < 1e-9); /* 2*15+3 */
 }
 
-static void test_atr_wilder(void) {
+static void test_atr_sma_default(void) {
     tr_atr_t a;
-    TR_CHECK(tr_atr_init(&a, 14));
+    TR_CHECK(tr_atr_init(&a, 14)); /* 기본 = 예스랭귀지 내장 산식(SMA) */
     TR_CHECK(tr_atr_value(&a) == 0.0);
 
-    /* TR=10 인 봉 14개: 시딩 후 ATR = 10 */
+    /* TR=10 인 봉 14개 → SMA = 10 */
     for (int i = 0; i < 14; i++) {
         tr_atr_on_bar(&a, 105.0, 95.0, 100.0);
     }
     TR_CHECK(fabs(tr_atr_value(&a) - 10.0) < 1e-9);
 
-    /* Wilder 평활: atr = (10*13 + 24)/14 = 11 */
-    tr_atr_on_bar(&a, 112.0, 88.0, 100.0); /* TR = 24 */
+    /* TR=24 반영 → (10*13 + 24)/14 = 11 */
+    tr_atr_on_bar(&a, 112.0, 88.0, 100.0);
     TR_CHECK(fabs(tr_atr_value(&a) - 11.0) < 1e-9);
+
+    /* TR=0 반영 → SMA는 (10*12 + 24 + 0)/14 ≈ 10.2857 (Wilder와 다른 지점) */
+    tr_atr_on_bar(&a, 100.0, 100.0, 100.0);
+    TR_CHECK(fabs(tr_atr_value(&a) - (120.0 + 24.0) / 14.0) < 1e-9);
 
     /* 진행 봉 후보는 상태를 바꾸지 않는다 */
     double before = tr_atr_value(&a);
-    double cand = tr_atr_candidate(&a, 200.0, 100.0, 150.0); /* 큰 TR */
+    double cand = tr_atr_candidate(&a, 200.0, 100.0, 150.0);
     TR_CHECK(cand > before);
     TR_CHECK(tr_atr_value(&a) == before);
+}
+
+static void test_atr_wilder_mode(void) {
+    tr_atr_t a;
+    TR_CHECK(tr_atr_init_ex(&a, 14, TR_ATR_WILDER));
+    for (int i = 0; i < 14; i++) {
+        tr_atr_on_bar(&a, 105.0, 95.0, 100.0);
+    }
+    TR_CHECK(fabs(tr_atr_value(&a) - 10.0) < 1e-9);
+    tr_atr_on_bar(&a, 112.0, 88.0, 100.0); /* Wilder: (10*13+24)/14 = 11 */
+    TR_CHECK(fabs(tr_atr_value(&a) - 11.0) < 1e-9);
+    tr_atr_on_bar(&a, 100.0, 100.0, 100.0); /* Wilder: (11*13+0)/14 ≈ 10.214 */
+    TR_CHECK(fabs(tr_atr_value(&a) - 143.0 / 14.0) < 1e-9);
+}
+
+static void test_atr_sma_early_bars(void) {
+    tr_atr_t a;
+    tr_atr_init(&a, 14);
+    /* 기간 미만: 가용 봉 평균 */
+    tr_atr_on_bar(&a, 105.0, 95.0, 100.0); /* TR=10 */
+    TR_CHECK(fabs(tr_atr_value(&a) - 10.0) < 1e-9);
+    tr_atr_on_bar(&a, 115.0, 95.0, 100.0); /* TR=20 */
+    TR_CHECK(fabs(tr_atr_value(&a) - 15.0) < 1e-9);
 }
 
 static void test_atr_gap_tr(void) {
@@ -94,7 +121,7 @@ static void test_atr_gap_tr(void) {
     tr_atr_on_bar(&a, 100.0, 90.0, 95.0);  /* TR=10 (첫 봉) */
     tr_atr_on_bar(&a, 110.0, 100.0, 105.0); /* TR = max(10, 15, 5) = 15 (갭) */
     tr_atr_on_bar(&a, 106.0, 102.0, 104.0); /* TR = max(4, 1, 3) = 4 */
-    /* 시딩 평균 = (10+15+4)/3 = 9.666... */
+    /* SMA = (10+15+4)/3 = 9.666... */
     TR_CHECK(fabs(tr_atr_value(&a) - 29.0 / 3.0) < 1e-9);
 }
 
@@ -104,7 +131,9 @@ int main(void) {
     test_hand_computed();
     test_min_samples();
     test_x0_offset();
-    test_atr_wilder();
+    test_atr_sma_default();
+    test_atr_wilder_mode();
+    test_atr_sma_early_bars();
     test_atr_gap_tr();
     TR_TEST_SUMMARY();
 }
