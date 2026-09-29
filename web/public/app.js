@@ -82,6 +82,24 @@ const barSeq = [];        // 시각 오름차순 목록
 const barPos = new Map(); // time → barSeq 인덱스
 let lastMktCenter = NaN;  // ⑧ 마켓중심기울기 = 중심 − 이전중심
 let mktBandOn = false;    // ⑧ 마켓 밴드 표시 (원본 입력 마켓밴드표시; 기본 숨김, 헤더 토글)
+let bandOn = true;        // ④ 결과 띠 표시 (원본 입력 과거예측표시=1 기본 켜짐, 헤더 토글)
+
+// ④ 결과 띠 다시 그리기 — 토글 시 barInd 캐시에서 전체 복원/제거
+function rebuildBand() {
+  if (!bandOn) {
+    bandSeries.setData([]);
+    return;
+  }
+  const data = [];
+  for (let i = 0; i < barSeq.length; i++) {
+    const ind = barInd.get(barSeq[i]);
+    if (!ind || !Number.isFinite(ind.regFlat)) continue;
+    const src = i >= 10 ? barInd.get(barSeq[i - 10]) : undefined;
+    data.push({ time: barSeq[i], value: ind.regFlat - MiraeLayers.bandOffset(tickRaw),
+                c: MiraeLayers.bandColor(src, sameSession(src, ind)) });
+  }
+  bandSeries.setData(data);
+}
 
 // ⑧ 마켓 밴드 다시 그리기 — 토글 시 barInd 캐시에서 전체 복원/제거
 function rebuildMktBand() {
@@ -244,7 +262,7 @@ function applyStatus(msg) {
   }
 
   // ④ 과거 채점 결과 띠: reg_flat − tick×4, 색은 10봉 전 예측방향2·신뢰도 기준
-  if (Number.isFinite(ind.regFlat)) {
+  if (bandOn && Number.isFinite(ind.regFlat)) {
     const src = pos !== undefined && pos >= 10 ? barInd.get(barSeq[pos - 10]) : undefined;
     bandSeries.update({ time: t, value: ind.regFlat - MiraeLayers.bandOffset(tickRaw),
                         c: MiraeLayers.bandColor(src, sameSession(src, ind)) });
@@ -398,7 +416,6 @@ async function seedChart() {
     // 봉별 지표 복원: 스냅샷의 ind 배열로 과거 구간의 보조지표를 다시 그린다
     const regData = [];
     const scoreData = [];
-    const bandData = [];
     for (let i = 0; i < dedup.length; i++) {
       const b = dedup[i];
       const d = MiraeLayers.parseInd(b.ind);
@@ -413,15 +430,10 @@ async function seedChart() {
                        score: Number.isFinite(d.score) ? d.score : 0, r2: d.r2,
                        finalState: d.finalValid ? d.finalState : 0 });
       }
-      if (Number.isFinite(d.regFlat)) {
-        const src = i >= 10 ? barInd.get(dedup[i - 10].time) : undefined;
-        bandData.push({ time: b.time, value: d.regFlat - MiraeLayers.bandOffset(tickRaw),
-                        c: MiraeLayers.bandColor(src, sameSession(src, d)) });
-      }
     }
     regLineSeries.setData(regData);
     scoreSeries.setData(scoreData);
-    bandSeries.setData(bandData);
+    rebuildBand();    // ④ 결과 띠 (기본 켜짐; 꺼져 있으면 제거)
     rebuildMktBand(); // ⑧ 마켓 밴드 (기본 숨김; 켜져 있으면 barInd 캐시에서 복원)
 
     // ⑥⑦ 이벤트 복원: 세트가 다음 갱신/저장까지 유지되는 수평 계단선
@@ -555,6 +567,14 @@ mktbandBtn.onclick = () => {
   mktBandOn = !mktBandOn;
   mktbandBtn.classList.toggle("on", mktBandOn);
   rebuildMktBand();
+};
+
+// ④ 결과 띠 토글 (기본 켜짐 — 원본 입력 과거예측표시=1에 해당)
+const bandBtn = document.getElementById("band-toggle");
+bandBtn.onclick = () => {
+  bandOn = !bandOn;
+  bandBtn.classList.toggle("on", bandOn);
+  rebuildBand();
 };
 
 document.getElementById("ws-save").onclick = saveWorkspace;
