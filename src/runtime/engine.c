@@ -8,6 +8,12 @@
 
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar);
 
+/* 원본 PriceScale 대응: raw 가격 단위의 1틱 — 선물 0.05pt(×100)=5, 주식 1원(×1)=1
+ * (raw 규칙: docs/display_payload.md, docs/ls_api_mapping.md) */
+static double tick_scale(const tr_engine_t *e) {
+    return e->cfg.is_futures ? 5.0 : 1.0;
+}
+
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
                     tr_candle_t *bb_storage, size_t bb_capacity,
                     double *score_mid_storage, size_t score_mid_capacity) {
@@ -65,9 +71,9 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
         return false;
     }
     /* ⑥ 방향 기억·⑦ 지속 사진 (메인 원본 기본값: 가파른기울기틱 4, 추가확인봉 1, 지속봉수 5).
-     * price_scale은 원본 틱 양자화 대응 — raw ×100 단위에서 선물 1틱=1, 주식 1원=100 */
+     * price_scale은 원본 틱 양자화 대응 (tick_scale 헬퍼 참조) */
     {
-        double ps = cfg->is_futures ? 1.0 : 100.0;
+        double ps = tick_scale(e);
         tr_regmem_config_t rcfg = {ps, 4.0, 1, true};
         tr_regmem_init(&e->regmem, &rcfg);
         tr_persist_config_t pcfg = {ps, 5, cfg->min_r2};
@@ -127,7 +133,7 @@ bool tr_engine_attach_market(tr_engine_t *e, tr_candle_t *storage, size_t capaci
     if (e == 0 || storage == 0 || capacity == 0) {
         return false;
     }
-    double ps = e->cfg.is_futures ? 1.0 : 100.0;
+    double ps = tick_scale(e);
     if (!tr_market_init(&e->mkt, e->cfg.market_period, 1.0, ps, storage, capacity)) {
         return false;
     }
@@ -142,8 +148,8 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
     const tr_regmem_t *rm = &e->regmem;
     const tr_persist_t *ps = &e->persist;
     const tr_dalign2_output_t *fa = &e->dalign;
-    /* 곡선회귀선_평탄: 회귀선을 틱 단위로 반올림 (raw ×100 단위에서 선물 1틱=1, 주식 1원=100) */
-    double pscale = e->cfg.is_futures ? 1.0 : 100.0;
+    /* 곡선회귀선_평탄: 회귀선을 틱 단위로 반올림 (tick_scale 헬퍼 참조) */
+    double pscale = tick_scale(e);
     double reg_flat = floor(e->lr3.line / pscale + 0.5) * pscale;
     char payload[1664];
     int n = snprintf(payload, sizeof(payload),
@@ -289,8 +295,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         lower[i] = e->lr3.v4.pred_price[i] - band;
     }
 
-    /* 곡선회귀선_평탄: 원본 틱 양자화 */
-    double ps = e->cfg.is_futures ? 1.0 : 100.0;
+    /* 곡선회귀선_평탄: 원본 틱 양자화 (tick_scale 헬퍼 참조) */
+    double ps = tick_scale(e);
     double line_flat = floor(e->lr3.line / ps + 0.5) * ps;
 
     /* ⑧ 마켓 밴드 */

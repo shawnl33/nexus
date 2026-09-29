@@ -299,7 +299,7 @@ static void test_daily_chain(void) {
     TR_CHECK(e.dalign.final_dir == 1);
     TR_CHECK(e.dalign.final_state == 2);
     TR_CHECK(strstr(cap.last, "\"final\":[1,1,2,100]") != 0);
-    TR_CHECK(strstr(cap.last, "\"reg_flat\":1214") != 0); /* 회귀선 틱 반올림 (선물 ps=1) */
+    TR_CHECK(strstr(cap.last, "\"reg_flat\":1215") != 0); /* 회귀선 틱 반올림 (선물 1틱=5 raw) */
     TR_CHECK(e.bar_index == 88); /* 11세션 × 8봉, 봉당 1회씩만 진행 */
 
     /* 상태 링: 최신 봉은 유효, 링에 남은 가장 오래된 봉(세션 3 첫 봉)은 무효 */
