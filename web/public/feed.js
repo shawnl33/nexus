@@ -1,0 +1,97 @@
+// 종목별 데이터 피드 — 캐시 격리와 세대(generation) 추적 (계획서 §18, 다중 종목 Task 4).
+// 칸(pane)은 종목(shcode)을 하나씩 보고, 같은 종목을 보는 칸들은 같은 캐시를 공유한다.
+// status의 payload.shcode로 캐시를 골라 갱신한다 (엔진이 status 페이로드 끝에 shcode를 싣는다).
+// DOM 없는 순수 로직 (node:test 단위 테스트 대상).
+// 브라우저에서는 전역 Feed, node:test에서는 globalThis.Feed로 쓴다.
+"use strict";
+
+const Feed = (() => {
+  function createCache(shcode) {
+    return {
+      shcode,
+      name: "",          // 표시용 종목명 (watch 응답·검색 결과에서 채운다)
+      bars: new Map(),   // time(sec) → candle
+      barInd: new Map(), // time → 봉별 지표 엔트리 (mirae-layers barIndFrom* 형태)
+      barSeq: [],        // 시각 오름차순 목록
+      barPos: new Map(), // time → barSeq 인덱스
+      tickRaw: 5,        // raw 단위 틱 크기 (엔진 tick 키가 갱신; 선물 5, 주식 100)
+      generation: 0,     // 이 종목의 최신 세대 — 더 큰 세대가 오면 리셋 트리거
+      seedToken: 0,      // 리셋 때마다 증가 — 진행 중 시딩의 늦은 응답 폐기에 쓴다
+      ctx: null,         // 렌더러 컨텍스트 (app.js가 지연 생성해 붙인다)
+    };
+  }
+
+  function create() {
+    const caches = new Map(); // shcode → cache
+
+    // 캐시 조회(없으면 생성). 라이브 status는 이 함수로 종목별 캐시에 모인다.
+    function forSymbol(shcode) {
+      let c = caches.get(shcode);
+      if (!c) {
+        c = createCache(shcode);
+        caches.set(shcode, c);
+      }
+      return c;
+    }
+    const get = (shcode) => caches.get(shcode);
+    const symbols = () => [...caches.keys()];
+
+    // 캐시를 비운다 (세대 교체·엔진 재시작·재시딩). 맵/배열 참조는 유지하므로
+    // 렌더러에 건넨 ctx가 끊기지 않는다. seedToken을 올려 진행 중인 시딩이
+    // 리셋 이후 상태를 늦게 덮어쓰지 않게 한다.
+    function reset(cache) {
+      cache.bars.clear();
+      cache.barInd.clear();
+      cache.barSeq.length = 0;
+      cache.barPos.clear();
+      cache.tickRaw = 5;
+      cache.seedToken++;
+    }
+
+    // 봉 기록: 라이브는 대부분 뒤에 붙는다. 늦은 정정 등 순서 역행만 이진 삽입으로 처리한다.
+    function noteBar(cache, t, bar) {
+      cache.bars.set(t, bar);
+      if (cache.barPos.has(t)) return;
+      const seq = cache.barSeq;
+      if (seq.length === 0 || t > seq[seq.length - 1]) {
+        cache.barPos.set(t, seq.length);
+        seq.push(t);
+        return;
+      }
+      let lo = 0, hi = seq.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (seq[mid] < t) lo = mid + 1; else hi = mid;
+      }
+      seq.splice(lo, 0, t);
+      for (let i = lo; i < seq.length; i++) cache.barPos.set(seq[i], i);
+    }
+
+    // barSeq[pos]까지 최근 n개 봉 (오름차순) — ⑥⑦ 5봉 규칙에 사용
+    function recentBars(cache, pos, n) {
+      const out = [];
+      if (pos === undefined) return out;
+      for (let i = Math.max(0, pos - n + 1); i <= pos; i++) {
+        const b = cache.bars.get(cache.barSeq[i]);
+        if (b) out.push(b);
+      }
+      return out;
+    }
+
+    // 세대 확인: 새 세대가 오면 기록하고 true. 호출자가 reset과 칸 정리를 한다.
+    // 종목 전환 후 낮은 세대의 늦은 메시지는 false라 리셋을 일으키지 않는다.
+    function noteGeneration(cache, gen) {
+      if (typeof gen !== "number" || gen <= cache.generation) return false;
+      cache.generation = gen;
+      return true;
+    }
+
+    return { forSymbol, get, symbols, reset, noteBar, recentBars, noteGeneration };
+  }
+
+  return { create };
+})();
+
+if (typeof globalThis !== "undefined") {
+  globalThis.Feed = Feed;
+}

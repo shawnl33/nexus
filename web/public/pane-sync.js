@@ -7,8 +7,9 @@
 
 const PaneSync = (() => {
   // getPrice(timeSec): 그 시각 봉의 대표 가격(종가 등). 없으면 undefined를 돌려야 한다.
+  // 칸마다 종목이 다르므로 add의 칸별 getPrice가 우선하고, 없으면 create의 공유 값을 쓴다.
   function create(getPrice) {
-    const members = new Set(); // { chart, candleSeries, unsubs: [fn] }
+    const members = new Set(); // { chart, candleSeries, getPrice?, unsubs: [fn] }
     let syncing = false;       // 적용이 다시 이벤트를 일으키는 재진입(무한 루프) 방지
 
     // 시간축 동기화: 한 칸의 보이는 범위가 바뀌면 나머지 칸에 같은 범위를 적용한다
@@ -37,8 +38,8 @@ const PaneSync = (() => {
           if (time === undefined || time === null) {
             m.chart.clearCrosshairPosition();
           } else {
-            // 가로선은 칸마다 자기 데이터에 맞는 값이어야 하므로 공유 캐시의 봉 값을 쓴다
-            const price = getPrice(time);
+            // 가로선은 칸마다 자기 종목 캐시의 값이어야 하므로 칸별 getPrice를 쓴다
+            const price = (m.getPrice ?? getPrice)?.(time);
             if (Number.isFinite(price)) m.chart.setCrosshairPosition(price, time, m.candleSeries);
           }
         }
@@ -47,9 +48,10 @@ const PaneSync = (() => {
       }
     }
 
-    // 칸 등록: 두 구독을 붙이고 해제 핸들을 돌려준다 (칸 삭제 시 remove에 넘긴다)
-    function add(chart, candleSeries) {
-      const member = { chart, candleSeries, unsubs: [] };
+    // 칸 등록: 두 구독을 붙이고 해제 핸들을 돌려준다 (칸 삭제 시 remove에 넘긴다).
+    // memberGetPrice를 주면 크로스헤어 가로선 값을 그 칸의 종목 캐시에서 찾는다.
+    function add(chart, candleSeries, memberGetPrice) {
+      const member = { chart, candleSeries, getPrice: memberGetPrice, unsubs: [] };
       const ts = chart.timeScale();
       const onRange = (range) => propagateRange(member, range);
       const onCross = (param) => propagateCrosshair(member, param);

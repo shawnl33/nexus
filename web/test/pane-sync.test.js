@@ -113,6 +113,22 @@ test("크로스헤어: 캐시에 없는 시각은 위치를 찍지 않는다", (
   assert.equal(ms[1].calls.clear, 0);
 });
 
+test("크로스헤어: 칸별 getPrice가 있으면 공유 값보다 우선한다 (종목별 가격)", () => {
+  const sync = PaneSync.create(getPrice);
+  const a = mockChart(), b = mockChart();
+  const bBars = new Map([[1000, { time: 1000, close: 555 }]]); // B 칸 종목의 캐시
+  sync.add(a.chart, { id: "sa" });
+  sync.add(b.chart, { id: "sb" }, (t) => bBars.get(t)?.close);
+
+  fireCross(a, { time: 1000 });
+  // B 칸에는 공유 캐시(11)가 아니라 B 종목 캐시의 555로 찍힌다
+  assert.deepEqual(b.calls.setPos, [{ price: 555, time: 1000, series: { id: "sb" } }]);
+
+  fireCross(b, { time: 1000 });
+  // A 칸은 칸별 getPrice가 없으므로 create의 공유 값을 쓴다
+  assert.deepEqual(a.calls.setPos, [{ price: 11, time: 1000, series: { id: "sa" } }]);
+});
+
 test("칸 삭제: remove 후에는 구독이 해제되어 더 이상 전파되지 않는다", () => {
   const { sync, ms, handles } = setup(2);
   sync.remove(handles[1]);

@@ -32,14 +32,16 @@
   .pane .tools .chip:hover { background: #2a2e39; }
   #ws-state { margin-left: auto; }
   #hint { font-size: 12px; color: #7d8590; }
-  .sym-picker { position: relative; }
-  #symbol-results { position: absolute; top: calc(100% + 2px); left: 0; z-index: 10; background: #1c2330; border: 1px solid #434651; border-radius: 4px; max-height: 280px; overflow-y: auto; min-width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,.5); }
-  #symbol-results .row { padding: 4px 10px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
-  #symbol-results .row:hover, #symbol-results .row.active { background: #363c4a; }
-  #symbol-results .row .code { color: #7d8590; min-width: 9ch; font-family: monospace; }
-  #symbol-results .row .mkt { margin-left: auto; color: #b08c3d; font-size: 11px; }
-  #symbol-results .empty { padding: 6px 10px; color: #7d8590; }
-  #symbol-name { font-size: 12px; }
+  .pane .tools .chips { display: inline-flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .sym-picker { position: relative; display: inline-flex; gap: 4px; align-items: center; }
+  .sym-picker input { padding: 1px 6px; font-size: 12px; width: 11ch; }
+  .sym-picker .sym-name { font-size: 11px; padding: 1px 6px; }
+  .sym-results { position: absolute; top: calc(100% + 2px); left: 0; z-index: 10; background: #1c2330; border: 1px solid #434651; border-radius: 4px; max-height: 280px; overflow-y: auto; min-width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,.5); }
+  .sym-results .row { padding: 4px 10px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+  .sym-results .row:hover, .sym-results .row.active { background: #363c4a; }
+  .sym-results .row .code { color: #7d8590; min-width: 9ch; font-family: monospace; }
+  .sym-results .row .mkt { margin-left: auto; color: #b08c3d; font-size: 11px; }
+  .sym-results .empty { padding: 6px 10px; color: #7d8590; }
 </style>
 </head>
 <body>
@@ -54,7 +56,6 @@
     <span class="badge" id="ob">호가: –</span>
   </span>
   <button id="pane-add" title="차트 칸을 추가한다">+ 차트</button>
-  <span class="sym-picker">종목 <input id="symbol" value="005930" size="14" placeholder="코드 또는 종목명" autocomplete="off"><button id="symbol-apply">전환</button><span id="symbol-name" class="badge"></span><div id="symbol-results" hidden></div></span>
   <span id="ws-state" class="badge err">연결 끊김</span>
   <span id="hint">화면틀:</span>
   <input id="ws-name" value="default" size="10">
@@ -66,6 +67,7 @@
 <script src="lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script src="mirae-layers.js"></script>
 <script src="sma-layers.js"></script>
+<script src="feed.js"></script>
 <script src="workspace.js"></script>
 <script src="pane-sync.js"></script>
 <script src="app.js"></script>
