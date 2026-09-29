@@ -12,7 +12,8 @@
   .badge.ok { background: #1e4d3b; }
   .badge.err { background: #5d2a2a; }
   #score { font-size: 18px; font-weight: 700; min-width: 3ch; text-align: center; }
-  #chart { width: 100vw; height: calc(100vh - 110px); }
+  #panes { width: 100vw; height: calc(100vh - 110px); display: flex; flex-direction: column; }
+  #panes .pane { width: 100%; }
   input, button { background: #2a2e39; color: #d1d4dc; border: 1px solid #434651; border-radius: 4px; padding: 4px 8px; font: inherit; }
   button { cursor: pointer; }
   button:hover { background: #363c4a; }
@@ -48,7 +49,7 @@
   <button id="ws-load">불러오기</button>
   <span id="hint">※ 예측선은 미래 가격이 아니라 생성 시점의 계산 결과입니다</span>
 </header>
-<div id="chart"></div>
+<div id="panes"></div>
 <script src="lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script src="mirae-layers.js"></script>
 <script src="app.js"></script>

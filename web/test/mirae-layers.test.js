@@ -187,3 +187,121 @@ test("커스텀 시리즈 pane view 기본 계약", () => {
   const rays = M.createFutureRaysPrimitive();
   assert.equal(rays.autoscaleInfo(), null); // 광선은 자동 스케일에 영향 없음
 });
+
+// ---- MiraeRenderer 패널 렌더러 계약 (가짜 차트/시리즈로 검증) ----
+
+function fakeSeries() {
+  return {
+    data: null, updates: [],
+    setData(d) { this.data = d; },
+    update(d) { this.updates.push(d); },
+    applyOptions() {},
+  };
+}
+function fakeChart() {
+  const made = [];
+  return {
+    made,
+    addCustomSeries() { const s = fakeSeries(); made.push(s); return s; },
+    addLineSeries() { const s = fakeSeries(); made.push(s); return s; },
+    priceScale() { return { applyOptions() {} }; },
+  };
+}
+function fakeCandleSeries() {
+  return { primitives: [], attachPrimitive(p) { this.primitives.push(p); } };
+}
+function makeCtx(rows) {
+  // rows: [t, indEntry] — barInd/barSeq/barPos를 같은 형태로 구성
+  const barInd = new Map(rows);
+  const barSeq = rows.map(([t]) => t);
+  const barPos = new Map(rows.map(([t], i) => [t, i]));
+  return {
+    bars: new Map(rows.map(([t]) => [t, { time: t, open: 1, high: 2, low: 0, close: 1 }])),
+    barInd, barSeq, barPos,
+    tickRaw: () => 5,
+    sameSession: () => true,
+    recentBars: () => [],
+  };
+}
+
+test("MiraeRenderer: createHandle이 계약 메서드를 가진 handle을 만든다", () => {
+  const chart = fakeChart();
+  const candle = fakeCandleSeries();
+  const h = M.MiraeRenderer.createHandle(chart, candle);
+  for (const m of ["setLayers", "applyLive", "applySeed", "clear"]) {
+    assert.equal(typeof h[m], "function", m);
+  }
+  assert.equal(candle.primitives.length, 1); // ③ 미래 목표 광선 프리미티브
+  assert.equal(chart.made.length, 10); // 커스텀 6(reg/score/band/mem/pst/mktCenter) + 마켓 밴드 라인 4
+});
+
+test("MiraeRenderer: applySeed가 ctx 캐시에서 복원하고 setLayers가 즉시 토글한다", () => {
+  const chart = fakeChart();
+  const candle = fakeCandleSeries();
+  const h = M.MiraeRenderer.createHandle(chart, candle);
+  // 커스텀 시리즈 생성 순서: [0]regLine [1]score [2]band [3]mem [4]pst [5]mktCenter
+  const bandSeries = chart.made[2];
+  const regLineSeries = chart.made[0];
+
+  const mkInd = (regFlat) => ({
+    ...M.barIndFromPayload({ reg_valid: 1, reg_r2: 0.7, reg_flat: regFlat, final: [1, 1, 2] }),
+    score: 3, pred: [101, 102, 103], resid: 1, pvol: 1,
+  });
+  const rows = [];
+  for (let i = 0; i < 12; i++) rows.push([100 + i * 60, mkInd(1000 + i)]);
+  const ctx = makeCtx(rows);
+
+  h.applySeed(ctx);
+  assert.equal(regLineSeries.data.length, 12); // ② 회귀선 전 구간
+  assert.equal(bandSeries.data.length, 12);    // ④ 기본 켜짐
+  const rays = candle.primitives[0];
+  assert.notEqual(rays.paneViews()[0].renderer(), null); // ③ 광선 복원됨
+
+  // 레이어 토글: band 끄면 즉시 비워지고, 다시 켜면 캐시에서 복원
+  h.setLayers({ band: false });
+  assert.deepEqual(bandSeries.data, []);
+  h.setLayers({ band: true });
+  assert.equal(bandSeries.data.length, 12);
+
+  h.clear();
+  assert.deepEqual(regLineSeries.data, []);
+  assert.deepEqual(bandSeries.data, []);
+  assert.equal(rays.paneViews()[0].renderer(), null);
+});
+
+test("MiraeRenderer: applyLive가 봉별 갱신과 ⑥⑦ 아이템 캐시를 반영한다", () => {
+  const chart = fakeChart();
+  const candle = fakeCandleSeries();
+  const h = M.MiraeRenderer.createHandle(chart, candle);
+  const regLineSeries = chart.made[0];
+  const memSeries = chart.made[3];
+
+  const ctx = makeCtx([]);
+  const t = 100000;
+  ctx.barSeq.push(t);
+  ctx.barPos.set(t, 0);
+  ctx.bars.set(t, { time: t, open: 1, high: 2, low: 0, close: 1 });
+  ctx.barInd.set(t, M.barIndFromPayload({ reg_valid: 1, reg_r2: 0.5, reg_flat: 9000, final: [1, 1, 1] }));
+
+  h.applyLive({
+    bar_open_time: t * 1e6, score: -2, reg_valid: 1,
+    mem: [1, 1, 1, 5000, 5100, 5200, 5300, 5400, 5500, 5600, 4900, 4800, 4700],
+  }, ctx);
+  assert.equal(regLineSeries.updates.length, 1);
+  assert.equal(regLineSeries.updates[0].value, 9000);
+  assert.equal(memSeries.updates.length, 1);
+  assert.equal(memSeries.updates[0].upd, true); // 갱신 봉은 범위선 숨김
+  // ⑥ 아이템이 barInd 캐시에 심어져 applySeed가 복원할 수 있다
+  const h2 = M.MiraeRenderer.createHandle(fakeChart(), fakeCandleSeries());
+  h2.applySeed(ctx);
+  assert.equal(ctx.barInd.get(t).memItem.value, 5200); // value = mem[5] (목표2)
+
+  // regValid 없는 봉은 갭(whitespace)으로 갱신
+  const t2 = t + 60;
+  ctx.barSeq.push(t2);
+  ctx.barPos.set(t2, 1);
+  ctx.barInd.set(t2, M.barIndFromPayload({ reg_valid: 0 }));
+  h.applyLive({ bar_open_time: t2 * 1e6 }, ctx);
+  assert.equal(regLineSeries.updates.length, 2);
+  assert.equal(regLineSeries.updates[1].value, undefined);
+});

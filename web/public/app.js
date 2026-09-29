@@ -1,13 +1,21 @@
 // 대시보드 프론트엔드 (계획서 §18).
 // C가 계산한 값을 표시만 한다. 지표·점수를 재계산하지 않는다.
-// 보조지표 렌더링은 원본 YesLanguage V16의 Plot 시맨틱을 따른다 (mirae-layers.js).
+// 패널 매니저: 칸(pane)마다 차트 1개를 두고, 지표는 렌더러(RENDERERS)를
+// 패널에 활성화해 표시한다. 현재는 미래곡선 1칸 고정 (선택 UI는 Task 3).
 
 "use strict";
 
 const WS_URL = `ws://${location.host}/ws`;
-const bars = new Map(); // time(sec) → candle
 let generation = 0;     // 종목 전환 시 올려 늦은 응답을 폐기 (계획서 §18)
-let tickRaw = 5;        // raw 단위 틱 크기 (엔진 tick 키가 갱신; 선물 5, 주식 100)
+
+// ---- 공유 데이터 피드 ----
+// 모든 패널이 같은 캐시를 본다. 렌더러에는 feedCtx로 전달한다.
+const bars = new Map();   // time(sec) → candle
+const barInd = new Map(); // time → { predDir[3], regValid, r2, regFlat, finalValid, finalState, day,
+                          //          mktValid, mkt, score, pred, resid, pvol, memItem, pstItem }
+const barSeq = [];        // 시각 오름차순 목록
+const barPos = new Map(); // time → barSeq 인덱스
+let tickRaw = 5;          // raw 단위 틱 크기 (엔진 tick 키가 갱신; 선물 5, 주식 100)
 
 // 거래소 시간은 항상 KST(UTC+9, 서머타임 없음) — 라이브러리 기본 UTC 표시를 KST로 맞춘다
 const KST_OFFSET_SEC = 9 * 3600;
@@ -25,109 +33,6 @@ function fmtPrice(raw) {
   return tickRaw >= 100
     ? v.toLocaleString("ko-KR", { maximumFractionDigits: 0 })
     : v.toFixed(2);
-}
-
-const chart = LightweightCharts.createChart(document.getElementById("chart"), {
-  layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
-  grid: { vertLines: { color: "#1e2530" }, horzLines: { color: "#1e2530" } },
-  localization: {
-    locale: "ko-KR",
-    priceFormatter: (p) => fmtPrice(p),
-    timeFormatter: (t) => {
-      const p = kstParts(t);
-      return `${p.y}-${pad2(p.mo)}-${pad2(p.d)} ${pad2(p.hh)}:${pad2(p.mm)}:${pad2(p.ss)}`;
-    },
-  },
-  timeScale: {
-    timeVisible: true, secondsVisible: true,
-    tickMarkFormatter: (t, tickMarkType) => {
-      const p = kstParts(t);
-      if (tickMarkType <= 1) return `${p.y}-${pad2(p.mo)}`;
-      if (tickMarkType === 2) return `${pad2(p.mo)}-${pad2(p.d)}`;
-      if (tickMarkType === 3) return `${pad2(p.hh)}:${pad2(p.mm)}`;
-      return `${pad2(p.hh)}:${pad2(p.mm)}:${pad2(p.ss)}`;
-    },
-  },
-});
-const candleSeries = chart.addCandlestickSeries({
-  upColor: "#ef5350", downColor: "#2962ff",
-  borderUpColor: "#ef5350", borderDownColor: "#2962ff",
-  wickUpColor: "#ef5350", wickDownColor: "#2962ff",
-});
-
-// ---- 보조지표 레이어 (원본 V16 Plot 시맨틱 — mirae-layers.js) ----
-// ② 회귀선 + ⑤ 매매 상태 덧선: 한 커스텀 시리즈가 2패스로 그린다
-const regLineSeries = chart.addCustomSeries(MiraeLayers.createRegLinePaneView(), {});
-// ① 통합 점수 막대: 아래 보조 칸의 0 기준 세로 색 막대
-const scoreSeries = chart.addCustomSeries(MiraeLayers.createScoreBarPaneView(), { priceScaleId: "score" });
-chart.priceScale("score").applyOptions({ scaleMargins: { top: 0.84, bottom: 0.02 } });
-// ④ 과거 채점 결과 띠: 회귀선 바로 아래 가로선
-const bandSeries = chart.addCustomSeries(MiraeLayers.createResultBandPaneView(), {});
-// ⑥⑦ 방향 기억·지속 사진: 수평 계단선. 오래된 선은 현재 가격과 멀 수 있어 자동 스케일에서 제외
-const memSeries = chart.addCustomSeries(MiraeLayers.createStepLinesPaneView("mem"), { autoscaleInfoProvider: () => null });
-const pstSeries = chart.addCustomSeries(MiraeLayers.createStepLinesPaneView("pst"), { autoscaleInfoProvider: () => null });
-// ⑧ 마켓 밴드: 중심선(단계색)은 커스텀, 밴드 4선은 고정색 라인 (원본 Plot52~55)
-const mktCenterSeries = chart.addCustomSeries(MiraeLayers.createMarketCenterPaneView(), {});
-const mktU1 = chart.addLineSeries({ color: "rgb(255,120,120)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-const mktL1 = chart.addLineSeries({ color: "rgb(120,150,255)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-const mktU2 = chart.addLineSeries({ color: "rgb(255,0,0)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-const mktL2 = chart.addLineSeries({ color: "rgb(0,0,255)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-// ③ 미래 목표 광선: 마지막 봉 기준 수평 광선 9개 (목표 3 + 범위 6)
-const futureRays = MiraeLayers.createFutureRaysPrimitive();
-candleSeries.attachPrimitive(futureRays);
-
-// 봉별 지표 캐시: ④ 결과 띠의 10봉 전 조회 등에 쓴다 (시딩·라이브 공통)
-const barInd = new Map(); // time → { predDir[3], regValid, r2, regFlat, finalValid, finalState }
-const barSeq = [];        // 시각 오름차순 목록
-const barPos = new Map(); // time → barSeq 인덱스
-let lastMktCenter = NaN;  // ⑧ 마켓중심기울기 = 중심 − 이전중심
-let mktBandOn = false;    // ⑧ 마켓 밴드 표시 (원본 입력 마켓밴드표시; 기본 숨김, 헤더 토글)
-let bandOn = true;        // ④ 결과 띠 표시 (원본 입력 과거예측표시=1 기본 켜짐, 헤더 토글)
-
-// ④ 결과 띠 다시 그리기 — 토글 시 barInd 캐시에서 전체 복원/제거
-function rebuildBand() {
-  if (!bandOn) {
-    bandSeries.setData([]);
-    return;
-  }
-  const data = [];
-  for (let i = 0; i < barSeq.length; i++) {
-    const ind = barInd.get(barSeq[i]);
-    if (!ind || !Number.isFinite(ind.regFlat)) continue;
-    const src = i >= 10 ? barInd.get(barSeq[i - 10]) : undefined;
-    data.push({ time: barSeq[i], value: ind.regFlat - MiraeLayers.bandOffset(tickRaw),
-                c: MiraeLayers.bandColor(src, sameSession(src, ind)) });
-  }
-  bandSeries.setData(data);
-}
-
-// ⑧ 마켓 밴드 다시 그리기 — 토글 시 barInd 캐시에서 전체 복원/제거
-function rebuildMktBand() {
-  if (!mktBandOn) {
-    for (const s of [mktCenterSeries, mktU1, mktL1, mktU2, mktL2]) s.setData([]);
-    return;
-  }
-  const cData = [], u1 = [], l1 = [], u2 = [], l2 = [];
-  let prev = NaN;
-  for (const t of barSeq) {
-    const ind = barInd.get(t);
-    const bar = bars.get(t);
-    if (!ind || !ind.mktValid || !bar) continue;
-    const [center, u1v, l1v, u2v, l2v] = ind.mkt;
-    cData.push({ time: t, value: center,
-                 stage: MiraeLayers.mktStage(prev, center, bar.close, ind.regFlat, u1v, tickRaw) });
-    prev = center;
-    u1.push({ time: t, value: u1v });
-    l1.push({ time: t, value: l1v });
-    u2.push({ time: t, value: u2v });
-    l2.push({ time: t, value: l2v });
-  }
-  lastMktCenter = prev;
-  mktCenterSeries.setData(cData);
-  mktU1.setData(u1);
-  mktL1.setData(l1);
-  mktU2.setData(u2);
-  mktL2.setData(l2);
 }
 
 // ④ 세션 가드 (원본 v16:224-226): 10봉 전 봉이 다른 세션이면 결과 띠 무효(회색)
@@ -165,17 +70,111 @@ function recentBars(pos, n) {
   return out;
 }
 
+// 렌더러에 건네는 공유 컨텍스트. 참조는 고정하고 내용만 갱신한다
+// (렌더러가 마지막 ctx를 보관해 레이어 토글 시 재구축에 쓴다).
+const feedCtx = {
+  bars, barInd, barSeq, barPos,
+  tickRaw: () => tickRaw,
+  sameSession,
+  recentBars,
+};
+
+// ---- 패널 매니저 ----
+// Pane: { id, el, chart, candleSeries, active: Map<indId, { renderer, handle }> }
+
+const MiraeRenderer = MiraeLayers.MiraeRenderer;
+// SMA 렌더러는 Task 3에서 구현한다. 등록부 형태만 맞춘 자리표시자.
+const SmaRenderer = {
+  id: "sma",
+  createHandle() {
+    return { setLayers() {}, applyLive() {}, applySeed() {}, clear() {} };
+  },
+};
+const RENDERERS = { mirae_v16: MiraeRenderer, sma: SmaRenderer };
+
+// 레이어 표시 상태 (헤더 토글) — 새로 활성화되는 렌더러에도 같은 상태를 적용한다
+const layerState = { band: true, mktband: false }; // ④ 기본 켜짐, ⑧ 기본 숨김
+
+const panesEl = document.getElementById("panes");
+const panes = [];
+let nextPaneId = 1;
+
+function chartOptions() {
+  return {
+    layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
+    grid: { vertLines: { color: "#1e2530" }, horzLines: { color: "#1e2530" } },
+    localization: {
+      locale: "ko-KR",
+      priceFormatter: (p) => fmtPrice(p),
+      timeFormatter: (t) => {
+        const p = kstParts(t);
+        return `${p.y}-${pad2(p.mo)}-${pad2(p.d)} ${pad2(p.hh)}:${pad2(p.mm)}:${pad2(p.ss)}`;
+      },
+    },
+    timeScale: {
+      timeVisible: true, secondsVisible: true,
+      tickMarkFormatter: (t, tickMarkType) => {
+        const p = kstParts(t);
+        if (tickMarkType <= 1) return `${p.y}-${pad2(p.mo)}`;
+        if (tickMarkType === 2) return `${pad2(p.mo)}-${pad2(p.d)}`;
+        if (tickMarkType === 3) return `${pad2(p.hh)}:${pad2(p.mm)}`;
+        return `${pad2(p.hh)}:${pad2(p.mm)}:${pad2(p.ss)}`;
+      },
+    },
+  };
+}
+
+// 칸 높이는 #panes 대비 % (heightFrac 0..1). 드래그 조절은 Task 3에서.
+function createPane(heightFrac = 1) {
+  const div = document.createElement("div");
+  div.className = "pane";
+  div.style.height = `${heightFrac * 100}%`;
+  panesEl.append(div);
+  const chart = LightweightCharts.createChart(div, chartOptions());
+  const candleSeries = chart.addCandlestickSeries({
+    upColor: "#ef5350", downColor: "#2962ff",
+    borderUpColor: "#ef5350", borderDownColor: "#2962ff",
+    wickUpColor: "#ef5350", wickDownColor: "#2962ff",
+  });
+  const pane = { id: nextPaneId++, el: div, chart, candleSeries, active: new Map() };
+  panes.push(pane);
+  return pane;
+}
+
+function removePane(pane) {
+  const i = panes.indexOf(pane);
+  if (i < 0) return;
+  panes.splice(i, 1);
+  pane.active.clear();
+  pane.chart.remove();
+  pane.el.remove();
+}
+
+// 지표 렌더러를 칸에 활성화하고 현재 캐시로 백필한다
+function activateIndicator(pane, indId) {
+  if (pane.active.has(indId)) return;
+  const renderer = RENDERERS[indId];
+  if (!renderer) return;
+  const handle = renderer.createHandle(pane.chart, pane.candleSeries);
+  pane.active.set(indId, { renderer, handle });
+  handle.setLayers(layerState);
+  handle.applySeed(feedCtx);
+}
+
+function anyMiraeActive() {
+  return panes.some((pane) => pane.active.has("mirae_v16"));
+}
+
 function resetIndicators() {
   bars.clear();
   barInd.clear();
   barSeq.length = 0;
   barPos.clear();
-  lastMktCenter = NaN;
   tickRaw = 5;
-  candleSeries.setData([]);
-  for (const s of [regLineSeries, scoreSeries, bandSeries, memSeries, pstSeries,
-                   mktCenterSeries, mktU1, mktL1, mktU2, mktL2]) s.setData([]);
-  futureRays.clear();
+  for (const pane of panes) {
+    pane.candleSeries.setData([]);
+    for (const { handle } of pane.active.values()) handle.clear();
+  }
 }
 
 const el = {
@@ -219,107 +218,39 @@ function applyStatus(msg) {
   const [o, h, l, c] = p.ohlc ?? [];
   if (o != null) {
     noteBar(t, { time: t, open: o, high: h, low: l, close: c });
-    candleSeries.update(bars.get(t));
+    for (const pane of panes) pane.candleSeries.update(bars.get(t));
   }
-  const pos = barPos.get(t);
   const ind = MiraeLayers.barIndFromPayload(p);
+  ind.score = Number.isFinite(p.score) ? p.score : NaN;
+  ind.pred = Array.isArray(p.pred) ? p.pred : undefined;
+  ind.resid = p.resid ?? 0;
+  ind.pvol = p.pvol ?? 0;
   barInd.set(t, ind);
   if (typeof p.tick === "number" && Number.isFinite(p.tick) && p.tick > 0) tickRaw = p.tick;
 
-  // ② 회귀선 (reg_flat) + ⑤ 매매 상태 덧선. reg_valid==0이면 갭
+  // 지표 표시는 각 칸의 활성 렌더러가 담당한다
+  for (const pane of panes) {
+    for (const { handle } of pane.active.values()) handle.applyLive(p, feedCtx);
+  }
+
+  // 헤더 배지는 미래곡선이 한 칸이라도 켜져 있을 때만 갱신한다
+  if (!anyMiraeActive()) return;
+  const preds = p.pred ?? [];
   if (ind.regValid && Number.isFinite(ind.regFlat)) {
-    regLineSeries.update({
-      time: t, value: ind.regFlat,
-      score: Number.isFinite(p.score) ? p.score : 0, r2: ind.r2,
-      finalState: ind.finalValid ? ind.finalState : 0,
-    });
     el.reg.textContent = `회귀선 ${fmtPrice(p.reg_line)} (R² ${ind.r2.toFixed(2)})`;
     el.reg.className = "badge ok";
+    if (preds.length === 3 && preds.every(Number.isFinite)) {
+      el.pred.textContent = `예측 ${preds.map((v) => fmtPrice(v)).join(" / ")}`;
+    }
   } else {
-    regLineSeries.update({ time: t });
     el.reg.textContent = "회귀: 워밍업";
     el.reg.className = "badge";
   }
-
-  // ③ 미래 목표 광선: 매 봉 값이 바뀌면 광선이 새 값으로 이동한다 (이력 없음)
-  const preds = p.pred ?? [];
-  if (ind.regValid && preds.length === 3 && preds.every(Number.isFinite)) {
-    futureRays.set({
-      time: t, prevTime: pos > 0 ? barSeq[pos - 1] : t - 60,
-      pred: preds, predDir: ind.predDir, r2: ind.r2,
-      resid: p.resid ?? 0, pvol: p.pvol ?? 0,
-    });
-    el.pred.textContent = `예측 ${preds.map((v) => fmtPrice(v)).join(" / ")}`;
-  } else {
-    futureRays.clear();
-  }
-
-  // ① 통합 점수 막대
   if (typeof p.score === "number") {
     el.score.textContent = String(p.score);
     el.score.style.color = scoreTextColor(p.score);
-    scoreSeries.update({ time: t, value: p.score });
   }
-
-  // ④ 과거 채점 결과 띠: reg_flat − tick×4, 색은 10봉 전 예측방향2·신뢰도 기준
-  if (bandOn && Number.isFinite(ind.regFlat)) {
-    const src = pos !== undefined && pos >= 10 ? barInd.get(barSeq[pos - 10]) : undefined;
-    bandSeries.update({ time: t, value: ind.regFlat - MiraeLayers.bandOffset(tickRaw),
-                        c: MiraeLayers.bandColor(src, sameSession(src, ind)) });
-  }
-
-  // ⑧ 마켓 밴드: [valid, center, u1, l1, u2, l2] — 기본 숨김(헤더 토글로 표시)
-  if (Array.isArray(p.mkt) && p.mkt[0] === 1) {
-    const [, center, u1, l1, u2, l2] = p.mkt;
-    if (mktBandOn) {
-      mktCenterSeries.update({ time: t, value: center, stage: MiraeLayers.mktStage(lastMktCenter, center, c, ind.regFlat, u1, tickRaw) });
-      mktU1.update({ time: t, value: u1 });
-      mktL1.update({ time: t, value: l1 });
-      mktU2.update({ time: t, value: u2 });
-      mktL2.update({ time: t, value: l2 });
-    }
-    lastMktCenter = center;
-  } else if (mktBandOn) {
-    mktCenterSeries.update({ time: t });
-    mktU1.update({ time: t });
-    mktL1.update({ time: t });
-    mktU2.update({ time: t });
-    mktL2.update({ time: t });
-  }
-
-  // ⑥ 방향 기억: [valid, updated, dir, price, t1..3, u1..3, l1..3]
-  // 세트 값은 확정 봉 사이 유지된다. 범위선은 갱신 봉에 숨기고, 이후엔 5봉 이탈 규칙을 적용한다.
-  if (Array.isArray(p.mem)) {
-    if (p.mem[0] === 1) {
-      const updated = p.mem[1] === 1;
-      const flags = updated ? { showU: false, showL: false }
-        : MiraeLayers.rangeFlags(recentBars(pos, 5), p.mem[6]);
-      memSeries.update({
-        time: t, value: p.mem[5], dir: p.mem[2], price: p.mem[3],
-        t: p.mem.slice(4, 7), u: p.mem.slice(7, 10), l: p.mem.slice(10, 13),
-        showU: flags.showU, showL: flags.showL, upd: updated,
-      });
-    } else {
-      memSeries.update({ time: t });
-    }
-  }
-
-  // ⑦ 지속 사진: [saved, valid, dir, t1..3, u1..3, l1..3] — 저장 세트가 다음 저장까지 유지
-  if (Array.isArray(p.pst)) {
-    if (p.pst[1] === 1) {
-      const flags = MiraeLayers.rangeFlags(recentBars(pos, 5), p.pst[5]);
-      pstSeries.update({
-        time: t, value: p.pst[4], dir: p.pst[2],
-        t: p.pst.slice(3, 6), u: p.pst.slice(6, 9), l: p.pst.slice(9, 12),
-        showU: flags.showU, showL: flags.showL,
-      });
-    } else {
-      pstSeries.update({ time: t });
-    }
-  }
-
   updateFinalBadge(ind.finalValid, ind.finalState);
-
   if (p.ob_valid === 1 && typeof p.ob_score === "number") {
     el.ob.textContent = `호가 ${p.ob_score.toFixed(1)}`;
     el.ob.className = p.ob_score > 0 ? "badge ok" : "badge err";
@@ -411,39 +342,39 @@ async function seedChart() {
     const dedup = all.filter((b, i) => i === 0 || b.time !== all[i - 1].time);
     resetIndicators();
     for (const b of dedup) noteBar(b.time, b);
-    candleSeries.setData(dedup);
+    for (const pane of panes) pane.candleSeries.setData(dedup);
 
-    // 봉별 지표 복원: 스냅샷의 ind 배열로 과거 구간의 보조지표를 다시 그린다
-    const regData = [];
-    const scoreData = [];
-    for (let i = 0; i < dedup.length; i++) {
-      const b = dedup[i];
+    // 봉별 지표 캐시 복원: 스냅샷의 ind 배열로 공유 캐시를 채운다
+    for (const b of dedup) {
       const d = MiraeLayers.parseInd(b.ind);
       if (!d) continue;
       if (Number.isFinite(d.tick) && d.tick > 0) tickRaw = d.tick;
-      barInd.set(b.time, MiraeLayers.barIndFromInd(d));
-      if (Number.isFinite(d.score)) {
-        scoreData.push({ time: b.time, value: d.score });
-      }
-      if (d.regValid && Number.isFinite(d.regFlat)) {
-        regData.push({ time: b.time, value: d.regFlat,
-                       score: Number.isFinite(d.score) ? d.score : 0, r2: d.r2,
-                       finalState: d.finalValid ? d.finalState : 0 });
-      }
+      const ind = MiraeLayers.barIndFromInd(d);
+      ind.score = d.score;
+      ind.pred = d.pred;
+      ind.resid = d.resid;
+      ind.pvol = d.pvol;
+      barInd.set(b.time, ind);
     }
-    regLineSeries.setData(regData);
-    scoreSeries.setData(scoreData);
-    rebuildBand();    // ④ 결과 띠 (기본 켜짐; 꺼져 있으면 제거)
-    rebuildMktBand(); // ⑧ 마켓 밴드 (기본 숨김; 켜져 있으면 barInd 캐시에서 복원)
+    // ⑥⑦ 이벤트 → 봉별 아이템으로 변환해 캐시에 심는다 (렌더러가 applySeed에서 복원)
+    for (const item of buildMemItems(dedup, memEvents)) {
+      const ind = barInd.get(item.time);
+      if (ind) ind.memItem = item;
+    }
+    for (const item of buildPstItems(dedup, pstEvents)) {
+      const ind = barInd.get(item.time);
+      if (ind) ind.pstItem = item;
+    }
 
-    // ⑥⑦ 이벤트 복원: 세트가 다음 갱신/저장까지 유지되는 수평 계단선
-    memSeries.setData(buildMemItems(dedup, memEvents));
-    pstSeries.setData(buildPstItems(dedup, pstEvents));
+    // 각 칸의 활성 렌더러가 캐시에서 전체를 다시 그린다
+    for (const pane of panes) {
+      for (const { handle } of pane.active.values()) handle.applySeed(feedCtx);
+    }
 
-    // 마지막 봉의 값으로 배지·미래 목표 광선을 복원한다
+    // 마지막 봉의 값으로 배지를 복원한다
     const lastBar = dedup[dedup.length - 1];
     const last = lastBar ? MiraeLayers.parseInd(lastBar.ind) : null;
-    if (last) {
+    if (last && anyMiraeActive()) {
       el.score.textContent = String(last.score);
       el.score.style.color = scoreTextColor(last.score);
       updateFinalBadge(last.finalValid, last.finalState);
@@ -452,12 +383,6 @@ async function seedChart() {
         el.reg.className = "badge ok";
         if (last.pred.every(Number.isFinite)) {
           el.pred.textContent = `예측 ${last.pred.map((v) => fmtPrice(v)).join(" / ")}`;
-          futureRays.set({
-            time: lastBar.time,
-            prevTime: dedup.length > 1 ? dedup[dedup.length - 2].time : lastBar.time - 60,
-            pred: last.pred, predDir: last.predDir, r2: last.r2,
-            resid: last.resid, pvol: last.pvol,
-          });
         }
       }
       if (last.obValid) {
@@ -561,20 +486,28 @@ async function loadWorkspace() {
   alert(`화면틀 '${name}' 적용 (generation ${generation})`);
 }
 
+// 레이어 토글은 setLayers 계약을 통해 모든 칸의 미래곡선 렌더러에 전파한다
+function broadcastLayers(map) {
+  for (const pane of panes) {
+    const entry = pane.active.get("mirae_v16");
+    if (entry) entry.handle.setLayers(map);
+  }
+}
+
 // ⑧ 마켓 밴드 토글 (기본 숨김 — 원본 입력 마켓밴드표시=0에 해당)
 const mktbandBtn = document.getElementById("mktband-toggle");
 mktbandBtn.onclick = () => {
-  mktBandOn = !mktBandOn;
-  mktbandBtn.classList.toggle("on", mktBandOn);
-  rebuildMktBand();
+  layerState.mktband = !layerState.mktband;
+  mktbandBtn.classList.toggle("on", layerState.mktband);
+  broadcastLayers({ mktband: layerState.mktband });
 };
 
 // ④ 결과 띠 토글 (기본 켜짐 — 원본 입력 과거예측표시=1에 해당)
 const bandBtn = document.getElementById("band-toggle");
 bandBtn.onclick = () => {
-  bandOn = !bandOn;
-  bandBtn.classList.toggle("on", bandOn);
-  rebuildBand();
+  layerState.band = !layerState.band;
+  bandBtn.classList.toggle("on", layerState.band);
+  broadcastLayers({ band: layerState.band });
 };
 
 document.getElementById("ws-save").onclick = saveWorkspace;
@@ -673,6 +606,10 @@ document.addEventListener("click", (ev) => {
   if (!symbolResults.hidden && !ev.target.closest(".sym-picker")) hideSymbolResults();
 });
 document.getElementById("symbol-apply").onclick = switchSymbol;
+
+// 기본 구성: 미래곡선이 켜진 1칸 (지표 선택 UI는 Task 3)
+const mainPane = createPane(1);
+activateIndicator(mainPane, "mirae_v16");
 
 seedChart();
 connect();

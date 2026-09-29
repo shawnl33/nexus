@@ -373,12 +373,268 @@ const MiraeLayers = (() => {
     };
   }
 
+  // ---- MiraeRenderer: 패널 단위 렌더러 계약 (패널 매니저 app.js가 소비) ----
+  // createHandle(chart, candleSeries) → handle. handle은 한 차트에 붙는
+  // 시리즈/프리미티브 묶음과 레이어 표시 상태를 소유한다.
+  //   handle.setLayers(map)   — layer id("band"|"mktband") → bool. 즉시 다시 그린다
+  //   handle.applyLive(p, ctx) — status 페이로드 1건 반영 (②③④⑤⑥⑦⑧)
+  //   handle.applySeed(ctx)    — 시딩 완료 후 ctx 캐시에서 전체 복원
+  //   handle.clear()           — 모든 레이어 제거
+  // 공유 ctx (app.js 제공): { bars, barInd, barSeq, barPos, tickRaw(), sameSession, recentBars }.
+  // barInd 엔트리는 barIndFromInd/barIndFromPayload에 더해 app.js가 심는
+  // score/pred/resid/pvol(③① 복원용)과 memItem/pstItem(⑥⑦ 봉별 아이템)을 쓴다.
+  const MiraeRenderer = {
+    id: "mirae_v16",
+    createHandle(chart, candleSeries) {
+      // ② 회귀선 + ⑤ 매매 상태 덧선: 한 커스텀 시리즈가 2패스로 그린다
+      const regLineSeries = chart.addCustomSeries(createRegLinePaneView(), {});
+      // ① 통합 점수 막대: 아래 보조 칸의 0 기준 세로 색 막대
+      const scoreSeries = chart.addCustomSeries(createScoreBarPaneView(), { priceScaleId: "score" });
+      chart.priceScale("score").applyOptions({ scaleMargins: { top: 0.84, bottom: 0.02 } });
+      // ④ 과거 채점 결과 띠: 회귀선 바로 아래 가로선
+      const bandSeries = chart.addCustomSeries(createResultBandPaneView(), {});
+      // ⑥⑦ 방향 기억·지속 사진: 수평 계단선. 오래된 선은 현재 가격과 멀 수 있어 자동 스케일에서 제외
+      const memSeries = chart.addCustomSeries(createStepLinesPaneView("mem"), { autoscaleInfoProvider: () => null });
+      const pstSeries = chart.addCustomSeries(createStepLinesPaneView("pst"), { autoscaleInfoProvider: () => null });
+      // ⑧ 마켓 밴드: 중심선(단계색)은 커스텀, 밴드 4선은 고정색 라인 (원본 Plot52~55)
+      const mktCenterSeries = chart.addCustomSeries(createMarketCenterPaneView(), {});
+      const mktU1 = chart.addLineSeries({ color: "rgb(255,120,120)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+      const mktL1 = chart.addLineSeries({ color: "rgb(120,150,255)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+      const mktU2 = chart.addLineSeries({ color: "rgb(255,0,0)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+      const mktL2 = chart.addLineSeries({ color: "rgb(0,0,255)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+      // ③ 미래 목표 광선: 마지막 봉 기준 수평 광선 9개 (목표 3 + 범위 6)
+      const futureRays = createFutureRaysPrimitive();
+      candleSeries.attachPrimitive(futureRays);
+
+      let ctx = null;        // 마지막 applyLive/applySeed의 ctx — setLayers 재구축에 사용
+      let lastMktCenter = NaN; // ⑧ 마켓중심기울기 = 중심 − 이전중심
+      const layers = { band: true, mktband: false }; // ④ 기본 켜짐, ⑧ 기본 숨김 (원본 입력 기본값)
+
+      // ④ 결과 띠 다시 그리기 — 토글·시딩 시 barInd 캐시에서 전체 복원/제거
+      function rebuildBand() {
+        if (!layers.band) {
+          bandSeries.setData([]);
+          return;
+        }
+        if (!ctx) return;
+        const data = [];
+        const tick = ctx.tickRaw();
+        for (let i = 0; i < ctx.barSeq.length; i++) {
+          const ind = ctx.barInd.get(ctx.barSeq[i]);
+          if (!ind || !Number.isFinite(ind.regFlat)) continue;
+          const src = i >= 10 ? ctx.barInd.get(ctx.barSeq[i - 10]) : undefined;
+          data.push({ time: ctx.barSeq[i], value: ind.regFlat - bandOffset(tick),
+                      c: bandColor(src, ctx.sameSession(src, ind)) });
+        }
+        bandSeries.setData(data);
+      }
+
+      // ⑧ 마켓 밴드 다시 그리기 — 토글·시딩 시 barInd 캐시에서 전체 복원/제거
+      function rebuildMktBand() {
+        if (!layers.mktband) {
+          for (const s of [mktCenterSeries, mktU1, mktL1, mktU2, mktL2]) s.setData([]);
+          return;
+        }
+        if (!ctx) return;
+        const cData = [], u1 = [], l1 = [], u2 = [], l2 = [];
+        let prev = NaN;
+        for (const t of ctx.barSeq) {
+          const ind = ctx.barInd.get(t);
+          const bar = ctx.bars.get(t);
+          if (!ind || !ind.mktValid || !bar) continue;
+          const [center, u1v, l1v, u2v, l2v] = ind.mkt;
+          cData.push({ time: t, value: center,
+                       stage: mktStage(prev, center, bar.close, ind.regFlat, u1v, ctx.tickRaw()) });
+          prev = center;
+          u1.push({ time: t, value: u1v });
+          l1.push({ time: t, value: l1v });
+          u2.push({ time: t, value: u2v });
+          l2.push({ time: t, value: l2v });
+        }
+        lastMktCenter = prev;
+        mktCenterSeries.setData(cData);
+        mktU1.setData(u1);
+        mktL1.setData(l1);
+        mktU2.setData(u2);
+        mktL2.setData(l2);
+      }
+
+      return {
+        setLayers(map) {
+          if ("band" in map) {
+            layers.band = !!map.band;
+            rebuildBand();
+          }
+          if ("mktband" in map) {
+            layers.mktband = !!map.mktband;
+            rebuildMktBand();
+          }
+        },
+
+        // 라이브 status 1건 — app.js가 barInd/barPos를 먼저 채운 뒤 부른다
+        applyLive(p, c) {
+          ctx = c;
+          const t = Number(p.bar_open_time) / 1e6;
+          if (!Number.isFinite(t) || t <= 0) return;
+          const ind = c.barInd.get(t);
+          if (!ind) return;
+          const pos = c.barPos.get(t);
+          const tick = c.tickRaw();
+
+          // ② 회귀선 (reg_flat) + ⑤ 매매 상태 덧선. reg_valid==0이면 갭
+          if (ind.regValid && Number.isFinite(ind.regFlat)) {
+            regLineSeries.update({
+              time: t, value: ind.regFlat,
+              score: Number.isFinite(p.score) ? p.score : 0, r2: ind.r2,
+              finalState: ind.finalValid ? ind.finalState : 0,
+            });
+          } else {
+            regLineSeries.update({ time: t });
+          }
+
+          // ③ 미래 목표 광선: 매 봉 값이 바뀌면 광선이 새 값으로 이동한다 (이력 없음)
+          const preds = p.pred ?? [];
+          if (ind.regValid && preds.length === 3 && preds.every(Number.isFinite)) {
+            futureRays.set({
+              time: t, prevTime: pos > 0 ? c.barSeq[pos - 1] : t - 60,
+              pred: preds, predDir: ind.predDir, r2: ind.r2,
+              resid: p.resid ?? 0, pvol: p.pvol ?? 0,
+            });
+          } else {
+            futureRays.clear();
+          }
+
+          // ① 통합 점수 막대
+          if (typeof p.score === "number") {
+            scoreSeries.update({ time: t, value: p.score });
+          }
+
+          // ④ 과거 채점 결과 띠: reg_flat − tick×4, 색은 10봉 전 예측방향2·신뢰도 기준
+          if (layers.band && Number.isFinite(ind.regFlat)) {
+            const src = pos !== undefined && pos >= 10 ? c.barInd.get(c.barSeq[pos - 10]) : undefined;
+            bandSeries.update({ time: t, value: ind.regFlat - bandOffset(tick),
+                                c: bandColor(src, c.sameSession(src, ind)) });
+          }
+
+          // ⑧ 마켓 밴드: [valid, center, u1, l1, u2, l2] — 레이어가 켜져 있을 때만 표시
+          if (Array.isArray(p.mkt) && p.mkt[0] === 1) {
+            const [, center, u1, l1, u2, l2] = p.mkt;
+            if (layers.mktband) {
+              const close = Array.isArray(p.ohlc) ? p.ohlc[3] : undefined;
+              mktCenterSeries.update({ time: t, value: center, stage: mktStage(lastMktCenter, center, close, ind.regFlat, u1, tick) });
+              mktU1.update({ time: t, value: u1 });
+              mktL1.update({ time: t, value: l1 });
+              mktU2.update({ time: t, value: u2 });
+              mktL2.update({ time: t, value: l2 });
+            }
+            lastMktCenter = center;
+          } else if (layers.mktband) {
+            mktCenterSeries.update({ time: t });
+            mktU1.update({ time: t });
+            mktL1.update({ time: t });
+            mktU2.update({ time: t });
+            mktL2.update({ time: t });
+          }
+
+          // ⑥ 방향 기억: [valid, updated, dir, price, t1..3, u1..3, l1..3]
+          // 세트 값은 확정 봉 사이 유지된다. 범위선은 갱신 봉에 숨기고, 이후엔 5봉 이탈 규칙을 적용한다.
+          if (Array.isArray(p.mem)) {
+            if (p.mem[0] === 1) {
+              const updated = p.mem[1] === 1;
+              const flags = updated ? { showU: false, showL: false }
+                : rangeFlags(c.recentBars(pos, 5), p.mem[6]);
+              const item = {
+                time: t, value: p.mem[5], dir: p.mem[2], price: p.mem[3],
+                t: p.mem.slice(4, 7), u: p.mem.slice(7, 10), l: p.mem.slice(10, 13),
+                showU: flags.showU, showL: flags.showL, upd: updated,
+              };
+              ind.memItem = item; // applySeed가 봉별 아이템을 그대로 복원할 수 있게 캐시에 심는다
+              memSeries.update(item);
+            } else {
+              ind.memItem = null;
+              memSeries.update({ time: t });
+            }
+          }
+
+          // ⑦ 지속 사진: [saved, valid, dir, t1..3, u1..3, l1..3] — 저장 세트가 다음 저장까지 유지
+          if (Array.isArray(p.pst)) {
+            if (p.pst[1] === 1) {
+              const flags = rangeFlags(c.recentBars(pos, 5), p.pst[5]);
+              const item = {
+                time: t, value: p.pst[4], dir: p.pst[2],
+                t: p.pst.slice(3, 6), u: p.pst.slice(6, 9), l: p.pst.slice(9, 12),
+                showU: flags.showU, showL: flags.showL,
+              };
+              ind.pstItem = item;
+              pstSeries.update(item);
+            } else {
+              ind.pstItem = null;
+              pstSeries.update({ time: t });
+            }
+          }
+        },
+
+        // 시딩 완료 후 전체 복원 — ctx 캐시(barInd/barSeq)만으로 다시 그린다
+        applySeed(c) {
+          ctx = c;
+          const regData = [];
+          const scoreData = [];
+          const memData = [];
+          const pstData = [];
+          for (const t of c.barSeq) {
+            const ind = c.barInd.get(t);
+            if (!ind) continue;
+            if (Number.isFinite(ind.score)) {
+              scoreData.push({ time: t, value: ind.score });
+            }
+            if (ind.regValid && Number.isFinite(ind.regFlat)) {
+              regData.push({ time: t, value: ind.regFlat,
+                             score: Number.isFinite(ind.score) ? ind.score : 0, r2: ind.r2,
+                             finalState: ind.finalValid ? ind.finalState : 0 });
+            }
+            if (ind.memItem) memData.push(ind.memItem);
+            if (ind.pstItem) pstData.push(ind.pstItem);
+          }
+          regLineSeries.setData(regData);
+          scoreSeries.setData(scoreData);
+          memSeries.setData(memData);
+          pstSeries.setData(pstData);
+          rebuildBand();    // ④ 결과 띠 (레이어가 꺼져 있으면 제거)
+          rebuildMktBand(); // ⑧ 마켓 밴드 (레이어가 켜져 있으면 barInd 캐시에서 복원)
+
+          // ③ 미래 목표 광선: 마지막 봉의 값으로 복원한다
+          const lastT = c.barSeq[c.barSeq.length - 1];
+          const last = lastT === undefined ? undefined : c.barInd.get(lastT);
+          if (last && last.regValid && Array.isArray(last.pred)
+              && last.pred.length === 3 && last.pred.every(Number.isFinite)) {
+            futureRays.set({
+              time: lastT,
+              prevTime: c.barSeq.length > 1 ? c.barSeq[c.barSeq.length - 2] : lastT - 60,
+              pred: last.pred, predDir: last.predDir, r2: last.r2,
+              resid: last.resid, pvol: last.pvol,
+            });
+          } else {
+            futureRays.clear();
+          }
+        },
+
+        clear() {
+          for (const s of [regLineSeries, scoreSeries, bandSeries, memSeries, pstSeries,
+                           mktCenterSeries, mktU1, mktL1, mktU2, mktL2]) s.setData([]);
+          futureRays.clear();
+          lastMktCenter = NaN;
+        },
+      };
+    },
+  };
+
   return {
     SPANS, MIN_R2, HIGH_R2, bandOffset,
     scoreColor, regWidth, tradeStyle, bandColor, rangeFlags, mktStage, mktStageColor,
     parseInd, barIndFromInd, barIndFromPayload,
     createRegLinePaneView, createScoreBarPaneView, createResultBandPaneView,
     createStepLinesPaneView, createMarketCenterPaneView, createFutureRaysPrimitive,
+    MiraeRenderer,
   };
 })();
 
