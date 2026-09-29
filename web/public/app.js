@@ -82,7 +82,7 @@ const feedCtx = {
 };
 
 // ---- 패널 매니저 ----
-// Pane: { id, el, toolsEl, chart, candleSeries, heightFrac,
+// Pane: { id, el, toolsEl, chart, candleSeries, heightFrac, syncHandle,
 //         active: Map<indId, { renderer, handle, layers: {layerId: bool} }> }
 
 const RENDERERS = { mirae_v16: MiraeLayers.MiraeRenderer, sma: SmaLayers.SmaRenderer };
@@ -94,6 +94,10 @@ const panesEl = document.getElementById("panes");
 const panes = [];
 let nextPaneId = 1;
 const MIN_PANE_FRAC = 0.1; // 드래그로 줄일 수 있는 칸 최소 높이 비율
+
+// 칸 간 시간축·크로스헤어 동기화 (pane-sync.js). 칸이 1개면 아무 일도 하지 않는다.
+// 크로스헤어 가로선 값은 그 시각 봉의 종가를 써서 칸마다 자기 데이터에 맞게 찍힌다.
+const paneSync = PaneSync.create((t) => bars.get(t)?.close);
 
 function chartOptions() {
   return {
@@ -142,7 +146,7 @@ function createPane(heightFrac = 1) {
     wickUpColor: "#ef5350", wickDownColor: "#2962ff",
   });
   const pane = { id: nextPaneId++, el: div, toolsEl: tools, chart, candleSeries,
-                 heightFrac, active: new Map() };
+                 heightFrac, active: new Map(), syncHandle: paneSync.add(chart, candleSeries) };
   panes.push(pane);
   // 공유 캐시가 이미 있으면 새 칸에 그대로 백필한다 (화면틀 적용·칸 추가 시 재시딩 불필요)
   if (barSeq.length) candleSeries.setData(barSeq.map((t) => bars.get(t)).filter(Boolean));
@@ -155,6 +159,7 @@ function removePane(pane) {
   if (i < 0) return;
   panes.splice(i, 1);
   pane.active.clear();
+  paneSync.remove(pane.syncHandle); // 차트 제거 전에 동기화 구독부터 뗀다 (리스너 누수 방지)
   pane.chart.remove();
   pane.el.remove();
   // 남은 칸이 빠진 높이를 비율대로 나눠 갖는다
