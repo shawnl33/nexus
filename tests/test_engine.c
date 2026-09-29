@@ -135,7 +135,7 @@ static void test_orderbook_path(void) {
 
     /* 매수 우세 호가(선물 부호 규칙): bids >> asks → 양수 점수가 ob_score에 반영된다 */
     for (int i = 0; i < 6; i++) {
-        tr_engine_on_orderbook(&e, kst(9, 0, (unsigned)(10 + i)), 800000.0, 200000.0);
+        tr_engine_on_orderbook(&e, 1, kst(9, 0, (unsigned)(10 + i)), 800000.0, 200000.0);
     }
     feed(&e, 0, 30, 101, 2);
     TR_CHECK(any_payload_contains(&cap, "\"ob_valid\":1"));
@@ -154,12 +154,13 @@ static void test_select_symbol_generation(void) {
     TR_CHECK(e.lr3.reg_valid); /* 워밍업 완료 상태 */
 
     /* 종목 전환: 상태가 리셋되고 generation이 오른다 */
-    TR_CHECK(tr_engine_select_symbol(&e, 999, false));
+    TR_CHECK(tr_engine_select_symbol(&e, 999, false, "099999"));
     TR_CHECK(e.generation == 2);
     TR_CHECK(e.cfg.instrument_id == 999);
+    TR_CHECK(strcmp(e.shcode, "099999") == 0); /* 전환 종목 코드가 파이프라인에 실린다 */
     TR_CHECK(!e.lr3.reg_valid); /* 지표는 새 종목 기준으로 다시 워밍업 */
     TR_CHECK(e.status_cb == capture_cb); /* 출력 연결은 보존 */
-    TR_CHECK(tr_engine_select_symbol(&e, 1000, true));
+    TR_CHECK(tr_engine_select_symbol(&e, 1000, true, "1000F0"));
     TR_CHECK(e.generation == 3);
 
     /* 전환 후에도 상태 발행이 계속된다 */
@@ -384,14 +385,14 @@ static void test_pipe_slot_reuse(void) {
     init_engine(&e, &cap);
     static tr_candle_t bb_a[BB_CAP], bb_b[BB_CAP], bb_c[BB_CAP], bb_d[BB_CAP];
     static double mid_a[32], mid_b[32], mid_c[32], mid_d[32];
-    tr_pipeline_t *pa = tr_engine_pipe_add(&e, 100, true, bb_a, BB_CAP, mid_a, 32);
-    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 200, true, bb_b, BB_CAP, mid_b, 32);
-    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 300, true, bb_c, BB_CAP, mid_c, 32);
+    tr_pipeline_t *pa = tr_engine_pipe_add(&e, 100, true, "0100A0", bb_a, BB_CAP, mid_a, 32);
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 200, true, "0200B0", bb_b, BB_CAP, mid_b, 32);
+    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 300, true, "0300C0", bb_c, BB_CAP, mid_c, 32);
     TR_CHECK(pa != 0 && pb != 0 && pc != 0);
     TR_CHECK(e.pipe_count == 4);
     /* 저장소 인자 검증: NULL·용량 부족은 거부 */
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, 0, BB_CAP, mid_b, 32) == 0);
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, bb_b, BB_CAP, mid_b, 4) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", 0, BB_CAP, mid_b, 32) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", bb_b, BB_CAP, mid_b, 4) == 0);
     TR_CHECK(e.pipe_count == 4);
 
     /* C에 먼저 상태를 쌓아 둔다 (OPEN 봉 1개) */
@@ -402,7 +403,7 @@ static void test_pipe_slot_reuse(void) {
     TR_CHECK(tr_engine_pipe_remove(&e, 200));
     TR_CHECK(e.pipe_count == 3);
     TR_CHECK(tr_engine_pipe_find(&e, 200) == 0);
-    tr_pipeline_t *pd = tr_engine_pipe_add(&e, 400, true, bb_d, BB_CAP, mid_d, 32);
+    tr_pipeline_t *pd = tr_engine_pipe_add(&e, 400, true, "0400D0", bb_d, BB_CAP, mid_d, 32);
     TR_CHECK(pd != 0);
     TR_CHECK(e.pipe_count == 4);
     /* D는 독립 저장소: 어느 활성 파이프라인과도 주소가 다르다 (on_timer 이중 호출 방지) */
@@ -430,6 +431,136 @@ static void test_pipe_slot_reuse(void) {
     TR_CHECK(tr_ring_count(&pd->bb.bars) == 1);
 }
 
+/* 다중 파이프라인 독립성 (다중 종목 Task 2): 서로 다른 종목의 틱이 instrument_id로
+ * 라우팅되어 각자 독립 회귀/점수를 쌓고, 발행 페이로드 맨 끝에 파이프라인의 shcode가 실린다 */
+typedef struct {
+    char payloads[128][2048];
+    int n;
+} multi_capture_t;
+
+static void multi_capture_cb(void *ctx, const char *stream_id, uint64_t seq, const char *payload) {
+    multi_capture_t *c = (multi_capture_t *)ctx;
+    TR_CHECK(c->n < 128);
+    snprintf(c->payloads[c->n], sizeof(c->payloads[0]), "%s", payload);
+    c->n++;
+    (void)stream_id;
+    (void)seq;
+}
+
+static const char *multi_find(const multi_capture_t *c, const char *a, const char *b) {
+    for (int i = 0; i < c->n; i++) {
+        if (strstr(c->payloads[i], a) != 0 && (b == 0 || strstr(c->payloads[i], b) != 0)) {
+            return c->payloads[i];
+        }
+    }
+    return 0;
+}
+
+static void test_two_pipes_independent(void) {
+    tr_engine_t e;
+    multi_capture_t cap;
+    memset(&cap, 0, sizeof(cap));
+
+    tr_engine_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.engine_instance_id = 1;
+    cfg.instrument_id = 1;
+    snprintf(cfg.shcode, sizeof(cfg.shcode), "%s", "AAA001");
+    cfg.session = (tr_session_policy_t){KST, 540, 930, TR_SESSION_WEEKDAYS};
+    cfg.timeframe_sec = 60;
+    cfg.no_trade = TR_NO_TRADE_SKIP;
+    cfg.predict_bars[0] = 5;
+    cfg.predict_bars[1] = 10;
+    cfg.predict_bars[2] = 15;
+    cfg.htf_ticks = 10;
+    cfg.min_r2 = 0.40;
+    cfg.market_period = 20;
+    cfg.is_futures = true;
+    TR_CHECK(tr_engine_init(&e, &cfg, g_bb_storage, BB_CAP, g_score_mid, 32));
+    tr_engine_attach_status_cb(&e, multi_capture_cb, &cap);
+
+    static tr_candle_t bb_b[BB_CAP];
+    static double mid_b[32];
+    static tr_bar_status_t ring_b[BB_CAP];
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", bb_b, BB_CAP, mid_b, 32);
+    TR_CHECK(pb != 0);
+    TR_CHECK(strcmp(pb->shcode, "BBB002") == 0);
+    TR_CHECK(tr_engine_pipe_attach_status_ring(&e, 100, ring_b, BB_CAP));
+    TR_CHECK(!tr_engine_pipe_attach_status_ring(&e, 999, ring_b, BB_CAP)); /* 없는 종목 */
+    TR_CHECK(tr_engine_pipe_attach_market(&e, 100, bb_b, 64));
+    TR_CHECK(!tr_engine_pipe_attach_market(&e, 999, bb_b, 64));
+
+    /* 파이프 A(id=1): 8봉 완전 직선 상승 → 회귀 유효 */
+    uint64_t id = 1;
+    for (int i = 1; i <= 8; i++) {
+        int mid = 98 + 2 * i;
+        feed_pipe(&e, 1, (unsigned)i, 0, mid - 2, id++);
+        feed_pipe(&e, 1, (unsigned)i, 30, mid + 2, id++);
+    }
+    /* 파이프 B(id=100): 2봉만 → 회귀 무효 유지 (A의 워밍업과 무관) */
+    feed_pipe(&e, 100, 1, 0, 500, id++);
+    feed_pipe(&e, 100, 1, 30, 502, id++);
+    feed_pipe(&e, 100, 2, 0, 498, id++);
+
+    /* 지표 상태가 서로 섞이지 않는다 */
+    TR_CHECK(tr_engine_pipe_find(&e, 1)->lr3.reg_valid);
+    TR_CHECK(!pb->lr3.reg_valid);
+    TR_CHECK(tr_ring_count(&e.pipe0.bb.bars) == 8);
+    TR_CHECK(tr_ring_count(&pb->bb.bars) == 2);
+
+    /* 페이로드에 발행 파이프라인의 shcode가 실린다 */
+    TR_CHECK(multi_find(&cap, "\"shcode\":\"AAA001\"", "\"reg_valid\":1") != 0);
+    TR_CHECK(multi_find(&cap, "\"shcode\":\"BBB002\"", "\"reg_valid\":0") != 0);
+    TR_CHECK(multi_find(&cap, "\"shcode\":\"BBB002\"", "\"reg_valid\":1") == 0);
+
+    /* 미관측 instrument의 틱은 드롭된다 */
+    {
+        tr_event_envelope_t env;
+        memset(&env, 0, sizeof(env));
+        env.kind = TR_EVENT_TICK;
+        env.event_time_us = kst(9, 3, 0);
+        env.received_time_us = env.event_time_us;
+        tr_tick_t tk;
+        memset(&tk, 0, sizeof(tk));
+        tk.instrument_id = 999;
+        tk.price = 100;
+        tk.qty = 1;
+        tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+        TR_CHECK(tr_engine_on_tick(&e, &env, &tk) == TR_BB_ERROR);
+    }
+
+    /* 호가도 instrument별로 독립 누적된다 */
+    for (int i = 0; i < 3; i++) {
+        tr_engine_on_orderbook(&e, 100, kst(9, 2, (unsigned)(10 + i)), 300000.0, 100000.0);
+    }
+    tr_engine_on_orderbook(&e, 999, kst(9, 2, 20), 1.0, 1.0); /* 드롭 */
+    TR_CHECK(pb->obd2.validity == TR_VALIDITY_VALID);
+    TR_CHECK(e.pipe0.obd2.validity != TR_VALIDITY_VALID);
+
+    /* 파이프라인별 상태 링: B만 부착했으므로 B만 기록된다 */
+    TR_CHECK(tr_engine_pipe_status_count(&e, 100) == 2);
+    TR_CHECK(tr_engine_status_count(&e) == 0); /* pipe0 미부착 */
+    tr_bar_status_t stb;
+    TR_CHECK(tr_engine_pipe_status_at(&e, 100, 0, &stb));
+    TR_CHECK(!tr_engine_pipe_status_at(&e, 999, 0, &stb));
+
+    /* pipes[0] 제거: 마지막 파이프라인(B)의 내용이 고정 주소 pipe0으로 이식된다 */
+    TR_CHECK(tr_engine_pipe_remove(&e, 1));
+    TR_CHECK(e.pipe_count == 1);
+    TR_CHECK(e.pipes[0] == &e.pipe0);
+    TR_CHECK(e.pipe0.instrument_id == 100);
+    TR_CHECK(strcmp(e.pipe0.shcode, "BBB002") == 0);
+    TR_CHECK(e.cfg.instrument_id == 100); /* 공유 cfg도 생존 종목 기준으로 맞춘다 */
+    TR_CHECK(tr_engine_pipe_find(&e, 100) == &e.pipe0);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 2); /* 익명 뷰가 이식된 B 상태를 가리킨다 */
+    TR_CHECK(tr_engine_pipe_status_count(&e, 100) == 2); /* 상태 링도 그대로 */
+    feed_pipe(&e, 100, 3, 0, 504, id++); /* 이식 후에도 라우팅·봉 콜백(ctx)이 정상 */
+    TR_CHECK(tr_ring_count(&e.pipe0.bb.bars) == 3);
+
+    /* 마지막 1개는 제거할 수 없다 */
+    TR_CHECK(!tr_engine_pipe_remove(&e, 100));
+}
+
 int main(void) {
     test_replay_pipeline();
     test_session_first_reset();
@@ -439,5 +570,6 @@ int main(void) {
     test_daily_chain();
     test_sma_payload();
     test_pipe_slot_reuse();
+    test_two_pipes_independent();
     TR_TEST_SUMMARY();
 }

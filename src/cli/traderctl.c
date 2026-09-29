@@ -60,6 +60,8 @@ static const cmd_spec_t *find_command(int argc, char **argv, int *consumed, cons
         /* 두 단어 명령을 먼저 매칭한다 (단어 1개 접두사 명령보다 우선) */
         {"engine", "stop", "engine.stop", 0, 0},
         {"market", "select", "market.select", "{\"shcode\":\"%s\"}", 1},
+        {"market", "watch", "market.watch", "{\"shcode\":\"%s\"}", 1},
+        {"market", "unwatch", "market.unwatch", "{\"shcode\":\"%s\"}", 1},
         {"strategy", "list", "strategy.list", 0, 0},
         {"strategy", "start", "strategy.start", "{\"strategy_id\":\"%s\"}", 1},
         {"strategy", "stop", "strategy.stop", "{\"strategy_id\":\"%s\"}", 1},

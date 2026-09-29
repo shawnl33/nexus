@@ -14,6 +14,21 @@ static double tick_scale(const tr_pipeline_t *p) {
     return p->is_futures ? 5.0 : 100.0;
 }
 
+/* shcode를 JSON 안전 문자(영숫자)만 남겨 복사한다. 페이로드에 그대로 실리므로
+ * 따옴표·역슬래시 같은 문자는 걸러낸다 (LS 종목코드는 영숫자). */
+static void sanitize_shcode(char dst[16], const char *src) {
+    size_t n = 0;
+    if (src != 0) {
+        for (const char *s = src; *s != '\0' && n < 15; s++) {
+            char c = *s;
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+                dst[n++] = c;
+            }
+        }
+    }
+    dst[n] = '\0';
+}
+
 /* 파이프라인 1개를 cfg 기준으로 초기화한다. 지표 상태는 모두 리셋되고 generation은 1.
  * 저장소(봉 링·점수 중간값)는 호출자 소유다. */
 static bool pipe_init(tr_engine_t *e, tr_pipeline_t *p, const tr_engine_config_t *cfg,
@@ -26,6 +41,7 @@ static bool pipe_init(tr_engine_t *e, tr_pipeline_t *p, const tr_engine_config_t
     memset(&p->bb, 0, sizeof(p->bb));
     p->engine = e;
     p->instrument_id = cfg->instrument_id;
+    sanitize_shcode(p->shcode, cfg->shcode);
     p->is_futures = cfg->is_futures;
     p->bb_storage = bb_storage;
     p->bb_capacity = bb_capacity;
@@ -143,6 +159,7 @@ static tr_pipeline_t *pipe_free_slot(tr_engine_t *e) {
 }
 
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
+                                  const char *shcode,
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity) {
     if (e == 0 || instrument_id == 0) {
@@ -157,6 +174,7 @@ tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool i
     }
     tr_engine_config_t cfg = e->cfg;
     cfg.instrument_id = instrument_id;
+    sanitize_shcode(cfg.shcode, shcode);
     cfg.is_futures = is_futures;
     tr_pipeline_t *p = pipe_free_slot(e);
     if (p == 0) {
@@ -172,7 +190,22 @@ tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool i
 
 bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
     if (e == 0 || e->pipe_count <= 1) {
-        return false; /* 마지막 1개(파이프라인 0)는 제거하지 않는다 */
+        return false; /* 마지막 1개는 제거하지 않는다 */
+    }
+    /* 대상이 pipes[0]이면: pipe0은 익명 뷰(e->bb 등)의 기반이라 주소가 고정되어 있어
+     * 목록에서 빼는 대신, 마지막 파이프라인의 내용을 pipe0에 통째로 이식하고 그 슬롯을
+     * 비운다. 지표 상태·저장소 포인터·shcode가 모두 따라오므로 생존 파이프라인은
+     * 끊기지 않는다. 이 경우 pipes[] 순서는 보존되지 않는다. */
+    if (e->pipes[0]->instrument_id == instrument_id) {
+        tr_pipeline_t *victim = e->pipes[e->pipe_count - 1];
+        e->pipe0 = *victim;
+        e->pipe0.engine = e;
+        e->pipe0.bb.cfg.on_event_ctx = &e->pipe0;
+        e->cfg.instrument_id = e->pipe0.instrument_id;
+        e->cfg.is_futures = e->pipe0.is_futures;
+        snprintf(e->cfg.shcode, sizeof(e->cfg.shcode), "%s", e->pipe0.shcode);
+        e->pipe_count--;
+        return true;
     }
     for (int i = 1; i < e->pipe_count; i++) {
         if (e->pipes[i]->instrument_id == instrument_id) {
@@ -207,11 +240,15 @@ void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ct
     e->status_cb_ctx = ctx;
 }
 
-bool tr_engine_attach_status_ring(tr_engine_t *e, tr_bar_status_t *storage, size_t capacity) {
-    if (e == 0 || storage == 0 || capacity == 0) {
+bool tr_engine_pipe_attach_status_ring(tr_engine_t *e, uint64_t instrument_id,
+                                       tr_bar_status_t *storage, size_t capacity) {
+    if (storage == 0 || capacity == 0) {
         return false;
     }
-    tr_pipeline_t *p = e->pipes[0];
+    tr_pipeline_t *p = tr_engine_pipe_find(e, instrument_id);
+    if (p == 0) {
+        return false;
+    }
     if (!tr_ring_init(&p->status_ring, storage, sizeof(tr_bar_status_t), capacity)) {
         return false;
     }
@@ -219,8 +256,42 @@ bool tr_engine_attach_status_ring(tr_engine_t *e, tr_bar_status_t *storage, size
     return true;
 }
 
+bool tr_engine_attach_status_ring(tr_engine_t *e, tr_bar_status_t *storage, size_t capacity) {
+    if (e == 0) {
+        return false;
+    }
+    return tr_engine_pipe_attach_status_ring(e, e->pipes[0]->instrument_id, storage, capacity);
+}
+
+size_t tr_engine_pipe_status_count(const tr_engine_t *e, uint64_t instrument_id) {
+    if (e == 0) {
+        return 0;
+    }
+    for (int i = 0; i < e->pipe_count; i++) {
+        if (e->pipes[i]->instrument_id == instrument_id) {
+            return e->pipes[i]->status_ring_on ? tr_ring_count(&e->pipes[i]->status_ring) : 0;
+        }
+    }
+    return 0;
+}
+
 size_t tr_engine_status_count(const tr_engine_t *e) {
     return (e != 0 && e->pipe0.status_ring_on) ? tr_ring_count(&e->pipe0.status_ring) : 0;
+}
+
+bool tr_engine_pipe_status_at(const tr_engine_t *e, uint64_t instrument_id,
+                              size_t back_index, tr_bar_status_t *out) {
+    if (e == 0 || out == 0) {
+        return false;
+    }
+    for (int i = 0; i < e->pipe_count; i++) {
+        if (e->pipes[i]->instrument_id == instrument_id) {
+            return e->pipes[i]->status_ring_on
+                       ? tr_ring_at(&e->pipes[i]->status_ring, back_index, out)
+                       : false;
+        }
+    }
+    return false;
 }
 
 bool tr_engine_status_at(const tr_engine_t *e, size_t back_index, tr_bar_status_t *out) {
@@ -230,17 +301,28 @@ bool tr_engine_status_at(const tr_engine_t *e, size_t back_index, tr_bar_status_
     return tr_ring_at(&e->pipe0.status_ring, back_index, out);
 }
 
-bool tr_engine_attach_market(tr_engine_t *e, tr_candle_t *storage, size_t capacity) {
+bool tr_engine_pipe_attach_market(tr_engine_t *e, uint64_t instrument_id,
+                                  tr_candle_t *storage, size_t capacity) {
     if (e == 0 || storage == 0 || capacity == 0) {
         return false;
     }
-    tr_pipeline_t *p = e->pipes[0];
+    tr_pipeline_t *p = tr_engine_pipe_find(e, instrument_id);
+    if (p == 0) {
+        return false;
+    }
     double ps = tick_scale(p);
     if (!tr_market_init(&p->mkt, e->cfg.market_period, 1.0, ps, storage, capacity)) {
         return false;
     }
     p->mkt_on = true;
     return true;
+}
+
+bool tr_engine_attach_market(tr_engine_t *e, tr_candle_t *storage, size_t capacity) {
+    if (e == 0) {
+        return false;
+    }
+    return tr_engine_pipe_attach_market(e, e->pipes[0]->instrument_id, storage, capacity);
 }
 
 static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *bar,
@@ -268,7 +350,7 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
         "\"mem\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"pst\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g,\"tick\":%g,\"day\":%lld,"
-        "\"sma\":[%d,%.10g,%.10g,%.10g]}",
+        "\"sma\":[%d,%.10g,%.10g,%.10g],\"shcode\":\"%s\"}",
         (long long)bar->open_time_us, closed ? 1 : 0,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
@@ -289,7 +371,7 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
         ps->lower[0], ps->lower[1], ps->lower[2],
         fa->final_valid ? 1 : 0, fa->final_dir, fa->final_state, (int)fa->final_strength,
         reg_flat, tick_scale(p), (long long)trading_day,
-        sma_ok, p->sma5.value, p->sma20.value, p->sma60.value);
+        sma_ok, p->sma5.value, p->sma20.value, p->sma60.value, p->shcode);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -604,11 +686,15 @@ bool tr_engine_inject_bar(tr_engine_t *e, const tr_candle_t *bar) {
     return tr_bar_builder_inject_bar(&p->bb, bar != 0 ? bar->close_time_us : 0, bar);
 }
 
-void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, double asks) {
+void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
+                            int64_t event_time_us, double bids, double asks) {
     if (e == 0) {
         return;
     }
-    tr_pipeline_t *p = e->pipes[0];
+    tr_pipeline_t *p = tr_engine_pipe_find(e, instrument_id);
+    if (p == 0) {
+        return; /* 라우팅할 파이프라인이 없다 (구독 해지 채널의 지연 메시지 등) */
+    }
     int64_t day = -1;
     if (!tr_session_trading_day(&e->cfg.session, event_time_us, &day)) {
         day = p->has_prev_day ? p->prev_trading_day : -1;
@@ -616,7 +702,8 @@ void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, 
     tr_obd2_eval(&p->obd2, bids, asks, day);
 }
 
-bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures) {
+bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
+                             const char *shcode) {
     /* 델타 기록: 파이프라인 분리 전에는 이 함수가 tr_engine_init을 경유해 status_seq가
      * 1로 재시작했다. 이제 파이프라인 0만 재초기화하므로 스트림 시퀀스는 계속 증가한다
      * — 구독자 입장에서 seq 역행이 없어 이 동작을 유지한다. */
@@ -632,6 +719,7 @@ bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_fut
     void *cb_ctx = e->status_cb_ctx;
     tr_engine_config_t cfg = e->cfg;
     cfg.instrument_id = instrument_id;
+    sanitize_shcode(cfg.shcode, shcode);
     cfg.is_futures = is_futures;
     /* 파이프라인 0의 지표 상태를 새 종목 기준으로 재구성한다. 링 저장소는 그대로 재사용한다 */
     if (!pipe_init(e, p0, &cfg, p0->bb_storage, p0->bb_capacity,

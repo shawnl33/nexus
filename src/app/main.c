@@ -79,16 +79,24 @@ static void on_signal(int sig) {
 static const tr_session_policy_t SESS_STOCK = {540, 480, 1200, TR_SESSION_WEEKDAYS};
 static const tr_session_policy_t SESS_FUT = {540, 525, 300, TR_SESSION_WEEKDAYS};
 
-/* live 모드 명령 컨텍스트 */
+/* live 모드 명령 컨텍스트: 관측(watch) 목록. 파이프라인 포인터는 remove 시 dangling이
+ * 되므로 장기 보관하지 않는다 — shcode/instrument_id만 보관하고 매번 pipe_find로 조회한다.
+ * 저장소 풀 슬롯은 엔진 파이프라인의 bb_storage 포인터로 역추적한다 (별도 장부 없음). */
+typedef struct {
+    char shcode[16];
+    char tick_cd[4]; /* 실제 구독 중인 채널 (해지 시 그대로 사용) */
+    char ob_cd[4];
+    bool is_fut;
+    uint64_t instrument_id;
+} watch_entry_t;
+
 typedef struct {
     tr_ls_rt_t *rt;
     tr_engine_t *engine;
     tr_ls_master_t *master;
     ls_auth_t *auth;
-    char shcode[16];
-    char tick_cd[4]; /* 실제 구독 중인 채널 (해지 시 그대로 사용) */
-    char ob_cd[4];
-    bool is_fut;
+    watch_entry_t watches[TR_ENGINE_MAX_PIPES]; /* [0]은 선택 종목(파이프라인 0) */
+    int watch_count;
 } live_ctx_t;
 
 static tr_candle_t g_hist[2208]; /* 2일치(선물 2,130) + 페이지 경계 여유 */
@@ -107,7 +115,8 @@ static ls_daily_bar_t g_daily[32]; /* ⑤ 체인 프라임용 일봉 (t8410/t846
  * (봉 낶부 틱 경로는 알 수 없지만 OHLC·거래량은 실측값이다.
  * 호가 지표는 과거 호가가 없어 라이브부터 워밍업된다)
  * 성공 시 주입한 봉 수, 실패 시 -1. */
-static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, const char *shcode, bool is_fut) {
+static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t *pipe,
+                                const char *shcode, bool is_fut) {
     size_t target = is_fut ? BACKFILL_FUT_BARS : BACKFILL_STOCK_BARS;
     /* 1) 주간 페이지 수집: 최신→과거 순으로 오므로 배열 끝에서부터 앞으로 채워 오름차순을 만든다 */
     size_t hi = HIST_CAP;
@@ -119,7 +128,7 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, const char *s
         /* 연속 조회: 이전 페이지 cts 값을 edate/etime으로 옮겨 다음(더 과거) 페이지를 얻는다 */
         int rc = ls_chart_fetch_minute(auth, is_fut ? LS_CHART_FUT_MIN : LS_CHART_STOCK_MIN,
                                        shcode, 1, BACKFILL_PAGE_BARS, cont_date, cont_time, " ", " ",
-                                       eng->cfg.instrument_id, 2, g_page,
+                                       pipe->instrument_id, 2, g_page,
                                        sizeof(g_page) / sizeof(g_page[0]), &page, cerr, sizeof(cerr));
         if (rc == LS_CHART_EMPTY) {
             break;
@@ -167,8 +176,8 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, const char *s
                 nd++;
             }
             if (nd > 0) {
-                tr_dtl1_prime(&eng->dtl1, mids, nd);
-                tr_gap1_prime(&eng->gap1, trs, nd);
+                tr_dtl1_prime(&pipe->dtl1, mids, nd);
+                tr_gap1_prime(&pipe->gap1, trs, nd);
             }
         } else {
             fprintf(stderr, "daily backfill unavailable rc=%d: %s (chain warmup skipped)\n",
@@ -193,7 +202,7 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, const char *s
         }
         char nerr[128] = {0};
         int nrc = ls_chart_fetch_fut_night(auth, shcode, 999, tdays, ntd,
-                                           eng->cfg.instrument_id, 2,
+                                           pipe->instrument_id, 2,
                                            g_night, NIGHT_CAP, &nnight, nerr, sizeof(nerr));
         if (nrc != LS_HTTP_OK) {
             fprintf(stderr, "night backfill unavailable rc=%d: %s (day session only)\n", nrc, nerr);
@@ -268,6 +277,45 @@ static bool resolve_is_fut(tr_ls_master_t *master, const char *shcode, const cha
     return strlen(shcode) > 6; /* 폐기 예정: 마스터에 없는 코드의 추정 */
 }
 
+/* 워치 목록 조회 (shcode 기준). 없으면 -1 */
+static int watch_find(const live_ctx_t *lc, const char *shcode) {
+    for (int i = 0; i < lc->watch_count; i++) {
+        if (strcmp(lc->watches[i].shcode, shcode) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* 어느 활성 파이프라인도 쓰지 않는 저장소 풀 슬롯을 찾는다 (엔진이 유일한 진실 원천).
+ * 없으면 -1. 파이프라인 0 이식( pipe_remove ) 후에도 실사용 기준이라 안전하다. */
+static int watch_pool_alloc(const live_ctx_t *lc) {
+    for (int j = 0; j < TR_ENGINE_MAX_PIPES; j++) {
+        bool used = false;
+        for (int i = 0; i < lc->engine->pipe_count; i++) {
+            if (lc->engine->pipes[i]->bb_storage == g_bb_pool[j]) {
+                used = true;
+                break;
+            }
+        }
+        if (!used) {
+            return j;
+        }
+    }
+    return -1;
+}
+
+/* 파이프라인이 쓰는 풀 슬롯 번호 (부착 저장소를 같은 슬롯으로 맞추기 위한 역추적) */
+static int watch_pool_of(const tr_pipeline_t *p) {
+    for (int j = 0; j < TR_ENGINE_MAX_PIPES; j++) {
+        if (p->bb_storage == g_bb_pool[j]) {
+            return j;
+        }
+    }
+    return 0;
+}
+#define MKT_POOL_CAP (sizeof(g_mkt_pool[0]) / sizeof(g_mkt_pool[0][0]))
+
 static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     (void)ctx;
     static char payload[512];
@@ -285,7 +333,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
         yyjson_val *sh = doc != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0;
         sh = sh != 0 ? yyjson_obj_get(sh, "shcode") : 0;
-        if (!yyjson_is_str(sh) || strlen(yyjson_get_str(sh)) >= sizeof(g_live_ctx.shcode)) {
+        if (!yyjson_is_str(sh) || strlen(yyjson_get_str(sh)) >= sizeof(g_live_ctx.watches[0].shcode)) {
             if (doc != 0) {
                 yyjson_doc_free(doc);
             }
@@ -295,34 +343,170 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             return;
         }
         const char *new_code = yyjson_get_str(sh);
-        const char *new_name = 0;
-        bool new_fut = resolve_is_fut(g_live_ctx.master, new_code, &new_name);
         live_ctx_t *lc = &g_live_ctx;
 
-        /* 이전 구독 해지 → 새 구독 (전략 거래 대상과 무관한 화면 상태 변경) */
-        tr_ls_rt_unsubscribe(lc->rt, lc->tick_cd, lc->shcode);
-        tr_ls_rt_unsubscribe(lc->rt, lc->ob_cd, lc->shcode);
+        /* 전체 대체: 기존 워치를 모두 해지하고 파이프라인 0 하나만 남긴다
+         * (전략 거래 대상과 무관한 화면 상태 변경) */
+        for (int i = 0; i < lc->watch_count; i++) {
+            tr_ls_rt_unsubscribe(lc->rt, lc->watches[i].tick_cd, lc->watches[i].shcode);
+            tr_ls_rt_unsubscribe(lc->rt, lc->watches[i].ob_cd, lc->watches[i].shcode);
+        }
+        while (lc->engine->pipe_count > 1) {
+            tr_engine_pipe_remove(lc->engine, lc->engine->pipes[1]->instrument_id);
+        }
 
         uint64_t new_id = instrument_id_of(new_code);
+        const char *new_name = 0;
+        bool new_fut = resolve_is_fut(lc->master, new_code, &new_name);
         const char *new_tick, *new_ob;
         rt_channels_for(new_fut, &new_tick, &new_ob);
         tr_ls_rt_subscribe(lc->rt, new_tick, new_code, new_id);
         tr_ls_rt_subscribe(lc->rt, new_ob, new_code, new_id);
 
-        tr_engine_select_symbol(lc->engine, new_id, new_fut);
-        /* 재초기화로 링이 끊기므로 다시 부착한다 (백필 주입 전에) */
-        tr_engine_attach_status_ring(lc->engine, g_status_storage, BB_CAP);
-        tr_engine_attach_market(lc->engine, g_mkt_storage, sizeof(g_mkt_storage) / sizeof(g_mkt_storage[0]));
-        snprintf(lc->shcode, sizeof(lc->shcode), "%s", new_code);
-        snprintf(lc->tick_cd, sizeof(lc->tick_cd), "%s", new_tick);
-        snprintf(lc->ob_cd, sizeof(lc->ob_cd), "%s", new_ob);
-        lc->is_fut = new_fut;
+        tr_engine_select_symbol(lc->engine, new_id, new_fut, new_code);
+        /* 재초기화로 링이 끊기므로 다시 부착한다 (백필 주입 전에). 파이프라인 0이 쓰는
+         * 풀 슬롯과 같은 슬롯의 상태/마켓 저장소를 부착한다 (pipe0 이식 후에도 정합) */
+        int slot = watch_pool_of(lc->engine->pipes[0]);
+        tr_engine_attach_status_ring(lc->engine, g_status_pool[slot], BB_CAP);
+        tr_engine_attach_market(lc->engine, g_mkt_pool[slot], MKT_POOL_CAP);
+        lc->watch_count = 0;
+        watch_entry_t *w = &lc->watches[lc->watch_count++];
+        snprintf(w->shcode, sizeof(w->shcode), "%s", new_code);
+        snprintf(w->tick_cd, sizeof(w->tick_cd), "%s", new_tick);
+        snprintf(w->ob_cd, sizeof(w->ob_cd), "%s", new_ob);
+        w->is_fut = new_fut;
+        w->instrument_id = new_id;
 
         /* 새 종목도 기동 시와 같은 경로로 백필한다 (없으면 빈 차트로 시작한다) */
-        int nb = backfill_minute_bars(lc->auth, lc->engine, new_code, new_fut);
+        int nb = backfill_minute_bars(lc->auth, lc->engine, lc->engine->pipes[0], new_code, new_fut);
 
         snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":%d}",
-                 new_code, new_name != 0 ? new_name : "", lc->engine->generation, nb > 0 ? nb : 0);
+                 new_code, new_name != 0 ? new_name : "", lc->engine->pipes[0]->generation,
+                 nb > 0 ? nb : 0);
+        cmd->status = "applied";
+        cmd->error_code = "none";
+        cmd->payload_json = payload;
+        yyjson_doc_free(doc);
+        return;
+    }
+
+    if (strstr(p, "\"type\":\"market.watch\"") != 0) {
+        /* 다중 관측: 파이프라인 생성(없으면)+실시간 구독+백필. 이미 있으면 현 상태 응답 */
+        yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
+        yyjson_val *sh = doc != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0;
+        sh = sh != 0 ? yyjson_obj_get(sh, "shcode") : 0;
+        if (!yyjson_is_str(sh) || yyjson_get_str(sh)[0] == '\0' ||
+            strlen(yyjson_get_str(sh)) >= sizeof(g_live_ctx.watches[0].shcode)) {
+            if (doc != 0) {
+                yyjson_doc_free(doc);
+            }
+            cmd->status = "rejected";
+            cmd->error_code = "invalid_symbol";
+            cmd->payload_json = 0;
+            return;
+        }
+        const char *code = yyjson_get_str(sh);
+        live_ctx_t *lc = &g_live_ctx;
+        uint64_t id = instrument_id_of(code);
+        tr_pipeline_t *pipe = tr_engine_pipe_find(lc->engine, id);
+        if (pipe != 0) {
+            const char *name = 0;
+            resolve_is_fut(lc->master, code, &name);
+            snprintf(payload, sizeof(payload),
+                     "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":0}",
+                     code, name != 0 ? name : "", pipe->generation);
+            cmd->status = "applied";
+            cmd->error_code = "none";
+            cmd->payload_json = payload;
+            yyjson_doc_free(doc);
+            return;
+        }
+        int slot = watch_pool_alloc(lc);
+        if (lc->engine->pipe_count >= TR_ENGINE_MAX_PIPES || slot < 0) {
+            cmd->status = "rejected";
+            cmd->error_code = "watch_limit";
+            cmd->payload_json = 0;
+            yyjson_doc_free(doc);
+            return;
+        }
+        const char *name = 0;
+        bool fut = resolve_is_fut(lc->master, code, &name);
+        pipe = tr_engine_pipe_add(lc->engine, id, fut, code,
+                                  g_bb_pool[slot], BB_CAP, g_score_mid_pool[slot], 64);
+        if (pipe == 0) {
+            cmd->status = "rejected";
+            cmd->error_code = "watch_limit";
+            cmd->payload_json = 0;
+            yyjson_doc_free(doc);
+            return;
+        }
+        tr_engine_pipe_attach_status_ring(lc->engine, id, g_status_pool[slot], BB_CAP);
+        tr_engine_pipe_attach_market(lc->engine, id, g_mkt_pool[slot], MKT_POOL_CAP);
+        const char *tick_cd, *ob_cd;
+        rt_channels_for(fut, &tick_cd, &ob_cd);
+        tr_ls_rt_subscribe(lc->rt, tick_cd, code, id);
+        tr_ls_rt_subscribe(lc->rt, ob_cd, code, id);
+        watch_entry_t *w = &lc->watches[lc->watch_count++];
+        snprintf(w->shcode, sizeof(w->shcode), "%s", code);
+        snprintf(w->tick_cd, sizeof(w->tick_cd), "%s", tick_cd);
+        snprintf(w->ob_cd, sizeof(w->ob_cd), "%s", ob_cd);
+        w->is_fut = fut;
+        w->instrument_id = id;
+
+        int nb = backfill_minute_bars(lc->auth, lc->engine, pipe, code, fut);
+
+        snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":%d}",
+                 code, name != 0 ? name : "", pipe->generation, nb > 0 ? nb : 0);
+        cmd->status = "applied";
+        cmd->error_code = "none";
+        cmd->payload_json = payload;
+        yyjson_doc_free(doc);
+        return;
+    }
+
+    if (strstr(p, "\"type\":\"market.unwatch\"") != 0) {
+        /* 관측 해지: 구독 해지+파이프라인 제거. 마지막 1개는 제거할 수 없다 */
+        yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
+        yyjson_val *sh = doc != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0;
+        sh = sh != 0 ? yyjson_obj_get(sh, "shcode") : 0;
+        if (!yyjson_is_str(sh) || yyjson_get_str(sh)[0] == '\0' ||
+            strlen(yyjson_get_str(sh)) >= sizeof(g_live_ctx.watches[0].shcode)) {
+            if (doc != 0) {
+                yyjson_doc_free(doc);
+            }
+            cmd->status = "rejected";
+            cmd->error_code = "invalid_symbol";
+            cmd->payload_json = 0;
+            return;
+        }
+        const char *code = yyjson_get_str(sh);
+        live_ctx_t *lc = &g_live_ctx;
+        int wi = watch_find(lc, code);
+        if (wi < 0) {
+            cmd->status = "rejected";
+            cmd->error_code = "not_watched";
+            cmd->payload_json = 0;
+            yyjson_doc_free(doc);
+            return;
+        }
+        if (lc->watch_count <= 1) {
+            cmd->status = "rejected";
+            cmd->error_code = "last_watch";
+            cmd->payload_json = 0;
+            yyjson_doc_free(doc);
+            return;
+        }
+        watch_entry_t w = lc->watches[wi]; /* compact 전에 값을 보관한다 */
+        tr_ls_rt_unsubscribe(lc->rt, w.tick_cd, w.shcode);
+        tr_ls_rt_unsubscribe(lc->rt, w.ob_cd, w.shcode);
+        /* pipes[0] 대상이면 엔진이 마지막 파이프라인을 pipe0에 이식한다 (engine.h 참조) */
+        tr_engine_pipe_remove(lc->engine, w.instrument_id);
+        for (int j = wi; j + 1 < lc->watch_count; j++) {
+            lc->watches[j] = lc->watches[j + 1];
+        }
+        lc->watch_count--;
+        snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"watches\":%d}",
+                 w.shcode, lc->watch_count);
         cmd->status = "applied";
         cmd->error_code = "none";
         cmd->payload_json = payload;
@@ -333,23 +517,40 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     if (strstr(p, "\"type\":\"chart.snapshot\"") != 0) {
         /* 늦게 접속한 대시보드의 과거 봉 시딩용. PUB/SUB는 과거 메시지를 보존하지 않으므로
          * 엔진의 봉 링에서 직접 돌려준다. data.back_index(최신 기준 건너뜀, 기본 0)로
-         * 페이지를 나누고, 이어지면 next_back_index != 0 을 돌려준다 (페이지당 300봉, 오름차순). */
+         * 페이지를 나누고, 이어지면 next_back_index != 0 을 돌려준다 (페이지당 150봉, 오름차순).
+         * data.shcode로 대상 파이프라인을 고른다 (없으면 첫 파이프라인 — 구 호환). */
         static char buf[60 * 1024];
         tr_engine_t *eng = g_live_ctx.engine;
         long back_index = 0;
+        char want[16] = {0};
         yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
         if (doc != 0) {
             yyjson_val *data = yyjson_obj_get(yyjson_doc_get_root(doc), "data");
             yyjson_val *bv = data != 0 ? yyjson_obj_get(data, "back_index") : 0;
+            yyjson_val *sv = data != 0 ? yyjson_obj_get(data, "shcode") : 0;
             if (yyjson_is_num(bv)) {
                 back_index = (long)yyjson_get_num(bv);
+            }
+            if (yyjson_is_str(sv)) {
+                snprintf(want, sizeof(want), "%s", yyjson_get_str(sv));
             }
             yyjson_doc_free(doc);
         }
         if (back_index < 0) {
             back_index = 0;
         }
-        size_t n = tr_ring_count(&eng->bb.bars);
+        tr_pipeline_t *pipe = eng->pipes[0];
+        if (want[0] != '\0') {
+            pipe = tr_engine_pipe_find(eng, instrument_id_of(want));
+            if (pipe == 0) {
+                cmd->status = "rejected";
+                cmd->error_code = "not_watched";
+                cmd->payload_json = 0;
+                return;
+            }
+        }
+        uint64_t pipe_id = pipe->instrument_id;
+        size_t n = tr_ring_count(&pipe->bb.bars);
         size_t from = (size_t)back_index;
         size_t remain = from < n ? n - from : 0;
         size_t take = remain < 150 ? remain : 150;
@@ -357,11 +558,11 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         int off = snprintf(buf, sizeof(buf),
                            "{\"shcode\":\"%s\",\"generation\":%u,\"timeframe_sec\":%u,\"total\":%zu,"
                            "\"next_back_index\":%zu,\"bars\":[",
-                           g_live_ctx.shcode, eng->generation, (unsigned)eng->cfg.timeframe_sec, n, next);
+                           pipe->shcode, pipe->generation, (unsigned)eng->cfg.timeframe_sec, n, next);
         bool first = true;
         for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 160;) {
             tr_candle_t c;
-            tr_ring_at(&eng->bb.bars, k, &c);
+            tr_ring_at(&pipe->bb.bars, k, &c);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%lld,%lld,%lld,%lld,%lld,%lld]",
                             first ? "" : ",", (long long)c.open_time_us,
                             (long long)c.open, (long long)c.high, (long long)c.low,
@@ -374,13 +575,13 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
          * 선물 0.05pt×100=5 raw, 주식 1원×100=100 raw).
          * [26]=틱 크기(raw, ④ 결과 띠 오프셋·⑧ 거리 기준에 사용), [27]=거래일(④ 세션 가드),
          * [28]=SMA 유효(5/20/60 모두 창 완성), [29..31]=SMA 5/20/60 (종가 기준) */
-        double ps_flat = eng->cfg.is_futures ? 5.0 : 100.0;
+        double ps_flat = pipe->is_futures ? 5.0 : 100.0;
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ind\":[");
         first = true;
         for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 448;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
-            tr_engine_status_at(eng, k, &st);
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off,
                             "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d,"
                             "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%d,%lld,%d,%.10g,%.10g,%.10g]",
@@ -404,7 +605,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 320;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
-            tr_engine_status_at(eng, k, &st);
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
             if (!st.mem_updated) {
                 continue;
             }
@@ -425,7 +626,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 260;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
-            tr_engine_status_at(eng, k, &st);
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
             if (!st.pst_saved) {
                 continue;
             }
@@ -506,8 +707,16 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         return;
     }
 
-    snprintf(payload, sizeof(payload), "{\"mode\":\"live\",\"running\":%d,\"shcode\":\"%s\"}",
-             (int)g_running, g_live_ctx.shcode);
+    {
+        int off = snprintf(payload, sizeof(payload), "{\"mode\":\"live\",\"running\":%d,\"shcode\":\"%s\",\"watches\":[",
+                           (int)g_running,
+                           g_live_ctx.engine != 0 ? g_live_ctx.engine->pipes[0]->shcode : "");
+        for (int i = 0; i < g_live_ctx.watch_count && off < (int)sizeof(payload) - 20; i++) {
+            off += snprintf(payload + off, sizeof(payload) - (size_t)off, "%s\"%s\"",
+                            i > 0 ? "," : "", g_live_ctx.watches[i].shcode);
+        }
+        snprintf(payload + off, sizeof(payload) - (size_t)off, "]}");
+    }
     cmd->status = "applied";
     cmd->error_code = "none";
     cmd->payload_json = payload;
@@ -556,6 +765,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     memset(&ecfg, 0, sizeof(ecfg));
     ecfg.engine_instance_id = engine_instance_id;
     ecfg.instrument_id = instrument_id_of(shcode);
+    snprintf(ecfg.shcode, sizeof(ecfg.shcode), "%s", shcode);
     ecfg.session = is_fut ? SESS_FUT : SESS_STOCK;
     ecfg.timeframe_sec = 60;
     ecfg.no_trade = TR_NO_TRADE_SKIP;
@@ -582,9 +792,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     tr_engine_attach_status_ring(&engine, g_status_storage, BB_CAP);
     tr_engine_attach_market(&engine, g_mkt_storage, sizeof(g_mkt_storage) / sizeof(g_mkt_storage[0]));
 
-    /* 4) 워밍업 백필 (market select 시에도 같은 경로로 다시 채운다) */
+    /* 4) 워밍업 백필 (market select/watch 시에도 같은 경로로 다시 채운다) */
     {
-        int nb = backfill_minute_bars(&auth, &engine, shcode, is_fut);
+        int nb = backfill_minute_bars(&auth, &engine, engine.pipes[0], shcode, is_fut);
         if (nb > 0) {
             printf("backfill: %d bars\n", nb);
         }
@@ -619,10 +829,13 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
 
     g_running = 1;
     g_stop = 0;
-    snprintf(g_live_ctx.shcode, sizeof(g_live_ctx.shcode), "%s", shcode);
-    snprintf(g_live_ctx.tick_cd, sizeof(g_live_ctx.tick_cd), "%s", tr_cd);
-    snprintf(g_live_ctx.ob_cd, sizeof(g_live_ctx.ob_cd), "%s", ob_tr_cd);
-    g_live_ctx.is_fut = is_fut;
+    /* 초기 종목 = 첫 워치 (파이프라인 0) */
+    g_live_ctx.watch_count = 1;
+    snprintf(g_live_ctx.watches[0].shcode, sizeof(g_live_ctx.watches[0].shcode), "%s", shcode);
+    snprintf(g_live_ctx.watches[0].tick_cd, sizeof(g_live_ctx.watches[0].tick_cd), "%s", tr_cd);
+    snprintf(g_live_ctx.watches[0].ob_cd, sizeof(g_live_ctx.watches[0].ob_cd), "%s", ob_tr_cd);
+    g_live_ctx.watches[0].is_fut = is_fut;
+    g_live_ctx.watches[0].instrument_id = ecfg.instrument_id;
     g_live_ctx.rt = rt;
     g_live_ctx.engine = &engine;
     g_live_ctx.master = master;
@@ -636,9 +849,8 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         tr_ls_rt_service(rt, 20);
         ls_rt_event_t ev;
         while (tr_ls_rt_next(rt, &ev)) {
-            if (ev.instrument_id != engine.cfg.instrument_id) {
-                continue;
-            }
+            /* instrument_id로 파이프라인을 찾아 라우팅한다. 미관측 id는 엔진이 드롭한다
+             * (구독 해지된 채널의 지연 메시지) */
             if (ev.kind == LS_RT_TICK) {
                 tr_event_envelope_t env;
                 memset(&env, 0, sizeof(env));
@@ -647,7 +859,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                 env.received_time_us = ev.recv_time_us;
                 tr_tick_t tk;
                 memset(&tk, 0, sizeof(tk));
-                tk.instrument_id = engine.cfg.instrument_id;
+                tk.instrument_id = ev.instrument_id;
                 tk.price = ev.price;
                 tk.qty = ev.qty;
                 tk.source_exec_id = 0; /* 실시간 채널은 안정적인 체결 ID 미확인 — 중복 제거 한계 기록 */
@@ -655,7 +867,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                 tr_engine_on_tick(&engine, &env, &tk);
                 tr_engine_on_timer(&engine, ev.event_time_us);
             } else if (ev.kind == LS_RT_ORDERBOOK) {
-                tr_engine_on_orderbook(&engine, ev.event_time_us,
+                tr_engine_on_orderbook(&engine, ev.instrument_id, ev.event_time_us,
                                        (double)ev.bid_total, (double)ev.ask_total);
             }
         }

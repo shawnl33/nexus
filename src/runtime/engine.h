@@ -31,6 +31,7 @@
 typedef struct {
     uint64_t engine_instance_id;
     uint64_t instrument_id;
+    char shcode[16];             /* 종목 코드 (상태 페이로드 식별용). 없으면 "" (리플레이) */
     tr_session_policy_t session;
     uint32_t timeframe_sec;      /* 기본 봉 주기(초) */
     tr_no_trade_policy_t no_trade;
@@ -97,6 +98,7 @@ typedef struct tr_engine tr_engine_t;
 typedef struct {
     tr_engine_t *engine;        /* 소유 엔진 (봉 이벤트 콜백에서 출력·공유 cfg 접근) */
     uint64_t instrument_id;
+    char shcode[16];            /* 종목 코드 (페이로드 "shcode" 키). JSON 안전 문자만 보관 */
     bool is_futures;            /* 호가 부호 규칙·틱 양자화에 사용 */
     tr_candle_t *bb_storage;
     size_t bb_capacity;
@@ -147,6 +149,7 @@ struct tr_engine {
         struct {
             tr_engine_t *engine;
             uint64_t instrument_id;
+            char shcode[16];
             bool is_futures;
             tr_candle_t *bb_storage;
             size_t bb_capacity;
@@ -185,6 +188,7 @@ struct tr_engine {
                    "tr_pipeline_t layout mismatch: " #m)
 TR_ENGINE_PIPE_LAYOUT_CHECK(engine);
 TR_ENGINE_PIPE_LAYOUT_CHECK(instrument_id);
+TR_ENGINE_PIPE_LAYOUT_CHECK(shcode);
 TR_ENGINE_PIPE_LAYOUT_CHECK(is_futures);
 TR_ENGINE_PIPE_LAYOUT_CHECK(bb_storage);
 TR_ENGINE_PIPE_LAYOUT_CHECK(bb_capacity);
@@ -222,11 +226,16 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
 /* 파이프라인 목록 (다중 관측 준비 — pipes[0]은 init이 만드는 선택 종목).
  * add는 이미 있으면 그 파이프라인을 돌려주고, 가득 차면(NULL) 실패한다.
  * 저장소(봉 링·점수 중간값)는 호출자 소유로 init과 같은 규칙·검증이다.
+ * shcode는 상태 페이로드 식별용으로 파이프라인에 보관된다 (NULL이면 "").
  * 파이프라인 객체는 내장 슬롯에 고정된다: add가 돌려준 포인터는 그 파이프라인이
- * remove되기 전까지 유효하며, remove는 pipes[] 순서를 보존한다(compact).
- * remove는 마지막 1개(파이프라인 0)는 제거하지 않고 false를 돌려준다. */
+ * remove되기 전까지 유효하며, 장기 보관은 instrument_id만 하고 매번 find로 조회한다.
+ * remove는 pipes[] 순서를 보존한다(compact). 단, 대상이 pipes[0]이면 마지막
+ * 파이프라인의 내용을 pipe0(고정 주소, 익명 뷰의 기반)에 통째로 이식하고 그 슬롯을
+ * 비운다 — 이 경우 순서는 보존되지 않고 다른 슬롯 포인터가 dangling이 된다.
+ * remove는 마지막 1개는 제거하지 않고 false를 돌려준다. */
 tr_pipeline_t *tr_engine_pipe_find(tr_engine_t *e, uint64_t instrument_id);
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
+                                  const char *shcode,
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity);
 bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id);
@@ -235,14 +244,23 @@ void tr_engine_attach_ipc(tr_engine_t *e, tr_ipc_t *ipc, const char *stream_id);
 void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ctx);
 
 /* 봉별 지표 기록 링 부착 (호출자 소유 저장소, 파이프라인 0 대상). 봉 링과 같은 용량을 권장한다.
- * 부착 시점부터 기록한다. 재부착하면 링이 초기화된다 (종목 전환 후 재사용). */
+ * 부착 시점부터 기록한다. 재부착하면 링이 초기화된다 (종목 전환 후 재사용).
+ * pipe_* 변형은 instrument_id로 대상 파이프라인을 골라 부착·조회한다 (없으면 false/0). */
 bool tr_engine_attach_status_ring(tr_engine_t *e, tr_bar_status_t *storage, size_t capacity);
+bool tr_engine_pipe_attach_status_ring(tr_engine_t *e, uint64_t instrument_id,
+                                       tr_bar_status_t *storage, size_t capacity);
 size_t tr_engine_status_count(const tr_engine_t *e);
 bool tr_engine_status_at(const tr_engine_t *e, size_t back_index, tr_bar_status_t *out);
+size_t tr_engine_pipe_status_count(const tr_engine_t *e, uint64_t instrument_id);
+bool tr_engine_pipe_status_at(const tr_engine_t *e, uint64_t instrument_id,
+                              size_t back_index, tr_bar_status_t *out);
 
 /* ⑧ 마켓 밴드 평가 부착 (호출자 소유 캔들 저장소, 마켓계산기간×2 권장).
- * 재부착 시 마켓 상태가 초기화된다 (종목 전환 후 재사용). */
+ * 재부착 시 마켓 상태가 초기화된다 (종목 전환 후 재사용).
+ * pipe_* 변형은 instrument_id로 대상 파이프라인을 골라 부착한다. */
 bool tr_engine_attach_market(tr_engine_t *e, tr_candle_t *storage, size_t capacity);
+bool tr_engine_pipe_attach_market(tr_engine_t *e, uint64_t instrument_id,
+                                  tr_candle_t *storage, size_t capacity);
 
 /* 틱/타이머 입력. replay 어댑터가 순서대로 호출한다.
  * 틱은 instrument_id로 파이프라인을 찾아 라우팅한다 (없으면 TR_BB_ERROR로 드롭).
@@ -253,11 +271,14 @@ void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us);
 /* 백필: 과거 확정 봉(실제 OHLC)을 직접 주입한다. tr_bar_builder_inject_bar 래퍼. */
 bool tr_engine_inject_bar(tr_engine_t *e, const tr_candle_t *bar);
 
-/* 호가 입력 (H1_/FH9). bids/asks는 총잔량(totbidrem/totofferrem). */
-void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, double asks);
+/* 호가 입력 (H1_/FH9). bids/asks는 총잔량(totbidrem/totofferrem).
+ * instrument_id로 파이프라인을 찾아 라우팅한다 (없으면 드롭). */
+void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
+                            int64_t event_time_us, double bids, double asks);
 
 /* 종목 전환: 지표 상태를 새 종목 기준으로 재구성하고 generation을 올린다 (계획서 §18).
    이전 세대의 늦은 응답과 새 화면이 섞이지 않게 한다. 전략의 거래 대상과는 무관하다(화면 상태 변경). */
-bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures);
+bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
+                             const char *shcode);
 
 #endif
