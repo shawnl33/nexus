@@ -3,6 +3,7 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import * as zmq from "zeromq";
 import WebSocket from "ws";
 
@@ -27,36 +28,51 @@ before(async () => {
   (async () => {
     for await (const [id, , body] of router) {
       const req = JSON.parse(body.toString());
-      const payload = req.payload?.type === "market.instruments"
-        ? {
-            total: 2,
-            returned: 1,
-            items: [{ shcode: "005930", name: "삼성전자", fut: 0 }],
-            echo_q: req.payload.data?.q ?? "",
-          }
-        : req.payload?.type === "chart.snapshot"
-          ? (() => {
-              const back = req.payload.data?.back_index ?? 0;
-              if (back === 0) {
-                return {
-                  shcode: "005930",
-                  generation: 3,
-                  timeframe_sec: 60,
-                  total: 3,
-                  next_back_index: 2,
-                  bars: [[1704153660000000, 105, 106, 101, 102, 40], [1704153720000000, 102, 108, 100, 107, 41]],
-                };
-              }
-              return {
-                shcode: "005930",
-                generation: 3,
-                timeframe_sec: 60,
-                total: 3,
-                next_back_index: 0,
-                bars: [[1704153600000000, 100, 110, 90, 105, 42]],
-              };
-            })()
-          : { mode: "replay", state: "ok" };
+      const type = req.payload?.type;
+      const reqData = req.payload?.data ?? {};
+      let status = "applied";
+      let errorCode = "none";
+      let payload;
+      if (type === "market.instruments") {
+        payload = {
+          total: 2,
+          returned: 1,
+          items: [{ shcode: "005930", name: "삼성전자", fut: 0 }],
+          echo_q: reqData.q ?? "",
+        };
+      } else if (type === "chart.snapshot") {
+        const back = reqData.back_index ?? 0;
+        const shcode = reqData.shcode ?? "005930";
+        payload = back === 0
+          ? {
+              shcode,
+              generation: 3,
+              timeframe_sec: 60,
+              total: 3,
+              next_back_index: 2,
+              bars: [[1704153660000000, 105, 106, 101, 102, 40], [1704153720000000, 102, 108, 100, 107, 41]],
+            }
+          : {
+              shcode,
+              generation: 3,
+              timeframe_sec: 60,
+              total: 3,
+              next_back_index: 0,
+              bars: [[1704153600000000, 100, 110, 90, 105, 42]],
+            };
+      } else if (type === "market.watch") {
+        if (reqData.shcode === "999999") {
+          status = "rejected";
+          errorCode = "watch_limit";
+          payload = { shcode: reqData.shcode };
+        } else {
+          payload = { shcode: reqData.shcode, name: "테스트종목", generation: 1, backfilled: 1 };
+        }
+      } else if (type === "market.unwatch") {
+        payload = { shcode: reqData.shcode, watches: 0 };
+      } else {
+        payload = { mode: "replay", state: "ok" };
+      }
       const reply = {
         protocol_version: 1,
         message_type: "command_result",
@@ -67,8 +83,8 @@ before(async () => {
         sequence: "1",
         event_time: "0",
         emitted_at: "0",
-        status: "applied",
-        error_code: "none",
+        status,
+        error_code: errorCode,
         payload,
       };
       await router.send([id, "", JSON.stringify(reply)]);
@@ -140,6 +156,137 @@ test("GET /api/chart proxies engine bar snapshot with pagination", async () => {
   assert.equal(data.payload.bars.length, 1);
   assert.equal(data.payload.bars[0][4], 105);
   assert.equal(data.payload.next_back_index, 0);
+});
+
+test("GET /api/chart forwards shcode to engine and validates format", async () => {
+  // shcode 지정 시 엔진에 그대로 전달된다 (스텁이 되돌려준다)
+  const res = await fetch(`${base}/api/chart?shcode=A016C000&back_index=0`);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.payload.shcode, "A016C000");
+
+  // 형식이 잘못된 shcode는 엔진 호출 없이 400
+  const bad = await fetch(`${base}/api/chart?shcode=ab`);
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).error, "invalid_symbol");
+});
+
+test("POST /api/symbols/watch proxies market.watch with token", async () => {
+  // 토큰 없으면 403
+  let res = await fetch(`${base}/api/symbols/watch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ shcode: "000660" }),
+  });
+  assert.equal(res.status, 403);
+
+  // shcode 형식 검증: 짧음/김/비문자
+  for (const shcode of ["abc", "a".repeat(13), 12345]) {
+    res = await fetch(`${base}/api/symbols/watch`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+      body: JSON.stringify({ shcode }),
+    });
+    assert.equal(res.status, 400, `shcode=${shcode}`);
+    assert.equal((await res.json()).error, "invalid_symbol");
+  }
+
+  // JSON 파싱 실패
+  res = await fetch(`${base}/api/symbols/watch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: "{",
+  });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, "invalid_json");
+
+  // 정상: 엔진 응답을 그대로 전달한다
+  res = await fetch(`${base}/api/symbols/watch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ shcode: "000660" }),
+  });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.status, "applied");
+  assert.deepEqual(data.payload, { shcode: "000660", name: "테스트종목", generation: 1, backfilled: 1 });
+
+  // 엔진 거부(watch_limit 등)는 400으로 매핑한다
+  res = await fetch(`${base}/api/symbols/watch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ shcode: "999999" }),
+  });
+  assert.equal(res.status, 400);
+  const rejected = await res.json();
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.error_code, "watch_limit");
+});
+
+test("POST /api/symbols/unwatch proxies market.unwatch with token", async () => {
+  // 토큰 없으면 403
+  let res = await fetch(`${base}/api/symbols/unwatch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ shcode: "000660" }),
+  });
+  assert.equal(res.status, 403);
+
+  // 잘못된 shcode
+  res = await fetch(`${base}/api/symbols/unwatch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ shcode: "x" }),
+  });
+  assert.equal(res.status, 400);
+
+  // 정상
+  res = await fetch(`${base}/api/symbols/unwatch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ shcode: "000660" }),
+  });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.status, "applied");
+  assert.deepEqual(data.payload, { shcode: "000660", watches: 0 });
+});
+
+test("engine down: watch/unwatch map connection_error to 502", async (t) => {
+  // 엔진 없이 서버만 띄운다: 명령 채널이 죽은 포트를 가리키게 한다
+  const port = 18931;
+  const child = spawn(process.execPath, [new URL("../server.js", import.meta.url).pathname], {
+    env: {
+      ...process.env,
+      ENGINE_CMD_ENDPOINT: "tcp://127.0.0.1:59876",
+      ENGINE_PUB_ENDPOINT: "tcp://127.0.0.1:59877",
+      DASHBOARD_PORT: String(port),
+    },
+    stdio: "ignore",
+  });
+  t.after(() => child.kill());
+  try {
+    // 기동 대기
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/token-info`);
+        if (res.ok) break;
+      } catch { /* not yet */ }
+      if (Date.now() > deadline) throw new Error("child server did not start");
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    // 자식 프로세스도 같은 .runtime/token 파일을 읽으므로 토큰이 같다
+    const res = await fetch(`http://127.0.0.1:${port}/api/symbols/watch`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+      body: JSON.stringify({ shcode: "005930" }),
+    });
+    assert.equal(res.status, 502);
+    assert.equal((await res.json()).error_code, "connection_error");
+  } finally {
+    child.kill();
+  }
 });
 
 test("workspace save/load/list/delete with token", async () => {

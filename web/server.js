@@ -168,10 +168,35 @@ const server = createServer(async (req, res) => {
       return json(res, code, reply);
     }
 
+    if (req.method === "POST" && (path === "/api/symbols/watch" || path === "/api/symbols/unwatch")) {
+      // 워치 추가/해제는 엔진 구독 상태를 바꾸는 변경 요청이다 (계획서 §18)
+      if (!mutationAllowed(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      let shcode;
+      try {
+        shcode = JSON.parse(body).shcode;
+      } catch {
+        return json(res, 400, { error: "invalid_json" });
+      }
+      if (typeof shcode !== "string" || shcode.length < 4 || shcode.length > 12) {
+        return json(res, 400, { error: "invalid_symbol" });
+      }
+      const type = path.endsWith("/unwatch") ? "market.unwatch" : "market.watch";
+      const reply = await engineCommand(`dash-watch-${reqSeq}`, type, JSON.stringify({ shcode }));
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
     if (req.method === "GET" && path === "/api/chart") {
       // 읽기 전용: 늦은 접속자의 과거 봉 스냅샷 (엔진 봉 링 프록시, back_index로 페이지네이션)
+      // shcode가 있으면 해당 종목 파이프라인의 봉을, 없으면 선택 종목(구 호환)을 가져온다
       const backIndex = Math.min(Math.max(Number(url.searchParams.get("back_index")) || 0, 0), 1e6);
-      const reply = await engineCommand(`dash-chart-${reqSeq}`, "chart.snapshot", JSON.stringify({ back_index: backIndex }));
+      const shcode = url.searchParams.get("shcode");
+      if (shcode != null && (shcode.length < 4 || shcode.length > 12)) {
+        return json(res, 400, { error: "invalid_symbol" });
+      }
+      const payload = shcode != null ? { back_index: backIndex, shcode } : { back_index: backIndex };
+      const reply = await engineCommand(`dash-chart-${reqSeq}`, "chart.snapshot", JSON.stringify(payload));
       const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
       return json(res, code, reply);
     }
