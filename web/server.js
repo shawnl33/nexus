@@ -86,7 +86,8 @@ async function workspacePath(name) {
 async function saveWorkspace(name, data) {
   const path = await workspacePath(name);
   if (path == null) return false;
-  const withMeta = { ...data, schema_version: 1, name };
+  // 클라이언트가 보낸 schema_version을 보존한다 (v1 기본값, v2 화면틀은 그대로 통과)
+  const withMeta = { ...data, schema_version: data.schema_version ?? 1, name };
   const tmp = `${path}.tmp-${process.pid}`;
   await mkdir(WORKSPACE_DIR, { recursive: true });
   await writeFile(tmp, JSON.stringify(withMeta, null, 2), "utf8");

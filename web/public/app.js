@@ -1,7 +1,8 @@
 // 대시보드 프론트엔드 (계획서 §18).
 // C가 계산한 값을 표시만 한다. 지표·점수를 재계산하지 않는다.
 // 패널 매니저: 칸(pane)마다 차트 1개를 두고, 지표는 렌더러(RENDERERS)를
-// 패널에 활성화해 표시한다. 현재는 미래곡선 1칸 고정 (선택 UI는 Task 3).
+// 칸에 활성화해 표시한다. 칸 도구줄의 지표 칩/레이어 칩은 엔진 스냅샷의
+// indicators 매니페스트에서 생성한다. 기본 상태 = 칸 1개, 지표 없음(맨 차트).
 
 "use strict";
 
@@ -12,7 +13,8 @@ let generation = 0;     // 종목 전환 시 올려 늦은 응답을 폐기 (계
 // 모든 패널이 같은 캐시를 본다. 렌더러에는 feedCtx로 전달한다.
 const bars = new Map();   // time(sec) → candle
 const barInd = new Map(); // time → { predDir[3], regValid, r2, regFlat, finalValid, finalState, day,
-                          //          mktValid, mkt, score, pred, resid, pvol, memItem, pstItem }
+                          //          mktValid, mkt, obValid, obScore, smaValid, sma[3],
+                          //          score, pred, resid, pvol, memItem, pstItem }
 const barSeq = [];        // 시각 오름차순 목록
 const barPos = new Map(); // time → barSeq 인덱스
 let tickRaw = 5;          // raw 단위 틱 크기 (엔진 tick 키가 갱신; 선물 5, 주식 100)
@@ -80,24 +82,18 @@ const feedCtx = {
 };
 
 // ---- 패널 매니저 ----
-// Pane: { id, el, chart, candleSeries, active: Map<indId, { renderer, handle }> }
+// Pane: { id, el, toolsEl, chart, candleSeries, heightFrac,
+//         active: Map<indId, { renderer, handle, layers: {layerId: bool} }> }
 
-const MiraeRenderer = MiraeLayers.MiraeRenderer;
-// SMA 렌더러는 Task 3에서 구현한다. 등록부 형태만 맞춘 자리표시자.
-const SmaRenderer = {
-  id: "sma",
-  createHandle() {
-    return { setLayers() {}, applyLive() {}, applySeed() {}, clear() {} };
-  },
-};
-const RENDERERS = { mirae_v16: MiraeRenderer, sma: SmaRenderer };
+const RENDERERS = { mirae_v16: MiraeLayers.MiraeRenderer, sma: SmaLayers.SmaRenderer };
 
-// 레이어 표시 상태 (헤더 토글) — 새로 활성화되는 렌더러에도 같은 상태를 적용한다
-const layerState = { band: true, mktband: false }; // ④ 기본 켜짐, ⑧ 기본 숨김
+// 지표 매니페스트 (엔진 스냅샷의 indicators 배열) — 시딩 전에는 비어 있다
+let indicatorManifest = [];
 
 const panesEl = document.getElementById("panes");
 const panes = [];
 let nextPaneId = 1;
+const MIN_PANE_FRAC = 0.1; // 드래그로 줄일 수 있는 칸 최소 높이 비율
 
 function chartOptions() {
   return {
@@ -124,11 +120,20 @@ function chartOptions() {
   };
 }
 
-// 칸 높이는 #panes 대비 % (heightFrac 0..1). 드래그 조절은 Task 3에서.
+// 칸 높이는 #panes 대비 % (pane.heightFrac 0..1). 인접 칸 사이의 리사이즈바를
+// 드래그해 조절한다. 높이를 바꾼 뒤에는 차트 크기를 다시 맞춘다.
+function syncPaneSize(pane) {
+  pane.el.style.height = `${pane.heightFrac * 100}%`;
+  pane.chart.resize(pane.el.clientWidth, pane.el.clientHeight);
+}
+
 function createPane(heightFrac = 1) {
   const div = document.createElement("div");
   div.className = "pane";
   div.style.height = `${heightFrac * 100}%`;
+  const tools = document.createElement("div");
+  tools.className = "tools";
+  div.append(tools);
   panesEl.append(div);
   const chart = LightweightCharts.createChart(div, chartOptions());
   const candleSeries = chart.addCandlestickSeries({
@@ -136,8 +141,12 @@ function createPane(heightFrac = 1) {
     borderUpColor: "#ef5350", borderDownColor: "#2962ff",
     wickUpColor: "#ef5350", wickDownColor: "#2962ff",
   });
-  const pane = { id: nextPaneId++, el: div, chart, candleSeries, active: new Map() };
+  const pane = { id: nextPaneId++, el: div, toolsEl: tools, chart, candleSeries,
+                 heightFrac, active: new Map() };
   panes.push(pane);
+  // 공유 캐시가 이미 있으면 새 칸에 그대로 백필한다 (화면틀 적용·칸 추가 시 재시딩 불필요)
+  if (barSeq.length) candleSeries.setData(barSeq.map((t) => bars.get(t)).filter(Boolean));
+  buildPaneTools(pane);
   return pane;
 }
 
@@ -148,17 +157,137 @@ function removePane(pane) {
   pane.active.clear();
   pane.chart.remove();
   pane.el.remove();
+  // 남은 칸이 빠진 높이를 비율대로 나눠 갖는다
+  const total = panes.reduce((s, p) => s + p.heightFrac, 0);
+  if (panes.length && total > 0) {
+    for (const p of panes) {
+      p.heightFrac /= total;
+      syncPaneSize(p);
+    }
+  }
+  rebuildResizeBars();
+  updateBadgeVisibility();
 }
 
-// 지표 렌더러를 칸에 활성화하고 현재 캐시로 백필한다
-function activateIndicator(pane, indId) {
+// 인접 칸 경계의 리사이즈바를 현재 칸 목록에 맞춰 다시 단다
+function rebuildResizeBars() {
+  panesEl.querySelectorAll(".resizebar").forEach((e) => e.remove());
+  for (let i = 0; i + 1 < panes.length; i++) {
+    const bar = document.createElement("div");
+    bar.className = "resizebar";
+    bar.textContent = "⠿";
+    bar.title = "드래그로 크기 조절";
+    attachResize(bar, panes[i], panes[i + 1]);
+    panes[i].el.append(bar); // 위 칸의 아래쪽 가장자리에 겹쳐 둔다
+  }
+}
+
+function attachResize(bar, above, below) {
+  bar.addEventListener("mousedown", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const totalPx = panesEl.clientHeight;
+    if (!totalPx) return;
+    const startY = ev.clientY;
+    const a0 = above.heightFrac, b0 = below.heightFrac;
+    const move = (e2) => {
+      const d = (e2.clientY - startY) / totalPx;
+      const sum = a0 + b0;
+      const a = Math.min(Math.max(a0 + d, MIN_PANE_FRAC), sum - MIN_PANE_FRAC);
+      above.heightFrac = a;
+      below.heightFrac = sum - a;
+      syncPaneSize(above);
+      syncPaneSize(below);
+    };
+    const up = () => {
+      removeEventListener("mousemove", move);
+      removeEventListener("mouseup", up);
+    };
+    addEventListener("mousemove", move);
+    addEventListener("mouseup", up);
+  });
+}
+
+// 칸 도구줄: [없음] [지표 칩…] [활성 지표의 레이어 칩…] [×]
+// 지표 칩은 매니페스트에서 만들고, 레이어 칩은 켜진 지표의 layers(defaultOn 반영)에서 만든다.
+function buildPaneTools(pane) {
+  const tools = pane.toolsEl;
+  tools.replaceChildren();
+
+  const noneChip = document.createElement("button");
+  noneChip.className = `chip${pane.active.size === 0 ? " on" : ""}`;
+  noneChip.textContent = "없음";
+  noneChip.title = "이 칸의 지표를 모두 끈다";
+  noneChip.onclick = () => {
+    for (const id of [...pane.active.keys()]) deactivateIndicator(pane, id);
+    buildPaneTools(pane);
+    updateBadgeVisibility();
+  };
+  tools.append(noneChip);
+
+  for (const meta of indicatorManifest) {
+    if (!RENDERERS[meta.id]) continue; // 이 프론트가 모르는 지표는 건너뛴다
+    const on = pane.active.has(meta.id);
+    const chip = document.createElement("button");
+    chip.className = `chip${on ? " on" : ""}`;
+    chip.textContent = meta.name ?? meta.id;
+    chip.onclick = () => {
+      if (pane.active.has(meta.id)) deactivateIndicator(pane, meta.id);
+      else activateIndicator(pane, meta.id);
+      buildPaneTools(pane);
+      updateBadgeVisibility();
+    };
+    tools.append(chip);
+  }
+
+  for (const [indId, entry] of pane.active) {
+    const meta = indicatorManifest.find((m) => m.id === indId);
+    for (const layer of meta?.layers ?? []) {
+      const on = entry.layers[layer.id] !== false;
+      const chip = document.createElement("button");
+      chip.className = `chip layer${on ? " on" : ""}`;
+      chip.textContent = layer.name ?? layer.id;
+      chip.title = `${meta.name ?? indId} 레이어`;
+      chip.onclick = () => {
+        const next = entry.layers[layer.id] === false;
+        entry.layers[layer.id] = next;
+        entry.handle.setLayers({ [layer.id]: next });
+        chip.classList.toggle("on", next);
+      };
+      tools.append(chip);
+    }
+  }
+
+  const del = document.createElement("button");
+  del.className = "chip del";
+  del.textContent = "×";
+  del.title = "이 차트 삭제";
+  del.onclick = () => removePane(pane);
+  tools.append(del);
+}
+
+// 지표 렌더러를 칸에 활성화하고 현재 캐시로 백필한다.
+// savedLayers(화면틀)가 있으면 그 값을, 없으면 매니페스트 defaultOn을 적용한다.
+function activateIndicator(pane, indId, savedLayers) {
   if (pane.active.has(indId)) return;
   const renderer = RENDERERS[indId];
   if (!renderer) return;
   const handle = renderer.createHandle(pane.chart, pane.candleSeries);
-  pane.active.set(indId, { renderer, handle });
-  handle.setLayers(layerState);
+  const meta = indicatorManifest.find((m) => m.id === indId);
+  const layers = {};
+  for (const l of meta?.layers ?? []) layers[l.id] = savedLayers?.[l.id] ?? (l.defaultOn !== false);
+  for (const [k, v] of Object.entries(savedLayers ?? {})) layers[k] = !!v; // 매니페스트에 없는 저장 키도 보존
+  pane.active.set(indId, { renderer, handle, layers });
+  handle.setLayers(layers);
   handle.applySeed(feedCtx);
+}
+
+function deactivateIndicator(pane, indId) {
+  const entry = pane.active.get(indId);
+  if (!entry) return;
+  pane.active.delete(indId);
+  if (typeof entry.handle.destroy === "function") entry.handle.destroy();
+  else entry.handle.clear();
 }
 
 function anyMiraeActive() {
@@ -185,6 +314,7 @@ const el = {
   ob: document.getElementById("ob"),
   final: document.getElementById("final"),
   wsName: document.getElementById("ws-name"),
+  miraeBadges: document.getElementById("mirae-badges"),
 };
 
 function scoreTextColor(v) {
@@ -203,6 +333,35 @@ function updateFinalBadge(valid, state) {
   el.final.textContent = state >= 2 ? "매수강" : state === 1 ? "매수"
     : state <= -2 ? "매도강" : state === -1 ? "매도" : "관망";
   el.final.style.color = state >= 1 ? "#ef5350" : state <= -1 ? "#6aa9ff" : "#7d8590";
+}
+
+// 헤더 지표 배지는 미래곡선이 한 칸이라도 켜져 있을 때만 보인다
+function updateBadgeVisibility() {
+  el.miraeBadges.hidden = !anyMiraeActive();
+  if (!el.miraeBadges.hidden) restoreHeaderBadges();
+}
+
+// 시딩/지표 활성화 직후: 마지막 봉의 캐시 값으로 배지를 복원한다
+function restoreHeaderBadges() {
+  const lastT = barSeq[barSeq.length - 1];
+  const ind = lastT === undefined ? undefined : barInd.get(lastT);
+  if (!ind || !anyMiraeActive()) return;
+  if (Number.isFinite(ind.score)) {
+    el.score.textContent = String(ind.score);
+    el.score.style.color = scoreTextColor(ind.score);
+  }
+  updateFinalBadge(ind.finalValid, ind.finalState);
+  if (ind.regValid && Number.isFinite(ind.regFlat)) {
+    el.reg.textContent = `회귀선 ${fmtPrice(ind.regFlat)} (R² ${ind.r2.toFixed(2)})`;
+    el.reg.className = "badge ok";
+    if (Array.isArray(ind.pred) && ind.pred.every(Number.isFinite)) {
+      el.pred.textContent = `예측 ${ind.pred.map((v) => fmtPrice(v)).join(" / ")}`;
+    }
+  }
+  if (ind.obValid) {
+    el.ob.textContent = `호가 ${ind.obScore.toFixed(1)}`;
+    el.ob.className = ind.obScore > 0 ? "badge ok" : "badge err";
+  }
 }
 
 function applyStatus(msg) {
@@ -227,6 +386,13 @@ function applyStatus(msg) {
   ind.pvol = p.pvol ?? 0;
   barInd.set(t, ind);
   if (typeof p.tick === "number" && Number.isFinite(p.tick) && p.tick > 0) tickRaw = p.tick;
+
+  // ⑥⑦ 봉별 아이템은 렌더러 on/off와 무관하게 캐시에 기록한다 (복원 대비)
+  const pos = barPos.get(t);
+  const memItem = MiraeLayers.memItemFromPayload(t, p.mem, recentBars(pos, 5));
+  if (memItem !== undefined) ind.memItem = memItem;
+  const pstItem = MiraeLayers.pstItemFromPayload(t, p.pst, recentBars(pos, 5));
+  if (pstItem !== undefined) ind.pstItem = pstItem;
 
   // 지표 표시는 각 칸의 활성 렌더러가 담당한다
   for (const pane of panes) {
@@ -325,6 +491,8 @@ async function seedChart() {
       if (typeof p.generation === "number" && p.generation > generation) {
         generation = p.generation;
       }
+      // 지표 매니페스트: 첫 페이지에서 한 번 받아 칸 도구줄을 구성한다
+      if (pages === 0 && Array.isArray(p.indicators)) setIndicatorManifest(p.indicators);
       const rows = p.bars ?? [];
       const inds = p.ind ?? [];
       for (let ri = 0; ri < rows.length; ri++) {
@@ -371,26 +539,15 @@ async function seedChart() {
       for (const { handle } of pane.active.values()) handle.applySeed(feedCtx);
     }
 
-    // 마지막 봉의 값으로 배지를 복원한다
-    const lastBar = dedup[dedup.length - 1];
-    const last = lastBar ? MiraeLayers.parseInd(lastBar.ind) : null;
-    if (last && anyMiraeActive()) {
-      el.score.textContent = String(last.score);
-      el.score.style.color = scoreTextColor(last.score);
-      updateFinalBadge(last.finalValid, last.finalState);
-      if (last.regValid) {
-        el.reg.textContent = `회귀선 ${fmtPrice(last.regLine)} (R² ${last.r2.toFixed(2)})`;
-        el.reg.className = "badge ok";
-        if (last.pred.every(Number.isFinite)) {
-          el.pred.textContent = `예측 ${last.pred.map((v) => fmtPrice(v)).join(" / ")}`;
-        }
-      }
-      if (last.obValid) {
-        el.ob.textContent = `호가 ${last.obScore.toFixed(1)}`;
-        el.ob.className = last.obScore > 0 ? "badge ok" : "badge err";
-      }
-    }
+    // 마지막 봉의 값으로 배지를 복원한다 (미래곡선이 켜진 칸이 있을 때만)
+    restoreHeaderBadges();
   } catch { /* 시딩 실패는 라이브 스트림으로 진행 */ }
+}
+
+// 지표 매니페스트를 저장하고 모든 칸의 도구줄을 다시 만든다
+function setIndicatorManifest(list) {
+  indicatorManifest = list.filter((m) => m && typeof m.id === "string");
+  for (const pane of panes) buildPaneTools(pane);
 }
 
 function connect() {
@@ -421,18 +578,41 @@ function connect() {
   };
 }
 
-// ---- 화면틀 ----
-// 화면틀에는 레이아웃·스타일·종목 바인딩만 저장한다. 전략 자동 시작·주문 상태는 넣지 않는다.
+// ---- 화면틀 v2 ----
+// 화면틀에는 레이아웃·칸별 지표 집합(레이어 설정)·종목 바인딩만 저장한다.
+// 전략 자동 시작·주문 상태는 넣지 않는다 (계획서 §18).
+// 직렬화/검증은 workspace.js의 순수 함수가 담당한다 (node:test 대상).
 
 function collectWorkspace() {
-  return {
-    panels: [
-      { id: "chart", type: "chart", symbol_binding: "selected", timeframe: 60, link_group: "main" },
-    ],
-    current_symbol: "1",
-    styles: { theme: "dark" },
-    ui: { generation },
-  };
+  return Workspace.serialize(el.wsName.value.trim(), symbolInput.value.trim(),
+    panes.map((pane) => ({
+      height: pane.heightFrac,
+      indicators: [...pane.active.entries()].map(([id, entry]) => ({ id, layers: { ...entry.layers } })),
+    })));
+}
+
+// 칸 높이 합을 1로 맞춘다 (불러온 화면틀의 height는 상대 비율로만 쓴다)
+function normalizeHeights() {
+  if (!panes.length) return;
+  const total = panes.reduce((s, p) => s + p.heightFrac, 0);
+  for (const p of panes) p.heightFrac = total > 0 ? p.heightFrac / total : 1 / panes.length;
+  for (const p of panes) syncPaneSize(p);
+}
+
+// 화면틀 v2 적용: 공유 데이터(봉/지표 캐시)는 유지하고 칸만 재구성한다.
+// 새 칸은 createPane이 캐시에서 캔들을 백필하고 activateIndicator가 applySeed로 복원한다.
+function applyWorkspace(parsed) {
+  while (panes.length) removePane(panes[panes.length - 1]);
+  for (const spec of parsed.panels) {
+    const pane = createPane(spec.height);
+    for (const ind of spec.indicators) activateIndicator(pane, ind.id, ind.layers);
+    buildPaneTools(pane);
+  }
+  normalizeHeights();
+  rebuildResizeBars();
+  updateBadgeVisibility();
+  // 저장된 종목 바인딩이 현재와 다르면 전환한다 (전환은 새 스냅샷으로 다시 시딩한다)
+  if (parsed.symbol && parsed.symbol !== symbolInput.value.trim()) switchSymbol();
 }
 
 let cachedToken = null;
@@ -481,37 +661,33 @@ async function loadWorkspace() {
   const res = await fetch(`/api/workspaces/${encodeURIComponent(name)}`);
   if (!res.ok) return alert("화면틀 없음");
   const data = await res.json();
-  generation = (data.ui?.generation ?? 0) + 1;
+  const parsed = Workspace.parse(data, (id) => id in RENDERERS);
+  if (!parsed) return alert("구 버전 화면틀은 적용할 수 없습니다 — 기본 상태를 유지합니다");
   // 화면 복원으로 전략을 자동 시작하거나 주문을 재실행하지 않는다.
-  alert(`화면틀 '${name}' 적용 (generation ${generation})`);
+  applyWorkspace(parsed);
+  alert(`화면틀 '${name}' 적용`);
 }
 
-// 레이어 토글은 setLayers 계약을 통해 모든 칸의 미래곡선 렌더러에 전파한다
-function broadcastLayers(map) {
-  for (const pane of panes) {
-    const entry = pane.active.get("mirae_v16");
-    if (entry) entry.handle.setLayers(map);
+// 칸 추가: 기존 칸 높이를 비율대로 줄여 새 칸 자리를 만든다
+function addPane() {
+  const newFrac = 1 / (panes.length + 1);
+  const scale = 1 - newFrac; // 기존 칸 heightFrac 합은 ≈1
+  for (const p of panes) {
+    p.heightFrac *= scale;
+    syncPaneSize(p);
   }
+  createPane(newFrac);
+  rebuildResizeBars();
 }
 
-// ⑧ 마켓 밴드 토글 (기본 숨김 — 원본 입력 마켓밴드표시=0에 해당)
-const mktbandBtn = document.getElementById("mktband-toggle");
-mktbandBtn.onclick = () => {
-  layerState.mktband = !layerState.mktband;
-  mktbandBtn.classList.toggle("on", layerState.mktband);
-  broadcastLayers({ mktband: layerState.mktband });
-};
-
-// ④ 결과 띠 토글 (기본 켜짐 — 원본 입력 과거예측표시=1에 해당)
-const bandBtn = document.getElementById("band-toggle");
-bandBtn.onclick = () => {
-  layerState.band = !layerState.band;
-  bandBtn.classList.toggle("on", layerState.band);
-  broadcastLayers({ band: layerState.band });
-};
-
+document.getElementById("pane-add").onclick = addPane;
 document.getElementById("ws-save").onclick = saveWorkspace;
 document.getElementById("ws-load").onclick = loadWorkspace;
+
+// 창 크기가 바뀌면 각 칸의 차트 크기를 다시 맞춘다
+addEventListener("resize", () => {
+  for (const pane of panes) pane.chart.resize(pane.el.clientWidth, pane.el.clientHeight);
+});
 
 // 종목 전환: 화면의 선택 종목만 바꾼다. 전략 거래 대상은 바꾸지 않는다 (계획서 §18).
 const symbolInput = document.getElementById("symbol");
@@ -607,9 +783,9 @@ document.addEventListener("click", (ev) => {
 });
 document.getElementById("symbol-apply").onclick = switchSymbol;
 
-// 기본 구성: 미래곡선이 켜진 1칸 (지표 선택 UI는 Task 3)
-const mainPane = createPane(1);
-activateIndicator(mainPane, "mirae_v16");
+// 기본 구성: 칸 1개, 지표 없음 (맨 차트). 지표는 칸 도구줄에서 켠다.
+createPane(1);
+updateBadgeVisibility();
 
 seedChart();
 connect();

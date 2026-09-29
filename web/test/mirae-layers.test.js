@@ -200,15 +200,21 @@ function fakeSeries() {
 }
 function fakeChart() {
   const made = [];
+  const removed = [];
   return {
-    made,
+    made, removed,
     addCustomSeries() { const s = fakeSeries(); made.push(s); return s; },
     addLineSeries() { const s = fakeSeries(); made.push(s); return s; },
+    removeSeries(s) { removed.push(s); const i = made.indexOf(s); if (i >= 0) made.splice(i, 1); },
     priceScale() { return { applyOptions() {} }; },
   };
 }
 function fakeCandleSeries() {
-  return { primitives: [], attachPrimitive(p) { this.primitives.push(p); } };
+  return {
+    primitives: [],
+    attachPrimitive(p) { this.primitives.push(p); },
+    detachPrimitive(p) { const i = this.primitives.indexOf(p); if (i >= 0) this.primitives.splice(i, 1); },
+  };
 }
 function makeCtx(rows) {
   // rows: [t, indEntry] — barInd/barSeq/barPos를 같은 형태로 구성
@@ -269,7 +275,7 @@ test("MiraeRenderer: applySeed가 ctx 캐시에서 복원하고 setLayers가 즉
   assert.equal(rays.paneViews()[0].renderer(), null);
 });
 
-test("MiraeRenderer: applyLive가 봉별 갱신과 ⑥⑦ 아이템 캐시를 반영한다", () => {
+test("MiraeRenderer: applyLive가 봉별 갱신과 캐시된 ⑥⑦ 아이템을 표시한다", () => {
   const chart = fakeChart();
   const candle = fakeCandleSeries();
   const h = M.MiraeRenderer.createHandle(chart, candle);
@@ -283,18 +289,22 @@ test("MiraeRenderer: applyLive가 봉별 갱신과 ⑥⑦ 아이템 캐시를 �
   ctx.bars.set(t, { time: t, open: 1, high: 2, low: 0, close: 1 });
   ctx.barInd.set(t, M.barIndFromPayload({ reg_valid: 1, reg_r2: 0.5, reg_flat: 9000, final: [1, 1, 1] }));
 
-  h.applyLive({
-    bar_open_time: t * 1e6, score: -2, reg_valid: 1,
-    mem: [1, 1, 1, 5000, 5100, 5200, 5300, 5400, 5500, 5600, 4900, 4800, 4700],
-  }, ctx);
+  // ⑥⑦ 아이템 캐싱은 app.js applyStatus가 담당한다 — 여기서는 같은 함수로 미리 심는다
+  const mem = [1, 1, 1, 5000, 5100, 5200, 5300, 5400, 5500, 5600, 4900, 4800, 4700];
+  ctx.barInd.get(t).memItem = M.memItemFromPayload(t, mem, ctx.recentBars(0, 5));
+
+  h.applyLive({ bar_open_time: t * 1e6, score: -2, reg_valid: 1, mem }, ctx);
   assert.equal(regLineSeries.updates.length, 1);
   assert.equal(regLineSeries.updates[0].value, 9000);
   assert.equal(memSeries.updates.length, 1);
   assert.equal(memSeries.updates[0].upd, true); // 갱신 봉은 범위선 숨김
-  // ⑥ 아이템이 barInd 캐시에 심어져 applySeed가 복원할 수 있다
-  const h2 = M.MiraeRenderer.createHandle(fakeChart(), fakeCandleSeries());
+  // ⑥ 아이템이 barInd 캐시에 있으면 새 렌더러도 applySeed로 복원할 수 있다
+  const chart2 = fakeChart();
+  const h2 = M.MiraeRenderer.createHandle(chart2, fakeCandleSeries());
   h2.applySeed(ctx);
   assert.equal(ctx.barInd.get(t).memItem.value, 5200); // value = mem[5] (목표2)
+  assert.equal(chart2.made[3].data.length, 1);         // 새 렌더러의 ⑥ 시리즈에 복원됨
+  assert.equal(chart2.made[3].data[0].value, 5200);
 
   // regValid 없는 봉은 갭(whitespace)으로 갱신
   const t2 = t + 60;
@@ -304,4 +314,148 @@ test("MiraeRenderer: applyLive가 봉별 갱신과 ⑥⑦ 아이템 캐시를 �
   h.applyLive({ bar_open_time: t2 * 1e6 }, ctx);
   assert.equal(regLineSeries.updates.length, 2);
   assert.equal(regLineSeries.updates[1].value, undefined);
+});
+
+test("MiraeRenderer: 매니페스트 8개 레이어 칩을 setLayers로 개별 토글한다", () => {
+  const chart = fakeChart();
+  const candle = fakeCandleSeries();
+  const h = M.MiraeRenderer.createHandle(chart, candle);
+  const [regLineSeries, scoreSeries, bandSeries, memSeries] = chart.made;
+  const rays = candle.primitives[0];
+
+  const mkInd = (regFlat) => ({
+    ...M.barIndFromPayload({ reg_valid: 1, reg_r2: 0.7, reg_flat: regFlat, final: [1, 1, 2] }),
+    score: 3, pred: [101, 102, 103], resid: 1, pvol: 1,
+  });
+  const rows = [];
+  for (let i = 0; i < 12; i++) rows.push([100 + i * 60, mkInd(1000 + i)]);
+  rows[5][1].memItem = M.memItemFromPayload(rows[5][0],
+    [1, 0, 1, 5000, 5100, 5200, 5300, 5400, 5500, 5600, 4900, 4800, 4700], []);
+  const ctx = makeCtx(rows);
+  h.applySeed(ctx);
+  assert.equal(regLineSeries.data.length, 12);
+  assert.equal(scoreSeries.data.length, 12);
+  assert.equal(memSeries.data.length, 1);
+  assert.notEqual(rays.paneViews()[0].renderer(), null);
+
+  // ① 점수 끄기/켜기
+  h.setLayers({ score: false });
+  assert.deepEqual(scoreSeries.data, []);
+  h.setLayers({ score: true });
+  assert.equal(scoreSeries.data.length, 12);
+
+  // ② 회귀선만 꺼도 ⑤ 상태 덧선용 데이터는 유지된다 (그리기는 pane view가 layers를 본다)
+  h.setLayers({ reg: false });                 // ⑤만 켜짐
+  assert.equal(regLineSeries.data.length, 12);
+  h.setLayers({ reg: true, state: false });    // ②만 켜짐
+  assert.equal(regLineSeries.data.length, 12);
+  h.setLayers({ reg: false, state: false });   // 둘 다 끄면 시리즈가 빈다
+  assert.deepEqual(regLineSeries.data, []);
+  h.setLayers({ reg: true, state: true });
+  assert.equal(regLineSeries.data.length, 12);
+
+  // ③ 광선 끄기/켜기
+  h.setLayers({ rays: false });
+  assert.equal(rays.paneViews()[0].renderer(), null);
+  h.setLayers({ rays: true });
+  assert.notEqual(rays.paneViews()[0].renderer(), null);
+
+  // ⑥ 방향 기억 끄기/켜기 — 캐시에서 복원
+  h.setLayers({ memory: false });
+  assert.deepEqual(memSeries.data, []);
+  h.setLayers({ memory: true });
+  assert.equal(memSeries.data.length, 1);
+
+  // ④⑧은 기존 계약대로
+  h.setLayers({ band: false });
+  assert.deepEqual(bandSeries.data, []);
+  h.setLayers({ mktband: true });
+  assert.equal(chart.made[5].data.length, 0); // mktValid 없는 캐시 → 빈 밴드
+
+  // 알 수 없는 키는 무시한다
+  h.setLayers({ unknown_layer: false });
+  assert.equal(regLineSeries.data.length, 12);
+});
+
+test("MiraeRenderer: destroy가 시리즈와 프리미티브를 차트에서 분리한다", () => {
+  const chart = fakeChart();
+  const candle = fakeCandleSeries();
+  const h = M.MiraeRenderer.createHandle(chart, candle);
+  assert.equal(chart.made.length, 10);
+  h.destroy();
+  assert.equal(chart.made.length, 0);
+  assert.equal(chart.removed.length, 10);
+  assert.equal(candle.primitives.length, 0);
+});
+
+test("parseInd: ind[28..31] SMA 확장 구간 파싱", () => {
+  const ind = makeInd();
+  ind[26] = 5; ind[27] = 20260929; ind[28] = 1; ind[29] = 34510.5; ind[30] = 34500.25; ind[31] = 34480;
+  const d = M.parseInd(ind);
+  assert.equal(d.tick, 5);
+  assert.equal(d.day, 20260929);
+  assert.equal(d.smaValid, true);
+  assert.deepEqual(d.sma, [34510.5, 34500.25, 34480]);
+
+  // 확장이 없는 구형 스냅샷(길이 26~28)은 sma 무효로 읽는다
+  const short = M.parseInd(makeInd());
+  assert.equal(short.smaValid, false);
+  assert.ok(short.sma.every((v) => Number.isNaN(v)));
+});
+
+test("barInd 확장: sma/ob 필드가 시딩·라이브 공통 형태로 유지된다", () => {
+  const ind = makeInd();
+  ind[28] = 1; ind[29] = 101; ind[30] = 102; ind[31] = 103;
+  const e = M.barIndFromInd(M.parseInd(ind));
+  assert.equal(e.smaValid, true);
+  assert.deepEqual(e.sma, [101, 102, 103]);
+  assert.equal(e.obValid, true);
+  assert.equal(e.obScore, 1.5);
+
+  const live = M.barIndFromPayload({ sma: [1, 201, 202, 203], ob_valid: 1, ob_score: -0.5 });
+  assert.equal(live.smaValid, true);
+  assert.deepEqual(live.sma, [201, 202, 203]);
+  assert.equal(live.obValid, true);
+  assert.equal(live.obScore, -0.5);
+
+  // sma 키가 없는 구형 엔진 페이로드는 무효로 둔다
+  const bare = M.barIndFromPayload({ reg_valid: 0 });
+  assert.equal(bare.smaValid, false);
+  assert.ok(bare.sma.every((v) => Number.isNaN(v)));
+  assert.equal(bare.obValid, false);
+});
+
+test("memItemFromPayload/pstItemFromPayload: 라이브 mem/pst → 봉별 아이템 (캐시 계약)", () => {
+  const mem = [1, 1, 1, 5000, 5100, 5200, 5300, 5400, 5500, 5600, 4900, 4800, 4700];
+  const item = M.memItemFromPayload(100, mem, []);
+  assert.equal(item.time, 100);
+  assert.equal(item.value, 5200);      // 목표2
+  assert.equal(item.price, 5000);      // 기준가격
+  assert.equal(item.dir, 1);
+  assert.deepEqual(item.t, [5100, 5200, 5300]);
+  assert.deepEqual(item.u, [5400, 5500, 5600]);
+  assert.deepEqual(item.l, [4900, 4800, 4700]);
+  assert.equal(item.upd, true);        // 갱신 봉
+  assert.equal(item.showU, false);     // 갱신 봉은 범위선 숨김
+  assert.equal(item.showL, false);
+
+  // 갱신 봉이 아니면 5봉 이탈 규칙을 적용한다 (recent가 목표3=5300 아래 5봉 → 상단 숨김)
+  const below5 = [90, 91, 92, 93, 94].map((v) => ({ high: v, low: v - 5 }));
+  const held = M.memItemFromPayload(160, [1, 0, 1, 5000, 5100, 5200, 5300, 5400, 5500, 5600, 4900, 4800, 4700], below5);
+  assert.equal(held.upd, false);
+  assert.equal(held.showU, false);
+  assert.equal(held.showL, true);
+
+  // 무효/키 없음 구분: 무효는 null(캐시 비움), 키 없음은 undefined(캐시 유지)
+  assert.equal(M.memItemFromPayload(100, [0], []), null);
+  assert.equal(M.memItemFromPayload(100, undefined, []), undefined);
+
+  const pst = [1, 1, -1, 7100, 7200, 7300, 7400, 7500, 7600, 6900, 6800, 6700];
+  const snap = M.pstItemFromPayload(100, pst, []);
+  assert.equal(snap.value, 7200); // 목표2
+  assert.equal(snap.dir, -1);
+  assert.deepEqual(snap.t, [7100, 7200, 7300]);
+  assert.equal(snap.upd, undefined); // ⑦에는 갱신 봉 개념이 없다
+  assert.equal(M.pstItemFromPayload(100, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], []), null);
+  assert.equal(M.pstItemFromPayload(100, undefined, []), undefined);
 });

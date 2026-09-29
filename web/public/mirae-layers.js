@@ -80,7 +80,7 @@ const MiraeLayers = (() => {
 
   // ---- 페이로드 파싱 (docs/display_payload.md 레이아웃) ----
 
-  // 스냅샷 ind 배열 [0..27] → 정규화 객체
+  // 스냅샷 ind 배열 [0..31] → 정규화 객체
   function parseInd(ind) {
     if (!Array.isArray(ind)) return null;
     return {
@@ -104,6 +104,8 @@ const MiraeLayers = (() => {
       regFlat: num(ind[25]),
       tick: num(ind[26]),
       day: num(ind[27]),
+      smaValid: ind[28] === 1,
+      sma: [num(ind[29]), num(ind[30]), num(ind[31])], // SMA 5/20/60
     };
   }
   // 봉별 지표 캐시(barInd) 엔트리: 시딩(parseInd 결과)과 라이브(status 페이로드) 공통 형태
@@ -112,11 +114,14 @@ const MiraeLayers = (() => {
       predDir: d.predDir, regValid: d.regValid, r2: d.r2, regFlat: d.regFlat,
       finalValid: d.finalValid, finalState: d.finalState, day: d.day,
       mktValid: d.mktValid, mkt: d.mkt,
+      obValid: d.obValid, obScore: d.obScore,
+      smaValid: d.smaValid, sma: d.sma,
     };
   }
   function barIndFromPayload(p) {
     const fin = Array.isArray(p.final) ? p.final : [];
     const mkt = Array.isArray(p.mkt) ? p.mkt : [];
+    const sma = Array.isArray(p.sma) ? p.sma : [];
     return {
       predDir: Array.isArray(p.pred_dir) ? p.pred_dir.map(int) : [0, 0, 0],
       regValid: p.reg_valid === 1,
@@ -127,7 +132,32 @@ const MiraeLayers = (() => {
       day: num(p.day),
       mktValid: mkt[0] === 1,
       mkt: [num(mkt[1]), num(mkt[2]), num(mkt[3]), num(mkt[4]), num(mkt[5])],
+      obValid: p.ob_valid === 1,
+      obScore: num(p.ob_score),
+      smaValid: sma[0] === 1,
+      sma: [num(sma[1]), num(sma[2]), num(sma[3])],
     };
+  }
+
+  // ⑥⑦ 봉별 아이템 생성 (라이브 status의 mem/pst 배열 → 수평 세그먼트 아이템).
+  // 반환값: 아이템 객체 / null(무효 — 캐시 비움) / undefined(키 없음 — 캐시 유지).
+  // 캐시 기록은 app.js applyStatus가 담당하고, 렌더러는 캐시된 아이템을 표시만 한다.
+  function memItemFromPayload(t, mem, recent) {
+    if (!Array.isArray(mem)) return undefined;
+    if (mem[0] !== 1) return null;
+    const updated = mem[1] === 1;
+    const flags = updated ? { showU: false, showL: false } : rangeFlags(recent, mem[6]);
+    return { time: t, value: mem[5], dir: mem[2], price: mem[3],
+             t: mem.slice(4, 7), u: mem.slice(7, 10), l: mem.slice(10, 13),
+             showU: flags.showU, showL: flags.showL, upd: updated };
+  }
+  function pstItemFromPayload(t, pst, recent) {
+    if (!Array.isArray(pst)) return undefined;
+    if (pst[1] !== 1) return null;
+    const flags = rangeFlags(recent, pst[5]);
+    return { time: t, value: pst[4], dir: pst[2],
+             t: pst.slice(3, 6), u: pst.slice(6, 9), l: pst.slice(9, 12),
+             showU: flags.showU, showL: flags.showL };
   }
 
   // ---- 커스텀 시리즈 공통부 ----
@@ -186,14 +216,19 @@ const MiraeLayers = (() => {
   }
 
   // ②+⑤ 회귀선·매매 상태 (Plot7 + Plot30/31, 2패스 덧선)
-  function createRegLinePaneView() {
+  // layers를 넘기면 reg/state 칩으로 각 패스를 끈다 (생략 시 둘 다 그린다)
+  function createRegLinePaneView(layers) {
     return makeSegmentPaneView((ctx, priceConverter, a, b) => {
       const da = a.originalData, db = b.originalData;
       const ya = priceConverter(da.value), yb = priceConverter(db.value);
       if (ya === null || yb === null) return;
-      strokeSeg(ctx, a.x, ya, b.x, yb, scoreColor(da.score), regWidth(da.r2));
-      const style = tradeStyle(da.finalState);
-      if (style) strokeSeg(ctx, a.x, ya, b.x, yb, style.color, style.width);
+      if (!layers || layers.reg !== false) {
+        strokeSeg(ctx, a.x, ya, b.x, yb, scoreColor(da.score), regWidth(da.r2));
+      }
+      if (!layers || layers.state !== false) {
+        const style = tradeStyle(da.finalState);
+        if (style) strokeSeg(ctx, a.x, ya, b.x, yb, style.color, style.width);
+      }
     });
   }
 
@@ -376,18 +411,24 @@ const MiraeLayers = (() => {
   // ---- MiraeRenderer: 패널 단위 렌더러 계약 (패널 매니저 app.js가 소비) ----
   // createHandle(chart, candleSeries) → handle. handle은 한 차트에 붙는
   // 시리즈/프리미티브 묶음과 레이어 표시 상태를 소유한다.
-  //   handle.setLayers(map)   — layer id("band"|"mktband") → bool. 즉시 다시 그린다
+  //   handle.setLayers(map)   — layer id → bool. 즉시 다시 그린다
+  //     (score/reg/rays/band/state/memory/snap/mktband — 매니페스트 ①~⑧)
   //   handle.applyLive(p, ctx) — status 페이로드 1건 반영 (②③④⑤⑥⑦⑧)
   //   handle.applySeed(ctx)    — 시딩 완료 후 ctx 캐시에서 전체 복원
   //   handle.clear()           — 모든 레이어 제거
+  //   handle.destroy()         — 시리즈/프리미티브를 차트에서 분리 (지표 해제 시)
   // 공유 ctx (app.js 제공): { bars, barInd, barSeq, barPos, tickRaw(), sameSession, recentBars }.
   // barInd 엔트리는 barIndFromInd/barIndFromPayload에 더해 app.js가 심는
   // score/pred/resid/pvol(③① 복원용)과 memItem/pstItem(⑥⑦ 봉별 아이템)을 쓴다.
+  // ⑥⑦ 아이템은 app.js applyStatus가 렌더러 on/off와 무관하게 기록한다.
   const MiraeRenderer = {
     id: "mirae_v16",
     createHandle(chart, candleSeries) {
+      // 레이어 표시 상태 — 매니페스트 defaultOn과 동일한 기본값 (⑧만 숨김)
+      const layers = { score: true, reg: true, rays: true, band: true,
+                       state: true, memory: true, snap: true, mktband: false };
       // ② 회귀선 + ⑤ 매매 상태 덧선: 한 커스텀 시리즈가 2패스로 그린다
-      const regLineSeries = chart.addCustomSeries(createRegLinePaneView(), {});
+      const regLineSeries = chart.addCustomSeries(createRegLinePaneView(layers), {});
       // ① 통합 점수 막대: 아래 보조 칸의 0 기준 세로 색 막대
       const scoreSeries = chart.addCustomSeries(createScoreBarPaneView(), { priceScaleId: "score" });
       chart.priceScale("score").applyOptions({ scaleMargins: { top: 0.84, bottom: 0.02 } });
@@ -408,15 +449,13 @@ const MiraeLayers = (() => {
 
       let ctx = null;        // 마지막 applyLive/applySeed의 ctx — setLayers 재구축에 사용
       let lastMktCenter = NaN; // ⑧ 마켓중심기울기 = 중심 − 이전중심
-      const layers = { band: true, mktband: false }; // ④ 기본 켜짐, ⑧ 기본 숨김 (원본 입력 기본값)
 
       // ④ 결과 띠 다시 그리기 — 토글·시딩 시 barInd 캐시에서 전체 복원/제거
       function rebuildBand() {
-        if (!layers.band) {
+        if (!layers.band || !ctx) {
           bandSeries.setData([]);
           return;
         }
-        if (!ctx) return;
         const data = [];
         const tick = ctx.tickRaw();
         for (let i = 0; i < ctx.barSeq.length; i++) {
@@ -431,11 +470,10 @@ const MiraeLayers = (() => {
 
       // ⑧ 마켓 밴드 다시 그리기 — 토글·시딩 시 barInd 캐시에서 전체 복원/제거
       function rebuildMktBand() {
-        if (!layers.mktband) {
+        if (!layers.mktband || !ctx) {
           for (const s of [mktCenterSeries, mktU1, mktL1, mktU2, mktL2]) s.setData([]);
           return;
         }
-        if (!ctx) return;
         const cData = [], u1 = [], l1 = [], u2 = [], l2 = [];
         let prev = NaN;
         for (const t of ctx.barSeq) {
@@ -459,19 +497,75 @@ const MiraeLayers = (() => {
         mktL2.setData(l2);
       }
 
+      // ③ 미래 목표 광선: 마지막 봉의 값으로 복원한다
+      function rebuildRays() {
+        if (!layers.rays || !ctx) {
+          futureRays.clear();
+          return;
+        }
+        const lastT = ctx.barSeq[ctx.barSeq.length - 1];
+        const last = lastT === undefined ? undefined : ctx.barInd.get(lastT);
+        if (last && last.regValid && Array.isArray(last.pred)
+            && last.pred.length === 3 && last.pred.every(Number.isFinite)) {
+          futureRays.set({
+            time: lastT,
+            prevTime: ctx.barSeq.length > 1 ? ctx.barSeq[ctx.barSeq.length - 2] : lastT - 60,
+            pred: last.pred, predDir: last.predDir, r2: last.r2,
+            resid: last.resid, pvol: last.pvol,
+          });
+        } else {
+          futureRays.clear();
+        }
+      }
+
+      // ①②⑤⑥⑦ 다시 그리기 — 레이어 칩 상태대로 캐시에서 전체 복원/제거
+      function rebuildCore() {
+        const regData = [];
+        const scoreData = [];
+        const memData = [];
+        const pstData = [];
+        if (ctx) {
+          for (const t of ctx.barSeq) {
+            const ind = ctx.barInd.get(t);
+            if (!ind) continue;
+            if (layers.score && Number.isFinite(ind.score)) {
+              scoreData.push({ time: t, value: ind.score });
+            }
+            if ((layers.reg || layers.state) && ind.regValid && Number.isFinite(ind.regFlat)) {
+              regData.push({ time: t, value: ind.regFlat,
+                             score: Number.isFinite(ind.score) ? ind.score : 0, r2: ind.r2,
+                             finalState: ind.finalValid ? ind.finalState : 0 });
+            }
+            if (layers.memory && ind.memItem) memData.push(ind.memItem);
+            if (layers.snap && ind.pstItem) pstData.push(ind.pstItem);
+          }
+        }
+        regLineSeries.setData(regData);
+        scoreSeries.setData(scoreData);
+        memSeries.setData(memData);
+        pstSeries.setData(pstData);
+      }
+
+      function rebuildAll() {
+        rebuildCore();
+        rebuildBand();
+        rebuildMktBand();
+        rebuildRays();
+      }
+
       return {
         setLayers(map) {
-          if ("band" in map) {
-            layers.band = !!map.band;
-            rebuildBand();
+          let changed = false;
+          for (const k of Object.keys(layers)) {
+            if (k in map) {
+              layers[k] = !!map[k];
+              changed = true;
+            }
           }
-          if ("mktband" in map) {
-            layers.mktband = !!map.mktband;
-            rebuildMktBand();
-          }
+          if (changed) rebuildAll();
         },
 
-        // 라이브 status 1건 — app.js가 barInd/barPos를 먼저 채운 뒤 부른다
+        // 라이브 status 1건 — app.js가 barInd/barPos와 ⑥⑦ 아이템 캐시를 먼저 채운 뒤 부른다
         applyLive(p, c) {
           ctx = c;
           const t = Number(p.bar_open_time) / 1e6;
@@ -482,30 +576,34 @@ const MiraeLayers = (() => {
           const tick = c.tickRaw();
 
           // ② 회귀선 (reg_flat) + ⑤ 매매 상태 덧선. reg_valid==0이면 갭
-          if (ind.regValid && Number.isFinite(ind.regFlat)) {
-            regLineSeries.update({
-              time: t, value: ind.regFlat,
-              score: Number.isFinite(p.score) ? p.score : 0, r2: ind.r2,
-              finalState: ind.finalValid ? ind.finalState : 0,
-            });
-          } else {
-            regLineSeries.update({ time: t });
+          if (layers.reg || layers.state) {
+            if (ind.regValid && Number.isFinite(ind.regFlat)) {
+              regLineSeries.update({
+                time: t, value: ind.regFlat,
+                score: Number.isFinite(p.score) ? p.score : 0, r2: ind.r2,
+                finalState: ind.finalValid ? ind.finalState : 0,
+              });
+            } else {
+              regLineSeries.update({ time: t });
+            }
           }
 
           // ③ 미래 목표 광선: 매 봉 값이 바뀌면 광선이 새 값으로 이동한다 (이력 없음)
-          const preds = p.pred ?? [];
-          if (ind.regValid && preds.length === 3 && preds.every(Number.isFinite)) {
-            futureRays.set({
-              time: t, prevTime: pos > 0 ? c.barSeq[pos - 1] : t - 60,
-              pred: preds, predDir: ind.predDir, r2: ind.r2,
-              resid: p.resid ?? 0, pvol: p.pvol ?? 0,
-            });
-          } else {
-            futureRays.clear();
+          if (layers.rays) {
+            const preds = p.pred ?? [];
+            if (ind.regValid && preds.length === 3 && preds.every(Number.isFinite)) {
+              futureRays.set({
+                time: t, prevTime: pos > 0 ? c.barSeq[pos - 1] : t - 60,
+                pred: preds, predDir: ind.predDir, r2: ind.r2,
+                resid: p.resid ?? 0, pvol: p.pvol ?? 0,
+              });
+            } else {
+              futureRays.clear();
+            }
           }
 
           // ① 통합 점수 막대
-          if (typeof p.score === "number") {
+          if (layers.score && typeof p.score === "number") {
             scoreSeries.update({ time: t, value: p.score });
           }
 
@@ -536,86 +634,19 @@ const MiraeLayers = (() => {
             mktL2.update({ time: t });
           }
 
-          // ⑥ 방향 기억: [valid, updated, dir, price, t1..3, u1..3, l1..3]
-          // 세트 값은 확정 봉 사이 유지된다. 범위선은 갱신 봉에 숨기고, 이후엔 5봉 이탈 규칙을 적용한다.
-          if (Array.isArray(p.mem)) {
-            if (p.mem[0] === 1) {
-              const updated = p.mem[1] === 1;
-              const flags = updated ? { showU: false, showL: false }
-                : rangeFlags(c.recentBars(pos, 5), p.mem[6]);
-              const item = {
-                time: t, value: p.mem[5], dir: p.mem[2], price: p.mem[3],
-                t: p.mem.slice(4, 7), u: p.mem.slice(7, 10), l: p.mem.slice(10, 13),
-                showU: flags.showU, showL: flags.showL, upd: updated,
-              };
-              ind.memItem = item; // applySeed가 봉별 아이템을 그대로 복원할 수 있게 캐시에 심는다
-              memSeries.update(item);
-            } else {
-              ind.memItem = null;
-              memSeries.update({ time: t });
-            }
+          // ⑥⑦ 방향 기억·지속 사진: 봉별 아이템은 app.js가 캐시에 심는다. 여기서는 표시만.
+          if (layers.memory && Array.isArray(p.mem)) {
+            memSeries.update(ind.memItem ?? { time: t });
           }
-
-          // ⑦ 지속 사진: [saved, valid, dir, t1..3, u1..3, l1..3] — 저장 세트가 다음 저장까지 유지
-          if (Array.isArray(p.pst)) {
-            if (p.pst[1] === 1) {
-              const flags = rangeFlags(c.recentBars(pos, 5), p.pst[5]);
-              const item = {
-                time: t, value: p.pst[4], dir: p.pst[2],
-                t: p.pst.slice(3, 6), u: p.pst.slice(6, 9), l: p.pst.slice(9, 12),
-                showU: flags.showU, showL: flags.showL,
-              };
-              ind.pstItem = item;
-              pstSeries.update(item);
-            } else {
-              ind.pstItem = null;
-              pstSeries.update({ time: t });
-            }
+          if (layers.snap && Array.isArray(p.pst)) {
+            pstSeries.update(ind.pstItem ?? { time: t });
           }
         },
 
         // 시딩 완료 후 전체 복원 — ctx 캐시(barInd/barSeq)만으로 다시 그린다
         applySeed(c) {
           ctx = c;
-          const regData = [];
-          const scoreData = [];
-          const memData = [];
-          const pstData = [];
-          for (const t of c.barSeq) {
-            const ind = c.barInd.get(t);
-            if (!ind) continue;
-            if (Number.isFinite(ind.score)) {
-              scoreData.push({ time: t, value: ind.score });
-            }
-            if (ind.regValid && Number.isFinite(ind.regFlat)) {
-              regData.push({ time: t, value: ind.regFlat,
-                             score: Number.isFinite(ind.score) ? ind.score : 0, r2: ind.r2,
-                             finalState: ind.finalValid ? ind.finalState : 0 });
-            }
-            if (ind.memItem) memData.push(ind.memItem);
-            if (ind.pstItem) pstData.push(ind.pstItem);
-          }
-          regLineSeries.setData(regData);
-          scoreSeries.setData(scoreData);
-          memSeries.setData(memData);
-          pstSeries.setData(pstData);
-          rebuildBand();    // ④ 결과 띠 (레이어가 꺼져 있으면 제거)
-          rebuildMktBand(); // ⑧ 마켓 밴드 (레이어가 켜져 있으면 barInd 캐시에서 복원)
-
-          // ③ 미래 목표 광선: 마지막 봉의 값으로 복원한다
-          const lastT = c.barSeq[c.barSeq.length - 1];
-          const last = lastT === undefined ? undefined : c.barInd.get(lastT);
-          if (last && last.regValid && Array.isArray(last.pred)
-              && last.pred.length === 3 && last.pred.every(Number.isFinite)) {
-            futureRays.set({
-              time: lastT,
-              prevTime: c.barSeq.length > 1 ? c.barSeq[c.barSeq.length - 2] : lastT - 60,
-              pred: last.pred, predDir: last.predDir, r2: last.r2,
-              resid: last.resid, pvol: last.pvol,
-            });
-          } else {
-            futureRays.clear();
-          }
+          rebuildAll();
         },
 
         clear() {
@@ -624,6 +655,12 @@ const MiraeLayers = (() => {
           futureRays.clear();
           lastMktCenter = NaN;
         },
+
+        destroy() {
+          for (const s of [regLineSeries, scoreSeries, bandSeries, memSeries, pstSeries,
+                           mktCenterSeries, mktU1, mktL1, mktU2, mktL2]) chart.removeSeries(s);
+          candleSeries.detachPrimitive(futureRays);
+        },
       };
     },
   };
@@ -631,7 +668,7 @@ const MiraeLayers = (() => {
   return {
     SPANS, MIN_R2, HIGH_R2, bandOffset,
     scoreColor, regWidth, tradeStyle, bandColor, rangeFlags, mktStage, mktStageColor,
-    parseInd, barIndFromInd, barIndFromPayload,
+    parseInd, barIndFromInd, barIndFromPayload, memItemFromPayload, pstItemFromPayload,
     createRegLinePaneView, createScoreBarPaneView, createResultBandPaneView,
     createStepLinesPaneView, createMarketCenterPaneView, createFutureRaysPrimitive,
     MiraeRenderer,

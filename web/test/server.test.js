@@ -181,6 +181,33 @@ test("workspace save/load/list/delete with token", async () => {
   assert.equal(res.status, 404);
 });
 
+test("workspace v2는 schema_version 2를 그대로 보존한다", async () => {
+  const v2 = {
+    schema_version: 2,
+    current_symbol: "A016C000",
+    panels: [
+      { height: 0.6, indicators: [{ id: "mirae_v16", layers: { band: true, mktband: false } }] },
+      { height: 0.4, indicators: [{ id: "sma", layers: { sma5: true, sma20: true, sma60: false } }] },
+    ],
+  };
+  let res = await fetch(`${base}/api/workspaces/v2test`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify(v2),
+  });
+  assert.equal(res.status, 200);
+
+  res = await fetch(`${base}/api/workspaces/v2test`);
+  assert.equal(res.status, 200);
+  const loaded = await res.json();
+  assert.equal(loaded.schema_version, 2); // v1로 덮어쓰지 않는다
+  assert.equal(loaded.name, "v2test");
+  assert.equal(loaded.current_symbol, "A016C000");
+  assert.deepEqual(loaded.panels, v2.panels);
+
+  await fetch(`${base}/api/workspaces/v2test`, { method: "DELETE", headers: { "x-trader-token": AUTH_TOKEN } });
+});
+
 test("invalid workspace name rejected", async () => {
   const res = await fetch(`${base}/api/workspaces/..%2Fevil`, {
     method: "PUT",
