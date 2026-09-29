@@ -221,7 +221,9 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
 
 /* 파이프라인 목록 (다중 관측 준비 — pipes[0]은 init이 만드는 선택 종목).
  * add는 이미 있으면 그 파이프라인을 돌려주고, 가득 차면(NULL) 실패한다.
- * 저장소(봉 링·점수 중간값)는 호출자 소유로 init과 같은 규칙이다.
+ * 저장소(봉 링·점수 중간값)는 호출자 소유로 init과 같은 규칙·검증이다.
+ * 파이프라인 객체는 내장 슬롯에 고정된다: add가 돌려준 포인터는 그 파이프라인이
+ * remove되기 전까지 유효하며, remove는 pipes[] 순서를 보존한다(compact).
  * remove는 마지막 1개(파이프라인 0)는 제거하지 않고 false를 돌려준다. */
 tr_pipeline_t *tr_engine_pipe_find(tr_engine_t *e, uint64_t instrument_id);
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,

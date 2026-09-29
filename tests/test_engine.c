@@ -359,6 +359,77 @@ static void test_sma_payload(void) {
     TR_CHECK(strstr(cap.last, "\"sma\":[1,159,151.5,131.5]") != 0);
 }
 
+/* 다중 파이프라인 슬롯 재사용: 중간 파이프라인을 제거한 뒤 추가해도 살아있는
+ * 파이프라인의 저장소를 덮어쓰지 않아야 한다 (swap-remove 슬롯 별칭 회귀) */
+static void feed_pipe(tr_engine_t *e, uint64_t instrument_id, unsigned mi, unsigned s,
+                      tr_price_t price, uint64_t id) {
+    tr_event_envelope_t env;
+    memset(&env, 0, sizeof(env));
+    env.kind = TR_EVENT_TICK;
+    env.event_time_us = kst(9, mi, s);
+    env.received_time_us = env.event_time_us;
+    tr_tick_t tk;
+    memset(&tk, 0, sizeof(tk));
+    tk.instrument_id = instrument_id;
+    tk.price = price;
+    tk.qty = 10;
+    tk.source_exec_id = id;
+    tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+    TR_CHECK(tr_engine_on_tick(e, &env, &tk) != TR_BB_ERROR);
+}
+
+static void test_pipe_slot_reuse(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap);
+    static tr_candle_t bb_a[BB_CAP], bb_b[BB_CAP], bb_c[BB_CAP], bb_d[BB_CAP];
+    static double mid_a[32], mid_b[32], mid_c[32], mid_d[32];
+    tr_pipeline_t *pa = tr_engine_pipe_add(&e, 100, true, bb_a, BB_CAP, mid_a, 32);
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 200, true, bb_b, BB_CAP, mid_b, 32);
+    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 300, true, bb_c, BB_CAP, mid_c, 32);
+    TR_CHECK(pa != 0 && pb != 0 && pc != 0);
+    TR_CHECK(e.pipe_count == 4);
+    /* 저장소 인자 검증: NULL·용량 부족은 거부 */
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, 0, BB_CAP, mid_b, 32) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, bb_b, BB_CAP, mid_b, 4) == 0);
+    TR_CHECK(e.pipe_count == 4);
+
+    /* C에 먼저 상태를 쌓아 둔다 (OPEN 봉 1개) */
+    feed_pipe(&e, 300, 0, 0, 1000, 1);
+    TR_CHECK(tr_ring_count(&pc->bb.bars) == 1);
+
+    /* B를 제거하고 D를 추가해도 C의 저장소·포인터는 그대로여야 한다 */
+    TR_CHECK(tr_engine_pipe_remove(&e, 200));
+    TR_CHECK(e.pipe_count == 3);
+    TR_CHECK(tr_engine_pipe_find(&e, 200) == 0);
+    tr_pipeline_t *pd = tr_engine_pipe_add(&e, 400, true, bb_d, BB_CAP, mid_d, 32);
+    TR_CHECK(pd != 0);
+    TR_CHECK(e.pipe_count == 4);
+    /* D는 독립 저장소: 어느 활성 파이프라인과도 주소가 다르다 (on_timer 이중 호출 방지) */
+    TR_CHECK(pd != pa && pd != pc && pd != &e.pipe0);
+    TR_CHECK(e.pipes[0] == &e.pipe0);
+    TR_CHECK(e.pipes[1] == pa && e.pipes[2] == pc && e.pipes[3] == pd); /* 순서 보존 */
+    TR_CHECK(e.pipes[2] != e.pipes[3]);
+
+    /* C는 계속 정상 동작한다: 상태가 소멸하지 않았고 틱이 라우팅된다 */
+    TR_CHECK(tr_engine_pipe_find(&e, 300) == pc);
+    TR_CHECK(tr_ring_count(&pc->bb.bars) == 1);
+    feed_pipe(&e, 300, 0, 30, 1002, 2);
+    TR_CHECK(tr_ring_count(&pc->bb.bars) == 1); /* 같은 봉 갱신 */
+    /* D도 독립적으로 동작한다 */
+    feed_pipe(&e, 400, 1, 0, 2000, 3);
+    TR_CHECK(tr_ring_count(&pd->bb.bars) == 1);
+    TR_CHECK(tr_ring_count(&pc->bb.bars) == 1);
+    TR_CHECK(tr_ring_count(&pa->bb.bars) == 0);
+
+    /* 타이머는 각 파이프라인에 1회씩 전달된다: 세션 종료로 C·D의 봉이 각각 확정된다 */
+    tr_engine_on_timer(&e, kst(15, 30, 1));
+    TR_CHECK(!pc->bb.has_open);
+    TR_CHECK(!pd->bb.has_open);
+    TR_CHECK(tr_ring_count(&pc->bb.bars) == 1);
+    TR_CHECK(tr_ring_count(&pd->bb.bars) == 1);
+}
+
 int main(void) {
     test_replay_pipeline();
     test_session_first_reset();
@@ -367,5 +438,6 @@ int main(void) {
     test_status_ring_alignment();
     test_daily_chain();
     test_sma_payload();
+    test_pipe_slot_reuse();
     TR_TEST_SUMMARY();
 }

@@ -19,6 +19,10 @@ static double tick_scale(const tr_pipeline_t *p) {
 static bool pipe_init(tr_engine_t *e, tr_pipeline_t *p, const tr_engine_config_t *cfg,
                       tr_candle_t *bb_storage, size_t bb_capacity,
                       double *score_mid_storage, size_t score_mid_capacity) {
+    if (e == 0 || p == 0 || cfg == 0 || bb_storage == 0 || score_mid_storage == 0 ||
+        bb_capacity == 0 || score_mid_capacity < cfg->market_period) {
+        return false;
+    }
     memset(&p->bb, 0, sizeof(p->bb));
     p->engine = e;
     p->instrument_id = cfg->instrument_id;
@@ -120,6 +124,24 @@ tr_pipeline_t *tr_engine_pipe_find(tr_engine_t *e, uint64_t instrument_id) {
     return 0;
 }
 
+/* pipes[1..]가 참조하지 않는 첫 내장 슬롯을 찾는다 (remove로 빈 슬롯 재사용).
+ * 파이프라인 객체는 슬롯에 고정된다 — 반환된 tr_pipeline_t*는 remove되기 전까지 유효. */
+static tr_pipeline_t *pipe_free_slot(tr_engine_t *e) {
+    for (int s = 0; s < TR_ENGINE_MAX_PIPES - 1; s++) {
+        bool used = false;
+        for (int i = 1; i < e->pipe_count; i++) {
+            if (e->pipes[i] == &e->pipe_slots[s]) {
+                used = true;
+                break;
+            }
+        }
+        if (!used) {
+            return &e->pipe_slots[s];
+        }
+    }
+    return 0;
+}
+
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity) {
@@ -136,7 +158,10 @@ tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool i
     tr_engine_config_t cfg = e->cfg;
     cfg.instrument_id = instrument_id;
     cfg.is_futures = is_futures;
-    tr_pipeline_t *p = &e->pipe_slots[e->pipe_count - 1];
+    tr_pipeline_t *p = pipe_free_slot(e);
+    if (p == 0) {
+        return 0;
+    }
     if (!pipe_init(e, p, &cfg, bb_storage, bb_capacity, score_mid_storage, score_mid_capacity)) {
         return 0;
     }
@@ -151,8 +176,12 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
     }
     for (int i = 1; i < e->pipe_count; i++) {
         if (e->pipes[i]->instrument_id == instrument_id) {
-            /* swap-remove: pipes[] 순서는 유지 계약이 아니다 */
-            e->pipes[i] = e->pipes[e->pipe_count - 1];
+            /* compact: 뒤를 한 칸씩 당겨 pipes[] 순서를 보존한다. 파이프라인 객체는
+             * 이동하지 않으므로 다른 파이프라인의 포인터는 유효하다. 빈 슬롯은
+             * 다음 add의 pipe_free_slot이 재사용한다 */
+            for (int j = i; j + 1 < e->pipe_count; j++) {
+                e->pipes[j] = e->pipes[j + 1];
+            }
             e->pipe_count--;
             return true;
         }
@@ -588,6 +617,9 @@ void tr_engine_on_orderbook(tr_engine_t *e, int64_t event_time_us, double bids, 
 }
 
 bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures) {
+    /* 델타 기록: 파이프라인 분리 전에는 이 함수가 tr_engine_init을 경유해 status_seq가
+     * 1로 재시작했다. 이제 파이프라인 0만 재초기화하므로 스트림 시퀀스는 계속 증가한다
+     * — 구독자 입장에서 seq 역행이 없어 이 동작을 유지한다. */
     if (e == 0 || instrument_id == 0) {
         return false;
     }
