@@ -1,5 +1,6 @@
 // 대시보드 프론트엔드 (계획서 §18).
 // C가 계산한 값을 표시만 한다. 지표·점수를 재계산하지 않는다.
+// 보조지표 렌더링은 원본 YesLanguage V16의 Plot 시맨틱을 따른다 (mirae-layers.js).
 
 "use strict";
 
@@ -41,118 +42,72 @@ const candleSeries = chart.addCandlestickSeries({
   borderUpColor: "#ef5350", borderDownColor: "#2962ff",
   wickUpColor: "#ef5350", wickDownColor: "#2962ff",
 });
-const regUp = chart.addLineSeries({ color: "#c2452d", lineWidth: 2, priceLineVisible: false });
-const regFlat = chart.addLineSeries({ color: "#9aa3ae", lineWidth: 2, priceLineVisible: false });
-const regDn = chart.addLineSeries({ color: "#2d5a80", lineWidth: 2, priceLineVisible: false });
-// 예측은 원본처럼 지평(5/10/15봉)별 3개 트랙으로 분리한다 — 하나로 합치면 지그재그로 보인다
-const predStyles = [
-  { color: "#26a69a", lineStyle: LightweightCharts.LineStyle.Dashed },
-  { color: "#4db6ac", lineStyle: LightweightCharts.LineStyle.Dotted },
-  { color: "#80cbc4", lineStyle: LightweightCharts.LineStyle.SparseDotted },
-];
-const predSeries = predStyles.map((s) =>
-  chart.addLineSeries({ color: s.color, lineWidth: 1, lineStyle: s.lineStyle, priceLineVisible: false }));
-// ① 통합 점수 막대: 아래 보조 칸의 세로 색 막대 (진한 빨강/파랑 = 강, 회색 = 관망)
-const scoreSeries = chart.addHistogramSeries({ priceScaleId: "score", priceLineVisible: false, lastValueVisible: false });
+
+// ---- 보조지표 레이어 (원본 V16 Plot 시맨틱 — mirae-layers.js) ----
+// ② 회귀선 + ⑤ 매매 상태 덧선: 한 커스텀 시리즈가 2패스로 그린다
+const regLineSeries = chart.addCustomSeries(MiraeLayers.createRegLinePaneView(), {});
+// ① 통합 점수 막대: 아래 보조 칸의 0 기준 세로 색 막대
+const scoreSeries = chart.addCustomSeries(MiraeLayers.createScoreBarPaneView(), { priceScaleId: "score" });
 chart.priceScale("score").applyOptions({ scaleMargins: { top: 0.84, bottom: 0.02 } });
-// ③ 미래 목표선: 기준 봉에서 미래로 뻗는 부채꼴 — 목표 3선(실선) + 오차 띠 상·하(점선)
-const fanMid = predStyles.map((s) =>
-  chart.addLineSeries({ color: s.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }));
-const fanHi = chart.addLineSeries({ color: "#7d8590", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
-const fanLo = chart.addLineSeries({ color: "#7d8590", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
-// ⑧ 마켓 밴드: 당일 VWAP 중심 + 표준편차 밴드 2쌍 (원본 Plot51~55)
-const mktCenter = chart.addLineSeries({ color: "#b07d28", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-const mktU1 = chart.addLineSeries({ color: "#d9b26a", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-const mktL1 = chart.addLineSeries({ color: "#d9b26a", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-const mktU2 = chart.addLineSeries({ color: "#d9b26a", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
-const mktL2 = chart.addLineSeries({ color: "#d9b26a", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false });
-// ⑥ 방향 기억: 방향 확정 시점의 가격·목표 3선(굵은 수평선) + 범위 6선(점선). 새 확정 전까지 유지
-const memPrice = chart.addLineSeries({ color: "#c2452d", lineWidth: 3, priceLineVisible: false, lastValueVisible: false });
-const memTarget = [0, 1, 2].map(() => chart.addLineSeries({ color: "#c2452d", lineWidth: 2, priceLineVisible: false, lastValueVisible: false }));
-const memUpper = [0, 1, 2].map(() => chart.addLineSeries({ color: "#9aa3ae", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }));
-const memLower = [0, 1, 2].map(() => chart.addLineSeries({ color: "#9aa3ae", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }));
-// ⑦ 지속 사진: 시험 통과 순간의 목표 3선(가는 수평선) + 범위 6선 — 지난 사진도 모두 유지
-const pstT = [0, 1, 2].map(() => chart.addLineSeries({ color: "#6b7280", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }));
-const pstU = [0, 1, 2].map(() => chart.addLineSeries({ color: "#9aa3ae", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }));
-const pstL = [0, 1, 2].map(() => chart.addLineSeries({ color: "#9aa3ae", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }));
+// ④ 과거 채점 결과 띠: 회귀선 바로 아래 가로선
+const bandSeries = chart.addCustomSeries(MiraeLayers.createResultBandPaneView(), {});
+// ⑥⑦ 방향 기억·지속 사진: 수평 계단선. 오래된 선은 현재 가격과 멀 수 있어 자동 스케일에서 제외
+const memSeries = chart.addCustomSeries(MiraeLayers.createStepLinesPaneView("mem"), { autoscaleInfoProvider: () => null });
+const pstSeries = chart.addCustomSeries(MiraeLayers.createStepLinesPaneView("pst"), { autoscaleInfoProvider: () => null });
+// ⑧ 마켓 밴드: 중심선(단계색)은 커스텀, 밴드 4선은 고정색 라인 (원본 Plot52~55)
+const mktCenterSeries = chart.addCustomSeries(MiraeLayers.createMarketCenterPaneView(), {});
+const mktU1 = chart.addLineSeries({ color: "rgb(255,120,120)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+const mktL1 = chart.addLineSeries({ color: "rgb(120,150,255)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+const mktU2 = chart.addLineSeries({ color: "rgb(255,0,0)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+const mktL2 = chart.addLineSeries({ color: "rgb(0,0,255)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+// ③ 미래 목표 광선: 마지막 봉 기준 수평 광선 9개 (목표 3 + 범위 6)
+const futureRays = MiraeLayers.createFutureRaysPrimitive();
+candleSeries.attachPrimitive(futureRays);
 
-// ⑥⑦의 오래된 수평선은 현재 가격과 멀 수 있어 자동 스케일에서 제외한다
-// (제외하지 않으면 주간 고가 사진 한 장이 차트 전체를 눌러버린다)
-for (const s of [memPrice, ...memTarget, ...memUpper, ...memLower, ...pstT, ...pstU, ...pstL]) {
-  s.applyOptions({ autoscaleInfoProvider: () => null });
-}
+// 봉별 지표 캐시: ④ 결과 띠의 10봉 전 조회 등에 쓴다 (시딩·라이브 공통)
+const barInd = new Map(); // time → { predDir[3], regValid, r2, regFlat, finalValid, finalState }
+const barSeq = [];        // 시각 오름차순 목록
+const barPos = new Map(); // time → barSeq 인덱스
+let lastMktCenter = NaN;  // ⑧ 마켓중심기울기 = 중심 − 이전중심
 
-const SPANS = [5, 10, 15];
-function scoreBarColor(v) {
-  if (v >= 4) return "#c2452d";
-  if (v >= 2) return "#d98a7a";
-  if (v >= 1) return "#e6c3ba";
-  if (v <= -4) return "#2d5a80";
-  if (v <= -2) return "#6c93b5";
-  if (v <= -1) return "#a9c3d8";
-  return "#9aa3ae";
-}
-function regSeriesFor(score) {
-  return score > 0 ? regUp : score < 0 ? regDn : regFlat;
-}
-function clearIndicatorSeries() {
-  for (const s of [regUp, regFlat, regDn, fanHi, fanLo, scoreSeries, mktCenter, mktU1, mktL1, mktU2, mktL2,
-                   memPrice, ...predSeries, ...fanMid, ...memTarget, ...memUpper, ...memLower,
-                   ...pstT, ...pstU, ...pstL]) s.setData([]);
-}
-
-// ⑥ 방향 기억 세트: 확정 시점부터 현재까지 이어지는 수평선들. 새 확정이 오면 교체한다.
-let memSet = null; // { time, dir, price, target[3], upper[3], lower[3], showT, showU, showL }
-function applyMemSet(nowT) {
-  if (!memSet) {
-    for (const s of [memPrice, ...memTarget, ...memUpper, ...memLower]) s.setData([]);
+function noteBar(t, bar) {
+  bars.set(t, bar);
+  if (barPos.has(t)) return;
+  // 라이브는 대부분 뒤에 붙는다. 늦은 정정 등 순서 역행만 이진 삽입으로 처리한다.
+  if (barSeq.length === 0 || t > barSeq[barSeq.length - 1]) {
+    barPos.set(t, barSeq.length);
+    barSeq.push(t);
     return;
   }
-  const color = memSet.dir > 0 ? "#c2452d" : "#2d5a80";
-  memPrice.applyOptions({ color });
-  memPrice.setData([{ time: memSet.time, value: memSet.price }, { time: nowT, value: memSet.price }]);
-  for (let i = 0; i < 3; i++) {
-    memTarget[i].applyOptions({ color });
-    memTarget[i].setData(memSet.showT
-      ? [{ time: memSet.time, value: memSet.target[i] }, { time: nowT, value: memSet.target[i] }]
-      : []);
-    memUpper[i].setData(memSet.showU
-      ? [{ time: memSet.time, value: memSet.upper[i] }, { time: nowT, value: memSet.upper[i] }]
-      : []);
-    memLower[i].setData(memSet.showL
-      ? [{ time: memSet.time, value: memSet.lower[i] }, { time: nowT, value: memSet.lower[i] }]
-      : []);
+  let lo = 0, hi = barSeq.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (barSeq[mid] < t) lo = mid + 1; else hi = mid;
   }
+  barSeq.splice(lo, 0, t);
+  for (let i = lo; i < barSeq.length; i++) barPos.set(barSeq[i], i);
+}
+// barSeq[pos]까지 최근 n개 봉 (오름차순) — ⑥⑦ 5봉 규칙에 사용
+function recentBars(pos, n) {
+  const out = [];
+  if (pos === undefined) return out;
+  for (let i = Math.max(0, pos - n + 1); i <= pos; i++) {
+    const b = bars.get(barSeq[i]);
+    if (b) out.push(b);
+  }
+  return out;
 }
 
-// ⑦ 지속 사진: 저장된 촬영의 목표선을 시각 오름차순 폴리라인으로 그린다.
-// (구간별 흰줄 끊기는 setData의 시간 오름차순·중복 불가 제약에 걸리므로 연결선 방식)
-const pstPhotos = []; // { time, dir, target[3], upper[3], lower[3] }
-function rebuildPhotos(nowT) {
-  const tracks = [[], [], []];
-  const ups = [[], [], []];
-  const lows = [[], [], []];
-  const sorted = [...pstPhotos].sort((a, b) => a.time - b.time);
-  for (const ph of sorted) {
-    for (let i = 0; i < 3; i++) {
-      tracks[i].push({ time: ph.time, value: ph.target[i] });
-      ups[i].push({ time: ph.time, value: ph.upper[i] });
-      lows[i].push({ time: ph.time, value: ph.lower[i] });
-    }
-  }
-  if (sorted.length > 0) {
-    const last = sorted[sorted.length - 1];
-    for (let i = 0; i < 3; i++) {
-      tracks[i].push({ time: nowT, value: last.target[i] });
-      ups[i].push({ time: nowT, value: last.upper[i] });
-      lows[i].push({ time: nowT, value: last.lower[i] });
-    }
-  }
-  for (let i = 0; i < 3; i++) {
-    pstT[i].setData(tracks[i]);
-    pstU[i].setData(ups[i]);
-    pstL[i].setData(lows[i]);
-  }
+function resetIndicators() {
+  bars.clear();
+  barInd.clear();
+  barSeq.length = 0;
+  barPos.clear();
+  lastMktCenter = NaN;
+  candleSeries.setData([]);
+  for (const s of [regLineSeries, scoreSeries, bandSeries, memSeries, pstSeries,
+                   mktCenterSeries, mktU1, mktL1, mktU2, mktL2]) s.setData([]);
+  futureRays.clear();
 }
 
 const el = {
@@ -161,63 +116,26 @@ const el = {
   reg: document.getElementById("reg"),
   pred: document.getElementById("pred"),
   ob: document.getElementById("ob"),
+  final: document.getElementById("final"),
   wsName: document.getElementById("ws-name"),
 };
 
-function scoreColor(v) {
+function scoreTextColor(v) {
   if (v > 0) return "#ef5350";
   if (v < 0) return "#2962ff";
   return "#7d8590";
 }
 
-// ③ 미래 목표선(부채꼴) 갱신: 기준 봉 (t, regLine)에서 목표 3선과 오차 띠를 미래로 그린다.
-// 오차 띠 = max(잔차, 변동성×0.25) × √지평 (원본 MTF기준오차·MTF범위)
-function updateFan(t, regLine, preds, resid, pvol) {
-  const base = Math.max(Math.abs(resid), Math.abs(pvol) * 0.25);
-  const hi = [{ time: t, value: regLine }];
-  const lo = [{ time: t, value: regLine }];
-  for (let i = 0; i < 3; i++) {
-    const ft = t + SPANS[i] * 60;
-    const band = base * Math.sqrt(SPANS[i]);
-    fanMid[i].setData([{ time: t, value: regLine }, { time: ft, value: preds[i] }]);
-    hi.push({ time: ft, value: preds[i] + band });
-    lo.push({ time: ft, value: preds[i] - band });
+// ⑤ 매매 상태 배지 (운영최종상태 −2..+2)
+function updateFinalBadge(valid, state) {
+  if (!valid) {
+    el.final.textContent = "상태: 워밍업";
+    el.final.style.color = "";
+    return;
   }
-  fanHi.setData(hi);
-  fanLo.setData(lo);
-}
-function clearFan() {
-  for (const s of [...fanMid, fanHi, fanLo]) s.setData([]);
-}
-
-// ④ 과거 채점: 지난 예측방향과 실제 움직임 방향을 비교해 목표 봉에 ●/○를 찍는다
-let gradeMarkers = [];
-const barInd = new Map(); // time → { pred_dir, reg_valid } (시딩·라이브 공통)
-function addGradeMarker(t) {
-  let hits = 0, dirSum = 0, evaluated = 0;
-  for (let i = 0; i < 3; i++) {
-    const src = barInd.get(t - SPANS[i] * 60);
-    const dst = bars.get(t);
-    const srcBar = bars.get(t - SPANS[i] * 60);
-    if (!src?.reg_valid || !dst || !srcBar) continue;
-    const d = src.pred_dir[i];
-    if (d === 0) continue;
-    const actual = Math.sign(dst.close - srcBar.close);
-    evaluated++;
-    if (d === actual) { hits++; dirSum += d; }
-  }
-  if (evaluated === 0) return;
-  const hit = hits * 2 > evaluated; /* 과반 적중 */
-  const up = dirSum > 0;
-  gradeMarkers.push({
-    time: t,
-    position: up ? "aboveBar" : "belowBar",
-    color: hit ? (up ? "#c2452d" : "#2d5a80") : "#9aa3ae",
-    shape: "circle",
-    text: hit ? "●" : "○",
-  });
-  gradeMarkers.sort((a, b) => a.time - b.time);
-  candleSeries.setMarkers(gradeMarkers);
+  el.final.textContent = state >= 2 ? "매수강" : state === 1 ? "매수"
+    : state <= -2 ? "매도강" : state === -1 ? "매도" : "관망";
+  el.final.style.color = state >= 1 ? "#ef5350" : state <= -1 ? "#6aa9ff" : "#7d8590";
 }
 
 function applyStatus(msg) {
@@ -225,85 +143,110 @@ function applyStatus(msg) {
   // 세대 확인: 종목 전환 이후 새 세대가 오면 로컬 이력을 지우고 다시 쌓는다 (혼합 방지, 계획서 §18)
   if (typeof p.generation === "number" && p.generation > generation) {
     generation = p.generation;
-    bars.clear();
-    barInd.clear();
-    gradeMarkers = [];
-    memSet = null;
-    pstPhotos.length = 0;
-    candleSeries.setData([]);
-    clearIndicatorSeries();
+    resetIndicators();
   }
   const t = Number(p.bar_open_time) / 1e6;
   if (!Number.isFinite(t) || t <= 0) return;
 
   const [o, h, l, c] = p.ohlc ?? [];
   if (o != null) {
-    const bar = { time: t, open: o, high: h, low: l, close: c };
-    const prev = bars.get(t);
-    bars.set(t, bar);
-    candleSeries.update(bar);
-    // 진행/확정 구분: 확정 봉만 회귀선을 찍는다 (과거 불변성)
-    if (p.closed) bars.set(t, bar);
-    void prev;
+    noteBar(t, { time: t, open: o, high: h, low: l, close: c });
+    candleSeries.update(bars.get(t));
   }
-  if (Array.isArray(p.pred_dir)) {
-    barInd.set(t, { pred_dir: p.pred_dir, reg_valid: p.reg_valid === 1 });
-  }
+  const pos = barPos.get(t);
+  const ind = MiraeLayers.barIndFromPayload(p);
+  barInd.set(t, ind);
 
-  if (p.reg_valid === 1 && Number.isFinite(p.reg_line)) {
-    // ② 회귀선: 색은 그 시점 통합 점수의 색 (빨강=매수 우세, 파랑=매도 우세)
-    regSeriesFor(p.score ?? 0).update({ time: t, value: p.reg_line });
-    el.reg.textContent = `회귀선 ${p.reg_line.toFixed(1)} (R² ${p.reg_r2.toFixed(2)})`;
+  // ② 회귀선 (reg_flat) + ⑤ 매매 상태 덧선. reg_valid==0이면 갭
+  if (ind.regValid && Number.isFinite(ind.regFlat)) {
+    regLineSeries.update({
+      time: t, value: ind.regFlat,
+      score: Number.isFinite(p.score) ? p.score : 0, r2: ind.r2,
+      finalState: ind.finalValid ? ind.finalState : 0,
+    });
+    el.reg.textContent = `회귀선 ${p.reg_line.toFixed(1)} (R² ${ind.r2.toFixed(2)})`;
     el.reg.className = "badge ok";
   } else {
+    regLineSeries.update({ time: t });
     el.reg.textContent = "회귀: 워밍업";
     el.reg.className = "badge";
-    clearFan();
   }
 
-  // 예측: 생성 시점 기준 n봉 앞 위치에 표시한다. 미래 가격 데이터가 있는 것처럼 연결하지 않는다.
-  // 지평(5/10/15봉)별로 원본처럼 별개 트랙에 찍는다.
+  // ③ 미래 목표 광선: 매 봉 값이 바뀌면 광선이 새 값으로 이동한다 (이력 없음)
   const preds = p.pred ?? [];
-  if (p.reg_valid === 1 && preds.length === 3) {
-    for (let i = 0; i < 3; i++) {
-      predSeries[i].update({ time: t + SPANS[i] * 60, value: preds[i] });
-    }
+  if (ind.regValid && preds.length === 3 && preds.every(Number.isFinite)) {
+    futureRays.set({
+      time: t, prevTime: pos > 0 ? barSeq[pos - 1] : t - 60,
+      pred: preds, predDir: ind.predDir, r2: ind.r2,
+      resid: p.resid ?? 0, pvol: p.pvol ?? 0,
+    });
     el.pred.textContent = `예측 ${preds.map((v) => v.toFixed(1)).join(" / ")}`;
-    updateFan(t, p.reg_line, preds, p.resid ?? 0, p.pvol ?? 0);
+  } else {
+    futureRays.clear();
   }
 
+  // ① 통합 점수 막대
   if (typeof p.score === "number") {
     el.score.textContent = String(p.score);
-    el.score.style.color = scoreColor(p.score);
-    scoreSeries.update({ time: t, value: p.score, color: scoreBarColor(p.score) });
+    el.score.style.color = scoreTextColor(p.score);
+    scoreSeries.update({ time: t, value: p.score });
   }
 
-  if (p.closed) addGradeMarker(t);
+  // ④ 과거 채점 결과 띠: reg_flat − tick×4, 색은 10봉 전 예측방향2·신뢰도 기준
+  if (Number.isFinite(ind.regFlat)) {
+    const src = pos !== undefined && pos >= 10 ? barInd.get(barSeq[pos - 10]) : undefined;
+    bandSeries.update({ time: t, value: ind.regFlat - MiraeLayers.BAND_OFFSET, c: MiraeLayers.bandColor(src) });
+  }
 
   // ⑧ 마켓 밴드: [valid, center, u1, l1, u2, l2]
   if (Array.isArray(p.mkt) && p.mkt[0] === 1) {
-    mktCenter.update({ time: t, value: p.mkt[1] });
-    mktU1.update({ time: t, value: p.mkt[2] });
-    mktL1.update({ time: t, value: p.mkt[3] });
-    mktU2.update({ time: t, value: p.mkt[4] });
-    mktL2.update({ time: t, value: p.mkt[5] });
+    const [, center, u1, l1, u2, l2] = p.mkt;
+    mktCenterSeries.update({ time: t, value: center, stage: MiraeLayers.mktStage(lastMktCenter, center, c, ind.regFlat, u1) });
+    lastMktCenter = center;
+    mktU1.update({ time: t, value: u1 });
+    mktL1.update({ time: t, value: l1 });
+    mktU2.update({ time: t, value: u2 });
+    mktL2.update({ time: t, value: l2 });
+  } else {
+    mktCenterSeries.update({ time: t });
+    mktU1.update({ time: t });
+    mktL1.update({ time: t });
+    mktU2.update({ time: t });
+    mktL2.update({ time: t });
   }
 
-  // ⑥ 방향 기억: [valid, updated, dir, price, t1..3, u1..3, l1..3] — 갱신 봉에 새 세트
-  if (Array.isArray(p.mem) && p.mem[1] === 1) {
-    memSet = p.mem[0] === 1
-      ? { time: t, dir: p.mem[2], price: p.mem[3], target: p.mem.slice(4, 7), upper: p.mem.slice(7, 10),
-          lower: p.mem.slice(10, 13), showT: true, showU: true, showL: true }
-      : null;
+  // ⑥ 방향 기억: [valid, updated, dir, price, t1..3, u1..3, l1..3]
+  // 세트 값은 확정 봉 사이 유지된다. 범위선은 갱신 봉에 숨기고, 이후엔 5봉 이탈 규칙을 적용한다.
+  if (Array.isArray(p.mem)) {
+    if (p.mem[0] === 1) {
+      const updated = p.mem[1] === 1;
+      const flags = updated ? { showU: false, showL: false }
+        : MiraeLayers.rangeFlags(recentBars(pos, 5), p.mem[6]);
+      memSeries.update({
+        time: t, value: p.mem[5], dir: p.mem[2], price: p.mem[3],
+        t: p.mem.slice(4, 7), u: p.mem.slice(7, 10), l: p.mem.slice(10, 13),
+        showU: flags.showU, showL: flags.showL, upd: updated,
+      });
+    } else {
+      memSeries.update({ time: t });
+    }
   }
-  applyMemSet(t); // 현재 세트를 새 봉 시각까지 연장 (없으면 지움)
 
-  // ⑦ 지속 사진: [saved, valid, dir, t1..3, u1..3, l1..3] — 저장 봉에 촬영 추가
-  if (Array.isArray(p.pst) && p.pst[0] === 1 && p.pst[1] === 1) {
-    pstPhotos.push({ time: t, dir: p.pst[2], target: p.pst.slice(3, 6), upper: p.pst.slice(6, 9),
-                     lower: p.pst.slice(9, 12) });
-    rebuildPhotos(t);
+  // ⑦ 지속 사진: [saved, valid, dir, t1..3, u1..3, l1..3] — 저장 세트가 다음 저장까지 유지
+  if (Array.isArray(p.pst)) {
+    if (p.pst[1] === 1) {
+      const flags = MiraeLayers.rangeFlags(recentBars(pos, 5), p.pst[5]);
+      pstSeries.update({
+        time: t, value: p.pst[4], dir: p.pst[2],
+        t: p.pst.slice(3, 6), u: p.pst.slice(6, 9), l: p.pst.slice(9, 12),
+        showU: flags.showU, showL: flags.showL,
+      });
+    } else {
+      pstSeries.update({ time: t });
+    }
   }
+
+  updateFinalBadge(ind.finalValid, ind.finalState);
 
   if (p.ob_valid === 1 && typeof p.ob_score === "number") {
     el.ob.textContent = `호가 ${p.ob_score.toFixed(1)}`;
@@ -312,6 +255,55 @@ function applyStatus(msg) {
     el.ob.textContent = "호가: 미지원";
     el.ob.className = "badge";
   }
+}
+
+// ⑥ 이벤트([time, valid, dir, price, t1..3, u1..3, l1..3, ...])로 봉별 수평 세그먼트 복원
+function buildMemItems(dedup, events) {
+  const sorted = events
+    .map((e) => ({ time: Number(e[0]) / 1e6, valid: e[1] === 1, dir: e[2], price: e[3],
+                    t: e.slice(4, 7), u: e.slice(7, 10), l: e.slice(10, 13) }))
+    .filter((e) => Number.isFinite(e.time))
+    .sort((a, b) => a.time - b.time);
+  const items = [];
+  let ei = -1;
+  for (let i = 0; i < dedup.length; i++) {
+    const t = dedup[i].time;
+    while (ei + 1 < sorted.length && sorted[ei + 1].time <= t) ei++;
+    if (ei < 0 || !sorted[ei].valid) continue;
+    const ev = sorted[ei];
+    const upd = ev.time === t; // 갱신 봉에는 범위선 숨김
+    const flags = upd ? { showU: false, showL: false }
+      : MiraeLayers.rangeFlags(recentFromRows(dedup, i, 5), ev.t[2]);
+    items.push({ time: t, value: ev.t[1], dir: ev.dir, price: ev.price,
+                 t: ev.t, u: ev.u, l: ev.l, showU: flags.showU, showL: flags.showL, upd });
+  }
+  return items;
+}
+
+// ⑦ 이벤트([time, valid, dir, t1..3, u1..3, l1..3])로 봉별 수평 세그먼트 복원
+function buildPstItems(dedup, events) {
+  const sorted = events
+    .map((e) => ({ time: Number(e[0]) / 1e6, valid: e[1] === 1, dir: e[2],
+                    t: e.slice(3, 6), u: e.slice(6, 9), l: e.slice(9, 12) }))
+    .filter((e) => Number.isFinite(e.time))
+    .sort((a, b) => a.time - b.time);
+  const items = [];
+  let ei = -1;
+  for (let i = 0; i < dedup.length; i++) {
+    const t = dedup[i].time;
+    while (ei + 1 < sorted.length && sorted[ei + 1].time <= t) ei++;
+    if (ei < 0 || !sorted[ei].valid) continue;
+    const ev = sorted[ei];
+    const flags = MiraeLayers.rangeFlags(recentFromRows(dedup, i, 5), ev.t[2]);
+    items.push({ time: t, value: ev.t[1], dir: ev.dir,
+                 t: ev.t, u: ev.u, l: ev.l, showU: flags.showU, showL: flags.showL });
+  }
+  return items;
+}
+
+// 시딩용: dedup 행 기준 최근 n개 (오름차순)
+function recentFromRows(rows, i, n) {
+  return rows.slice(Math.max(0, i - n + 1), i + 1);
 }
 
 // 과거 봉 시딩: PUB/SUB는 과거 메시지를 보존하지 않으므로 접속 시 스냅샷을 가져온다.
@@ -345,101 +337,81 @@ async function seedChart() {
     if (all.length === 0) return;
     all.sort((a, b) => a.time - b.time);
     const dedup = all.filter((b, i) => i === 0 || b.time !== all[i - 1].time);
-    bars.clear();
-    barInd.clear();
-    for (const b of dedup) bars.set(b.time, b);
+    resetIndicators();
+    for (const b of dedup) noteBar(b.time, b);
     candleSeries.setData(dedup);
 
     // 봉별 지표 복원: 스냅샷의 ind 배열로 과거 구간의 보조지표를 다시 그린다
-    const regBySign = { up: [], flat: [], dn: [] };
-    const predTracks = [[], [], []]; // 지평(5/10/15봉)별 트랙 — 원본의 3개 분리 표시
+    const regData = [];
     const scoreData = [];
-    const mktData = { c: [], u1: [], l1: [], u2: [], l2: [] };
-    for (const b of dedup) {
-      const ind = b.ind;
-      if (!ind) continue;
-      barInd.set(b.time, { pred_dir: [ind[12], ind[13], ind[14]], reg_valid: ind[1] === 1 });
-      if (typeof ind[7] === "number") {
-        scoreData.push({ time: b.time, value: ind[7], color: scoreBarColor(ind[7]) });
+    const bandData = [];
+    const mktC = [], mktU1d = [], mktL1d = [], mktU2d = [], mktL2d = [];
+    for (let i = 0; i < dedup.length; i++) {
+      const b = dedup[i];
+      const d = MiraeLayers.parseInd(b.ind);
+      if (!d) continue;
+      barInd.set(b.time, MiraeLayers.barIndFromInd(d));
+      if (Number.isFinite(d.score)) {
+        scoreData.push({ time: b.time, value: d.score });
       }
-      // ⑧ 마켓 밴드: [valid, center, u1, l1, u2, l2]
-      if (ind[15] === 1) {
-        mktData.c.push({ time: b.time, value: ind[16] });
-        mktData.u1.push({ time: b.time, value: ind[17] });
-        mktData.l1.push({ time: b.time, value: ind[18] });
-        mktData.u2.push({ time: b.time, value: ind[19] });
-        mktData.l2.push({ time: b.time, value: ind[20] });
+      if (d.regValid && Number.isFinite(d.regFlat)) {
+        regData.push({ time: b.time, value: d.regFlat,
+                       score: Number.isFinite(d.score) ? d.score : 0, r2: d.r2,
+                       finalState: d.finalValid ? d.finalState : 0 });
       }
-      if (ind[1] !== 1) continue;
-      if (Number.isFinite(ind[2])) {
-        const bucket = ind[7] > 0 ? "up" : ind[7] < 0 ? "dn" : "flat";
-        regBySign[bucket].push({ time: b.time, value: ind[2] });
+      if (Number.isFinite(d.regFlat)) {
+        const src = i >= 10 ? barInd.get(dedup[i - 10].time) : undefined;
+        bandData.push({ time: b.time, value: d.regFlat - MiraeLayers.BAND_OFFSET,
+                        c: MiraeLayers.bandColor(src) });
       }
-      for (let i = 0; i < 3; i++) {
-        if (Number.isFinite(ind[4 + i])) {
-          predTracks[i].push({ time: b.time + SPANS[i] * 60, value: ind[4 + i] });
+      // ⑧ 마켓 밴드
+      if (d.mktValid) {
+        const [center, u1, l1, u2, l2] = d.mkt;
+        mktC.push({ time: b.time, value: center,
+                    stage: MiraeLayers.mktStage(lastMktCenter, center, b.close, d.regFlat, u1) });
+        lastMktCenter = center;
+        mktU1d.push({ time: b.time, value: u1 });
+        mktL1d.push({ time: b.time, value: l1 });
+        mktU2d.push({ time: b.time, value: u2 });
+        mktL2d.push({ time: b.time, value: l2 });
+      }
+    }
+    regLineSeries.setData(regData);
+    scoreSeries.setData(scoreData);
+    bandSeries.setData(bandData);
+    mktCenterSeries.setData(mktC);
+    mktU1.setData(mktU1d);
+    mktL1.setData(mktL1d);
+    mktU2.setData(mktU2d);
+    mktL2.setData(mktL2d);
+
+    // ⑥⑦ 이벤트 복원: 세트가 다음 갱신/저장까지 유지되는 수평 계단선
+    memSeries.setData(buildMemItems(dedup, memEvents));
+    pstSeries.setData(buildPstItems(dedup, pstEvents));
+
+    // 마지막 봉의 값으로 배지·미래 목표 광선을 복원한다
+    const lastBar = dedup[dedup.length - 1];
+    const last = lastBar ? MiraeLayers.parseInd(lastBar.ind) : null;
+    if (last) {
+      el.score.textContent = String(last.score);
+      el.score.style.color = scoreTextColor(last.score);
+      updateFinalBadge(last.finalValid, last.finalState);
+      if (last.regValid) {
+        el.reg.textContent = `회귀선 ${last.regLine.toFixed(1)} (R² ${last.r2.toFixed(2)})`;
+        el.reg.className = "badge ok";
+        if (last.pred.every(Number.isFinite)) {
+          el.pred.textContent = `예측 ${last.pred.map((v) => v.toFixed(1)).join(" / ")}`;
+          futureRays.set({
+            time: lastBar.time,
+            prevTime: dedup.length > 1 ? dedup[dedup.length - 2].time : lastBar.time - 60,
+            pred: last.pred, predDir: last.predDir, r2: last.r2,
+            resid: last.resid, pvol: last.pvol,
+          });
         }
       }
-    }
-    regUp.setData(regBySign.up);
-    regFlat.setData(regBySign.flat);
-    regDn.setData(regBySign.dn);
-    scoreSeries.setData(scoreData);
-    mktCenter.setData(mktData.c);
-    mktU1.setData(mktData.u1);
-    mktL1.setData(mktData.l1);
-    mktU2.setData(mktData.u2);
-    mktL2.setData(mktData.l2);
-    // setData는 시간 오름차순·중복 불가 — 각 트랙을 정렬하고 같은 시각은 최신 봉의 값을 남긴다
-    for (let i = 0; i < 3; i++) {
-      const track = predTracks[i];
-      track.sort((a, b) => a.time - b.time);
-      const dedupT = track.filter((p, k) => k === track.length - 1 || p.time !== track[k + 1].time);
-      predSeries[i].setData(dedupT);
-    }
-
-    // ④ 과거 채점 복원: 각 봉에서 지난 예측방향과 실제 움직임을 비교한다
-    gradeMarkers = [];
-    for (const b of dedup) addGradeMarker(b.time);
-
-    // ⑥⑦ 이벤트 복원: ⑥은 마지막 확정 세트, ⑦은 누적 촬영 전부
-    const lastT = dedup[dedup.length - 1]?.time ?? 0;
-    memSet = null;
-    if (memEvents.length > 0) {
-      const e = memEvents[memEvents.length - 1];
-      // [time, valid, dir, price, t1..3, u1..3, l1..3, showT, showU, showL]
-      if (e[1] === 1) {
-        memSet = { time: Number(e[0]) / 1e6, dir: e[2], price: e[3], target: e.slice(4, 7),
-                   upper: e.slice(7, 10), lower: e.slice(10, 13),
-                   showT: e[13] === 1, showU: e[14] === 1, showL: e[15] === 1 };
-      }
-    }
-    applyMemSet(lastT);
-    pstPhotos.length = 0;
-    for (const e of pstEvents) {
-      // [time, valid, dir, t1..3, u1..3, l1..3]
-      if (e[1] === 1) {
-        pstPhotos.push({ time: Number(e[0]) / 1e6, dir: e[2], target: e.slice(3, 6),
-                         upper: e.slice(6, 9), lower: e.slice(9, 12) });
-      }
-    }
-    rebuildPhotos(lastT);
-
-    // 마지막 봉의 값으로 배지·미래 목표선(부채꼴)을 복원한다
-    const lastBar = dedup[dedup.length - 1];
-    const last = lastBar?.ind;
-    if (last) {
-      el.score.textContent = String(last[7]);
-      el.score.style.color = scoreColor(last[7]);
-      if (last[1] === 1) {
-        el.reg.textContent = `회귀선 ${last[2].toFixed(1)} (R² ${last[3].toFixed(2)})`;
-        el.reg.className = "badge ok";
-        el.pred.textContent = `예측 ${last[4].toFixed(1)} / ${last[5].toFixed(1)} / ${last[6].toFixed(1)}`;
-        updateFan(lastBar.time, last[2], [last[4], last[5], last[6]], last[10], last[11]);
-      }
-      if (last[8] === 1) {
-        el.ob.textContent = `호가 ${last[9].toFixed(1)}`;
-        el.ob.className = last[9] > 0 ? "badge ok" : "badge err";
+      if (last.obValid) {
+        el.ob.textContent = `호가 ${last.obScore.toFixed(1)}`;
+        el.ob.className = last.obScore > 0 ? "badge ok" : "badge err";
       }
     }
   } catch { /* 시딩 실패는 라이브 스트림으로 진행 */ }
@@ -462,13 +434,7 @@ function connect() {
     if (data.kind !== "status") return;
     if (data.stream_event === "restart" || data.stream_event === "gap") {
       // 엔진 재시작/순번 공백: 로컬 이력을 비우고 새 기준으로 쌓는다 (혼합 표시 방지)
-      bars.clear();
-      barInd.clear();
-      gradeMarkers = [];
-      memSet = null;
-      pstPhotos.length = 0;
-      candleSeries.setData([]);
-      clearIndicatorSeries();
+      resetIndicators();
       seedChart(); // 재시작한 엔진의 봉 링으로 다시 시딩
     }
     try {
@@ -572,13 +538,7 @@ async function switchSymbol() {
   if (data.payload?.generation) generation = data.payload.generation;
   if (data.payload?.name) symbolName.textContent = data.payload.name;
   hideSymbolResults();
-  bars.clear();
-  barInd.clear();
-  gradeMarkers = [];
-  memSet = null;
-  pstPhotos.length = 0;
-  candleSeries.setData([]);
-  clearIndicatorSeries();
+  resetIndicators();
   seedChart(); // 엔진이 새 종목을 백필해 두었으므로 스냅샷으로 채운다
 }
 
