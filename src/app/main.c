@@ -53,10 +53,16 @@ static uint64_t make_engine_instance_id(void) {
 }
 
 #define BB_CAP 2560 /* 2일치 1분봉(선물 주간+야간 2,130) + 라이브 여유 */
-static tr_candle_t g_bb_storage[BB_CAP];
-static tr_bar_status_t g_status_storage[BB_CAP]; /* 봉별 지표 링 (스냅샷 복원용) */
-static tr_candle_t g_mkt_storage[64];            /* ⑧ 마켓 밴드용 (마켓계산기간 20의 3배 여유) */
-static double g_score_mid[64];
+/* 파이프라인별 저장소 풀 (다중 종목 지원 — 관측 상한 TR_ENGINE_MAX_PIPES).
+ * 단일 종목 경로는 pool[0]을 쓰며, 기존 이름은 그 별칭으로 유지한다. */
+static tr_candle_t g_bb_pool[TR_ENGINE_MAX_PIPES][BB_CAP];
+static tr_bar_status_t g_status_pool[TR_ENGINE_MAX_PIPES][BB_CAP]; /* 봉별 지표 링 (스냅샷 복원용) */
+static tr_candle_t g_mkt_pool[TR_ENGINE_MAX_PIPES][64];            /* ⑧ 마켓 밴드용 (마켓계산기간 20의 3배 여유) */
+static double g_score_mid_pool[TR_ENGINE_MAX_PIPES][64];
+#define g_bb_storage (g_bb_pool[0])
+#define g_status_storage (g_status_pool[0])
+#define g_mkt_storage (g_mkt_pool[0])
+#define g_score_mid (g_score_mid_pool[0])
 
 static volatile sig_atomic_t g_stop = 0;
 static volatile sig_atomic_t g_running = 0;

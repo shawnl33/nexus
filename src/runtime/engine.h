@@ -89,8 +89,15 @@ typedef struct {
     double sma[3];              /* 5/20/60 순 */
 } tr_bar_status_t;
 
+typedef struct tr_engine tr_engine_t;
+
+/* 종목별 파이프라인: 한 종목의 봉 구축·지표 평가·상태 기록 상태를 모두 갖는다
+ * (docs/superpowers/plans/2026-09-29-multi-symbol-pipelines.md Task 1).
+ * 저장소(봉 링·점수 중간값·상태 링·마켓 링 버퍼)는 호출자 소유로 부착된다. */
 typedef struct {
-    tr_engine_config_t cfg;
+    tr_engine_t *engine;        /* 소유 엔진 (봉 이벤트 콜백에서 출력·공유 cfg 접근) */
+    uint64_t instrument_id;
+    bool is_futures;            /* 호가 부호 규칙·틱 양자화에 사용 */
     tr_candle_t *bb_storage;
     size_t bb_capacity;
     double *score_mid_storage;
@@ -100,11 +107,6 @@ typedef struct {
     tr_htf_curve_t htf;
     tr_obd2_t obd2;
     tr_score1m_t score;
-    tr_ipc_t *ipc;              /* NULL이면 status_cb 사용 */
-    tr_engine_status_fn status_cb;
-    void *status_cb_ctx;
-    const char *stream_id;
-    uint64_t status_seq;
     uint32_t generation;        /* 종목 전환 세대. 스냅숏·스트림 연결에 사용 (계획서 §18) */
     int64_t prev_trading_day;
     bool has_prev_day;
@@ -124,16 +126,113 @@ typedef struct {
     tr_regmem_t regmem;
     tr_persist_t persist;       /* ⑦ 지속 사진 */
     tr_sma_t sma5, sma20, sma60; /* 이평선 (게이트 없음, 모든 timeframe) */
-} tr_engine_t;
+} tr_pipeline_t;
+
+#define TR_ENGINE_MAX_PIPES 8 /* 동시 관측 종목 상한 (더 필요하면 상수만 올린다) */
+
+struct tr_engine {
+    tr_engine_config_t cfg;     /* 공유 설정. instrument_id/is_futures는 pipes[0](선택 종목) 기준 */
+    tr_ipc_t *ipc;              /* NULL이면 status_cb 사용 */
+    tr_engine_status_fn status_cb;
+    void *status_cb_ctx;
+    const char *stream_id;
+    uint64_t status_seq;
+    tr_pipeline_t *pipes[TR_ENGINE_MAX_PIPES]; /* 활성 파이프라인. [0]은 항상 내장 pipe0 */
+    int pipe_count;
+    /* 파이프라인 0은 엔진에 내장하고, 익명 구조체 뷰를 겹쳐 놓아 e->bb·e->lr3 등
+     * 기존 직접 접근이 pipes[0]의 저장소를 가리키게 한다 (C11 익명 멤버).
+     * 아래 멤버 목록·순서는 tr_pipeline_t와 동일해야 한다 — 뒤의 offset 검사가 고정한다. */
+    union {
+        tr_pipeline_t pipe0;
+        struct {
+            tr_engine_t *engine;
+            uint64_t instrument_id;
+            bool is_futures;
+            tr_candle_t *bb_storage;
+            size_t bb_capacity;
+            double *score_mid_storage;
+            size_t score_mid_capacity;
+            tr_bar_builder_t bb;
+            tr_lr3_t lr3;
+            tr_htf_curve_t htf;
+            tr_obd2_t obd2;
+            tr_score1m_t score;
+            uint32_t generation;
+            int64_t prev_trading_day;
+            bool has_prev_day;
+            tr_time_us_t prev_bar_open;
+            bool has_prev_bar;
+            tr_ring status_ring;
+            bool status_ring_on;
+            tr_market_t mkt;
+            bool mkt_on;
+            tr_dtl1_t dtl1;
+            tr_gap1_t gap1;
+            tr_dalign2_output_t dalign;
+            uint64_t bar_index;
+            tr_regmem_t regmem;
+            tr_persist_t persist;
+            tr_sma_t sma5, sma20, sma60;
+        };
+    };
+    tr_pipeline_t pipe_slots[TR_ENGINE_MAX_PIPES - 1]; /* pipes[1..] 내장 저장소 */
+};
+
+/* 익명 뷰와 tr_pipeline_t의 레이아웃 일치를 컴파일 타임에 고정한다 */
+#define TR_ENGINE_PIPE_LAYOUT_CHECK(m)                                       \
+    _Static_assert(offsetof(tr_engine_t, m) - offsetof(tr_engine_t, pipe0) == \
+                       offsetof(tr_pipeline_t, m),                           \
+                   "tr_pipeline_t layout mismatch: " #m)
+TR_ENGINE_PIPE_LAYOUT_CHECK(engine);
+TR_ENGINE_PIPE_LAYOUT_CHECK(instrument_id);
+TR_ENGINE_PIPE_LAYOUT_CHECK(is_futures);
+TR_ENGINE_PIPE_LAYOUT_CHECK(bb_storage);
+TR_ENGINE_PIPE_LAYOUT_CHECK(bb_capacity);
+TR_ENGINE_PIPE_LAYOUT_CHECK(score_mid_storage);
+TR_ENGINE_PIPE_LAYOUT_CHECK(score_mid_capacity);
+TR_ENGINE_PIPE_LAYOUT_CHECK(bb);
+TR_ENGINE_PIPE_LAYOUT_CHECK(lr3);
+TR_ENGINE_PIPE_LAYOUT_CHECK(htf);
+TR_ENGINE_PIPE_LAYOUT_CHECK(obd2);
+TR_ENGINE_PIPE_LAYOUT_CHECK(score);
+TR_ENGINE_PIPE_LAYOUT_CHECK(generation);
+TR_ENGINE_PIPE_LAYOUT_CHECK(prev_trading_day);
+TR_ENGINE_PIPE_LAYOUT_CHECK(has_prev_day);
+TR_ENGINE_PIPE_LAYOUT_CHECK(prev_bar_open);
+TR_ENGINE_PIPE_LAYOUT_CHECK(has_prev_bar);
+TR_ENGINE_PIPE_LAYOUT_CHECK(status_ring);
+TR_ENGINE_PIPE_LAYOUT_CHECK(status_ring_on);
+TR_ENGINE_PIPE_LAYOUT_CHECK(mkt);
+TR_ENGINE_PIPE_LAYOUT_CHECK(mkt_on);
+TR_ENGINE_PIPE_LAYOUT_CHECK(dtl1);
+TR_ENGINE_PIPE_LAYOUT_CHECK(gap1);
+TR_ENGINE_PIPE_LAYOUT_CHECK(dalign);
+TR_ENGINE_PIPE_LAYOUT_CHECK(bar_index);
+TR_ENGINE_PIPE_LAYOUT_CHECK(regmem);
+TR_ENGINE_PIPE_LAYOUT_CHECK(persist);
+TR_ENGINE_PIPE_LAYOUT_CHECK(sma5);
+TR_ENGINE_PIPE_LAYOUT_CHECK(sma20);
+TR_ENGINE_PIPE_LAYOUT_CHECK(sma60);
+#undef TR_ENGINE_PIPE_LAYOUT_CHECK
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
                     tr_candle_t *bb_storage, size_t bb_capacity,
                     double *score_mid_storage, size_t score_mid_capacity);
 
+/* 파이프라인 목록 (다중 관측 준비 — pipes[0]은 init이 만드는 선택 종목).
+ * add는 이미 있으면 그 파이프라인을 돌려주고, 가득 차면(NULL) 실패한다.
+ * 저장소(봉 링·점수 중간값)는 호출자 소유로 init과 같은 규칙이다.
+ * remove는 마지막 1개(파이프라인 0)는 제거하지 않고 false를 돌려준다. */
+tr_pipeline_t *tr_engine_pipe_find(tr_engine_t *e, uint64_t instrument_id);
+tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
+                                  tr_candle_t *bb_storage, size_t bb_capacity,
+                                  double *score_mid_storage, size_t score_mid_capacity);
+bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id);
+
 void tr_engine_attach_ipc(tr_engine_t *e, tr_ipc_t *ipc, const char *stream_id);
 void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ctx);
 
-/* 봉별 지표 기록 링 부착 (호출자 소유 저장소). 봉 링과 같은 용량을 권장한다.
+/* 봉별 지표 기록 링 부착 (호출자 소유 저장소, 파이프라인 0 대상). 봉 링과 같은 용량을 권장한다.
  * 부착 시점부터 기록한다. 재부착하면 링이 초기화된다 (종목 전환 후 재사용). */
 bool tr_engine_attach_status_ring(tr_engine_t *e, tr_bar_status_t *storage, size_t capacity);
 size_t tr_engine_status_count(const tr_engine_t *e);
@@ -143,7 +242,9 @@ bool tr_engine_status_at(const tr_engine_t *e, size_t back_index, tr_bar_status_
  * 재부착 시 마켓 상태가 초기화된다 (종목 전환 후 재사용). */
 bool tr_engine_attach_market(tr_engine_t *e, tr_candle_t *storage, size_t capacity);
 
-/* 틱/타이머 입력. replay 어댑터가 순서대로 호출한다. */
+/* 틱/타이머 입력. replay 어댑터가 순서대로 호출한다.
+ * 틱은 instrument_id로 파이프라인을 찾아 라우팅한다 (없으면 TR_BB_ERROR로 드롭).
+ * 타이머는 모든 활성 파이프라인에 전달한다. */
 tr_bb_status_t tr_engine_on_tick(tr_engine_t *e, const tr_event_envelope_t *env, const tr_tick_t *tick);
 void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us);
 
