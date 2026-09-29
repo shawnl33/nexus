@@ -8,10 +8,10 @@
 
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar);
 
-/* 원본 PriceScale 대응: raw 가격 단위의 1틱 — 선물 0.05pt(×100)=5, 주식 1원(×1)=1
- * (raw 규칙: docs/display_payload.md, docs/ls_api_mapping.md) */
+/* 원본 PriceScale 대응: raw 가격 단위의 1틱 — 선물 0.05pt×100=5, 주식 1원×100=100
+ * (raw는 주식·선물 모두 실제 × 100 스케일: ls_chart.c parse_price_scaled) */
 static double tick_scale(const tr_engine_t *e) {
-    return e->cfg.is_futures ? 5.0 : 1.0;
+    return e->cfg.is_futures ? 5.0 : 100.0;
 }
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,

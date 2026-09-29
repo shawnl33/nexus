@@ -254,7 +254,7 @@ const MiraeLayers = (() => {
   // 유지하는 수평 계단선. 봉별 데이터 아이템이 그 봉 구간의 수평 세그먼트를 그린다.
   const STEP_STYLE = {
     mem: {
-      baseColor: rgb(0, 0, 0), baseWidth: 2, // Plot32 기준가격
+      baseColor: "#e5e5e5", baseWidth: 2, // Plot32 기준가격 (원본은 RGB(0,0,0), 다크 테마 대비를 위해 밝게)
       targetWidths: [3, 5, 3],
       up: [rgb(255, 170, 170), rgb(255, 0, 0), rgb(180, 0, 0)],
       dn: [rgb(140, 170, 255), rgb(0, 0, 255), rgb(0, 0, 150)],

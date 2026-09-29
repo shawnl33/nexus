@@ -66,7 +66,8 @@
 - 응답 `t8466OutBlock1`은 **오름차순(과거→최신)** — 분봉 TR과 행 순서가 반대. **당일 진행 중 일봉도 포함**된다(close는 현재가 수준). `date`는 "YYYYMMDD" 문자열, 가격은 분봉과 같은 문자열 소수 규칙.
 - 페이지네이션: OutBlock `cts_date`는 분봉과 같은 규칙(다음 페이지 edate로 사용).
 
-**t8461 (KRX야간파생 틱분별, 야간 1분봉) 실측 규칙**:- InBlock: `focode`(String), `cgubun:"B"`(분차트), **`bgubun`은 명세와 달리 String `"1"`**(Number는 IGW40011),
+**t8461 (KRX야간파생 틱분별, 야간 1분봉) 실측 규칙**:
+- InBlock: `focode`(String), `cgubun:"B"`(분차트), **`bgubun`은 명세와 달리 String `"1"`**(Number는 IGW40011),
   `cnt`는 Number **최대 999** (1000 이상 IGW40011, 연속 조회 키 없음 — 최대 약 1.4 세션만 조회 가능).
 - 응답은 `t8461OutBlock1` **최신→과거 내림차순**, 요약 OutBlock 없음.
 - 행에 **날짜 필드가 없고 `chetime`(HHMMSS)만** 있다. 야간 세션은 자정을 넘으므로 날짜는 추론이 필요:

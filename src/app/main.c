@@ -365,8 +365,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         /* 봉별 지표(회귀·예측·점수·호가) — bars와 같은 순서. 스냅샷으로 과거 구간의
          * 미래곡선 보조지표도 복원하기 위한 값이다.
          * [21..25]는 ⑤ 매매 상태와 reg_flat(회귀선 틱 반올림, 엔진 페이로드와 동일 규칙:
-         * 선물 0.05pt×100=5 raw, 주식 1원×1=1 raw) */
-        double ps_flat = eng->cfg.is_futures ? 5.0 : 1.0;
+         * 선물 0.05pt×100=5 raw, 주식 1원×100=100 raw) */
+        double ps_flat = eng->cfg.is_futures ? 5.0 : 100.0;
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ind\":[");
         first = true;
         for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 384;) {

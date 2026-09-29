@@ -148,7 +148,7 @@ static void test_fut_night_parse(void) {
     TR_CHECK(g_bars[5].state == TR_CANDLE_CLOSED && g_bars[5].timeframe_sec == 60);
 }
 
-/* ---------- 일봉 (t8410/t8466, 미검증 TR — 명세 기반 파서 단위 테스트) ---------- */
+/* ---------- 일봉 (t8410 미검증 / t8466 2026-09-29 실측 완료 — 파서 단위 테스트) ---------- */
 
 /* t8410 명세 형식: 주식 가격은 Number. 행 순서는 명세에 없어 최신→과거로 섞어 둔다 */
 static const char *STOCK_DAY_RESP =
@@ -159,7 +159,8 @@ static const char *STOCK_DAY_RESP =
     "{\"date\":\"20260924\",\"open\":269000,\"high\":270500,\"low\":268500,\"close\":270000,\"jdiff_vol\":10345678}],"
     "\"rsp_cd\":\"00000\",\"rsp_msg\":\"정상적으로 조회가 완료되었습니다.\"}";
 
-/* t8466 명세 형식: 선물 가격은 소수 문자열 (분봉 t8465 실측과 같은 관행으로 가정) */
+/* t8466 실측 형식 (2026-09-29): 선물 가격은 소수 문자열 (분봉 t8465와 같은 규칙으로 확인),
+ * 행은 오름차순(과거→최신)이며 당일 진행 중 일봉도 포함된다 */
 static const char *FUT_DAY_RESP =
     "{\"t8466OutBlock\":{\"shcode\":\"A016C000\",\"cts_date\":\"20260910\",\"s_time\":\"084500\",\"e_time\":\"154500\",\"rec_count\":2},"
     "\"t8466OutBlock1\":["

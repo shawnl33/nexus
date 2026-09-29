@@ -5,7 +5,7 @@
 
 - 발행부: `src/runtime/engine.c` `publish_status()`
 - 스냅샷 생성부: `src/app/main.c` `"chart.snapshot"` 핸들러
-- 가격 값은 raw 정수 규칙을 따른다 (선물 = 실제 × 100, 주식 = 실제 × 1).
+- 가격 값은 raw 정수 규칙을 따른다 (선물 = 실제 × 100, 주식 = 실제 × 100).
 
 ## 1. 상태 스트림 페이로드 (스트림 id: `display`)
 

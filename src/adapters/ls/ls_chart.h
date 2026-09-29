@@ -77,7 +77,8 @@ int ls_chart_fetch_fut_night(ls_auth_t *auth, const char *focode, int32_t cnt,
 /* ---------- 일봉 (t8410 주식 / t8466 선물) ----------
  * ⑤ 매매 상태 체인(dtl1/gap1) 워밍업 프라이밍용. 분봉 TR과 같은 엔드포인트·같은
  * InBlock 패턴이고 TR 코드와 주기 구분(gubun="2")만 다르다 (공식 tr-guides 명세).
- * **미검증 TR**: 파서는 단위 테스트로 검증했고 실호출 검증은 남아 있다. */
+ * t8466은 2026-09-29 실호출로 검증했다 (응답 행 오름차순, 당일 진행 중 일봉 포함,
+ * comp_yn 필수 — 생략 시 압축여부 오류). t8410은 아직 미검증이다. */
 
 typedef struct {
     int64_t day;   /* 거래일 (date 필드, days since epoch, KST 날짜) */
@@ -85,7 +86,8 @@ typedef struct {
     int64_t low;
 } ls_daily_bar_t;
 
-/* 일봉 응답 파서 (테스트 가능하도록 분리). OutBlock1의 행 순서는 명세에 없어
+/* 일봉 응답 파서 (테스트 가능하도록 분리). t8466은 OutBlock1이 오름차순(과거→최신)임을
+ * 실측으로 확인했다 (2026-09-29). t8410은 미검증이라 두 kind 모두 방어적으로
  * 거래일 오름차순으로 정렬해 out에 기록한다. 중복 거래일은 LS_HTTP_PARSE_ERR.
  * 반환: LS_HTTP_OK / LS_CHART_EMPTY(데이터 없음, 오류 아님) / 오류 코드. */
 int ls_chart_parse_daily(const char *body, size_t body_len, ls_chart_kind_t kind,
