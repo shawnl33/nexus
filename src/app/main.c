@@ -95,7 +95,8 @@ typedef struct {
     tr_engine_t *engine;
     tr_ls_master_t *master;
     ls_auth_t *auth;
-    watch_entry_t watches[TR_ENGINE_MAX_PIPES]; /* [0]은 선택 종목(파이프라인 0) */
+    watch_entry_t watches[TR_ENGINE_MAX_PIPES]; /* 엔진 파이프라인과 1:1 대응 (instrument_id가 키).
+        순서는 파이프라인 순서와 무관하다 — pipe0 이식(pipe_remove)으로 pipes[] 순서는 바뀔 수 있다 */
     int watch_count;
 } live_ctx_t;
 
@@ -363,7 +364,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         tr_ls_rt_subscribe(lc->rt, new_tick, new_code, new_id);
         tr_ls_rt_subscribe(lc->rt, new_ob, new_code, new_id);
 
-        tr_engine_select_symbol(lc->engine, new_id, new_fut, new_code);
+        tr_engine_select_symbol(lc->engine, new_id, new_fut, new_code,
+                                new_fut ? &SESS_FUT : &SESS_STOCK);
         /* 재초기화로 링이 끊기므로 다시 부착한다 (백필 주입 전에). 파이프라인 0이 쓰는
          * 풀 슬롯과 같은 슬롯의 상태/마켓 저장소를 부착한다 (pipe0 이식 후에도 정합) */
         int slot = watch_pool_of(lc->engine->pipes[0]);
@@ -431,7 +433,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         }
         const char *name = 0;
         bool fut = resolve_is_fut(lc->master, code, &name);
-        pipe = tr_engine_pipe_add(lc->engine, id, fut, code,
+        pipe = tr_engine_pipe_add(lc->engine, id, fut, code, fut ? &SESS_FUT : &SESS_STOCK,
                                   g_bb_pool[slot], BB_CAP, g_score_mid_pool[slot], 64);
         if (pipe == 0) {
             cmd->status = "rejected";
@@ -497,10 +499,20 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             return;
         }
         watch_entry_t w = lc->watches[wi]; /* compact 전에 값을 보관한다 */
+        /* 엔진부터 제거한다: 실패(목록 불일치)하면 구독·워치 항목을 그대로 둬야
+         * 재시도가 가능하다. pipes[0] 대상이면 엔진이 마지막 파이프라인을 pipe0에
+         * 이식한다 (engine.h 참조) */
+        if (!tr_engine_pipe_remove(lc->engine, w.instrument_id)) {
+            fprintf(stderr, "unwatch %s: engine pipeline missing (watch list inconsistent)\n",
+                    w.shcode);
+            cmd->status = "rejected";
+            cmd->error_code = "engine_inconsistent";
+            cmd->payload_json = 0;
+            yyjson_doc_free(doc);
+            return;
+        }
         tr_ls_rt_unsubscribe(lc->rt, w.tick_cd, w.shcode);
         tr_ls_rt_unsubscribe(lc->rt, w.ob_cd, w.shcode);
-        /* pipes[0] 대상이면 엔진이 마지막 파이프라인을 pipe0에 이식한다 (engine.h 참조) */
-        tr_engine_pipe_remove(lc->engine, w.instrument_id);
         for (int j = wi; j + 1 < lc->watch_count; j++) {
             lc->watches[j] = lc->watches[j + 1];
         }

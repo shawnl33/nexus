@@ -43,6 +43,7 @@ static bool pipe_init(tr_engine_t *e, tr_pipeline_t *p, const tr_engine_config_t
     p->instrument_id = cfg->instrument_id;
     sanitize_shcode(p->shcode, cfg->shcode);
     p->is_futures = cfg->is_futures;
+    p->session = cfg->session; /* 종목별 세션 — 봉 구축·지표 컨텍스트가 여기서 읽는다 */
     p->bb_storage = bb_storage;
     p->bb_capacity = bb_capacity;
     p->score_mid_storage = score_mid_storage;
@@ -159,10 +160,10 @@ static tr_pipeline_t *pipe_free_slot(tr_engine_t *e) {
 }
 
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
-                                  const char *shcode,
+                                  const char *shcode, const tr_session_policy_t *session,
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity) {
-    if (e == 0 || instrument_id == 0) {
+    if (e == 0 || instrument_id == 0 || session == 0) {
         return 0;
     }
     tr_pipeline_t *found = tr_engine_pipe_find(e, instrument_id);
@@ -176,6 +177,7 @@ tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool i
     cfg.instrument_id = instrument_id;
     sanitize_shcode(cfg.shcode, shcode);
     cfg.is_futures = is_futures;
+    cfg.session = *session; /* 기동 종목 세션을 상속하지 않고 이 종목의 세션을 쓴다 */
     tr_pipeline_t *p = pipe_free_slot(e);
     if (p == 0) {
         return 0;
@@ -194,7 +196,7 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
     }
     /* 대상이 pipes[0]이면: pipe0은 익명 뷰(e->bb 등)의 기반이라 주소가 고정되어 있어
      * 목록에서 빼는 대신, 마지막 파이프라인의 내용을 pipe0에 통째로 이식하고 그 슬롯을
-     * 비운다. 지표 상태·저장소 포인터·shcode가 모두 따라오므로 생존 파이프라인은
+     * 비운다. 지표 상태·저장소 포인터·shcode·세션 정책이 모두 따라오므로 생존 파이프라인은
      * 끊기지 않는다. 이 경우 pipes[] 순서는 보존되지 않는다. */
     if (e->pipes[0]->instrument_id == instrument_id) {
         tr_pipeline_t *victim = e->pipes[e->pipe_count - 1];
@@ -203,6 +205,7 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
         e->pipe0.bb.cfg.on_event_ctx = &e->pipe0;
         e->cfg.instrument_id = e->pipe0.instrument_id;
         e->cfg.is_futures = e->pipe0.is_futures;
+        e->cfg.session = e->pipe0.session;
         snprintf(e->cfg.shcode, sizeof(e->cfg.shcode), "%s", e->pipe0.shcode);
         e->pipe_count--;
         return true;
@@ -391,9 +394,10 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         return;
     }
 
-    /* 지표용 내장 컨텍스트 계산: trading day / 당일 첫 봉 / 새 봉 여부 */
+    /* 지표용 내장 컨텍스트 계산: trading day / 당일 첫 봉 / 새 봉 여부
+     * (종목별 세션 기준 — 파이프라인마다 다를 수 있다) */
     int64_t day = -1;
-    tr_session_trading_day(&e->cfg.session, bar->open_time_us, &day);
+    tr_session_trading_day(&p->session, bar->open_time_us, &day);
     bool session_first = !p->has_prev_day || day != p->prev_trading_day;
     bool is_new_bar = !p->has_prev_bar || bar->open_time_us != p->prev_bar_open;
     bool closed = env->kind == TR_EVENT_CANDLE_CLOSED;
@@ -445,7 +449,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
             p->bar_index++;
         }
         uint32_t bar_min = 0;
-        tr_local_day_and_min(bar->open_time_us, e->cfg.session.utc_offset_min, 0, &bar_min);
+        tr_local_day_and_min(bar->open_time_us, p->session.utc_offset_min, 0, &bar_min);
         tr_dtl1_on_bar(&p->dtl1, (double)bar->high, (double)bar->low, (double)bar->close,
                        session_first, (int64_t)p->bar_index, true);
         tr_gap1_on_bar(&p->gap1, (double)bar->open, (double)bar->high, (double)bar->low,
@@ -696,18 +700,18 @@ void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
         return; /* 라우팅할 파이프라인이 없다 (구독 해지 채널의 지연 메시지 등) */
     }
     int64_t day = -1;
-    if (!tr_session_trading_day(&e->cfg.session, event_time_us, &day)) {
+    if (!tr_session_trading_day(&p->session, event_time_us, &day)) {
         day = p->has_prev_day ? p->prev_trading_day : -1;
     }
     tr_obd2_eval(&p->obd2, bids, asks, day);
 }
 
 bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
-                             const char *shcode) {
+                             const char *shcode, const tr_session_policy_t *session) {
     /* 델타 기록: 파이프라인 분리 전에는 이 함수가 tr_engine_init을 경유해 status_seq가
      * 1로 재시작했다. 이제 파이프라인 0만 재초기화하므로 스트림 시퀀스는 계속 증가한다
      * — 구독자 입장에서 seq 역행이 없어 이 동작을 유지한다. */
-    if (e == 0 || instrument_id == 0) {
+    if (e == 0 || instrument_id == 0 || session == 0) {
         return false;
     }
     tr_pipeline_t *p0 = e->pipes[0];
@@ -721,6 +725,7 @@ bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_fut
     cfg.instrument_id = instrument_id;
     sanitize_shcode(cfg.shcode, shcode);
     cfg.is_futures = is_futures;
+    cfg.session = *session; /* 새 종목의 세션 정책 (시장이 다르면 바뀐다) */
     /* 파이프라인 0의 지표 상태를 새 종목 기준으로 재구성한다. 링 저장소는 그대로 재사용한다 */
     if (!pipe_init(e, p0, &cfg, p0->bb_storage, p0->bb_capacity,
                    p0->score_mid_storage, p0->score_mid_capacity)) {

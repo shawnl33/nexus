@@ -100,6 +100,7 @@ typedef struct {
     uint64_t instrument_id;
     char shcode[16];            /* 종목 코드 (페이로드 "shcode" 키). JSON 안전 문자만 보관 */
     bool is_futures;            /* 호가 부호 규칙·틱 양자화에 사용 */
+    tr_session_policy_t session; /* 이 종목의 세션 정책 (봉 구축·trading day·⑤ 바 분 계산의 기준) */
     tr_candle_t *bb_storage;
     size_t bb_capacity;
     double *score_mid_storage;
@@ -133,7 +134,7 @@ typedef struct {
 #define TR_ENGINE_MAX_PIPES 8 /* 동시 관측 종목 상한 (더 필요하면 상수만 올린다) */
 
 struct tr_engine {
-    tr_engine_config_t cfg;     /* 공유 설정. instrument_id/is_futures는 pipes[0](선택 종목) 기준 */
+    tr_engine_config_t cfg;     /* 공유 설정. instrument_id/is_futures/session은 pipes[0](선택 종목) 기준 */
     tr_ipc_t *ipc;              /* NULL이면 status_cb 사용 */
     tr_engine_status_fn status_cb;
     void *status_cb_ctx;
@@ -151,6 +152,7 @@ struct tr_engine {
             uint64_t instrument_id;
             char shcode[16];
             bool is_futures;
+            tr_session_policy_t session;
             tr_candle_t *bb_storage;
             size_t bb_capacity;
             double *score_mid_storage;
@@ -190,6 +192,7 @@ TR_ENGINE_PIPE_LAYOUT_CHECK(engine);
 TR_ENGINE_PIPE_LAYOUT_CHECK(instrument_id);
 TR_ENGINE_PIPE_LAYOUT_CHECK(shcode);
 TR_ENGINE_PIPE_LAYOUT_CHECK(is_futures);
+TR_ENGINE_PIPE_LAYOUT_CHECK(session);
 TR_ENGINE_PIPE_LAYOUT_CHECK(bb_storage);
 TR_ENGINE_PIPE_LAYOUT_CHECK(bb_capacity);
 TR_ENGINE_PIPE_LAYOUT_CHECK(score_mid_storage);
@@ -227,6 +230,8 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
  * add는 이미 있으면 그 파이프라인을 돌려주고, 가득 차면(NULL) 실패한다.
  * 저장소(봉 링·점수 중간값)는 호출자 소유로 init과 같은 규칙·검증이다.
  * shcode는 상태 페이로드 식별용으로 파이프라인에 보관된다 (NULL이면 "").
+ * session은 이 종목의 세션 정책으로 파이프라인에 보관된다 (필수) — 기동 종목의
+ * 세션을 상속하지 않는다. 주식/선물이 섞여 있으면 종목별로 따로 넘긴다.
  * 파이프라인 객체는 내장 슬롯에 고정된다: add가 돌려준 포인터는 그 파이프라인이
  * remove되기 전까지 유효하며, 장기 보관은 instrument_id만 하고 매번 find로 조회한다.
  * remove는 pipes[] 순서를 보존한다(compact). 단, 대상이 pipes[0]이면 마지막
@@ -235,7 +240,7 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
  * remove는 마지막 1개는 제거하지 않고 false를 돌려준다. */
 tr_pipeline_t *tr_engine_pipe_find(tr_engine_t *e, uint64_t instrument_id);
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
-                                  const char *shcode,
+                                  const char *shcode, const tr_session_policy_t *session,
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity);
 bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id);
@@ -277,8 +282,9 @@ void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
                             int64_t event_time_us, double bids, double asks);
 
 /* 종목 전환: 지표 상태를 새 종목 기준으로 재구성하고 generation을 올린다 (계획서 §18).
-   이전 세대의 늦은 응답과 새 화면이 섞이지 않게 한다. 전략의 거래 대상과는 무관하다(화면 상태 변경). */
+   이전 세대의 늦은 응답과 새 화면이 섞이지 않게 한다. 전략의 거래 대상과는 무관하다(화면 상태 변경).
+   session은 새 종목의 세션 정책이다 (필수 — 시장이 다르면 바뀐다). */
 bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
-                             const char *shcode);
+                             const char *shcode, const tr_session_policy_t *session);
 
 #endif

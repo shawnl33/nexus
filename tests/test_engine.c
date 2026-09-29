@@ -13,6 +13,9 @@ static double g_score_mid[32];
 
 #define KST 540
 
+/* init_engine의 세션과 동일한 정책 (pipe_add/select_symbol의 세션 인자) */
+static const tr_session_policy_t TEST_SESS = {KST, 540, 930, TR_SESSION_WEEKDAYS};
+
 static tr_time_us_t kst(unsigned h, unsigned mi, unsigned s) {
     tr_civil_t c = {2024, 1, 2, h, mi, s};
     tr_time_us_t t = 0;
@@ -154,13 +157,13 @@ static void test_select_symbol_generation(void) {
     TR_CHECK(e.lr3.reg_valid); /* 워밍업 완료 상태 */
 
     /* 종목 전환: 상태가 리셋되고 generation이 오른다 */
-    TR_CHECK(tr_engine_select_symbol(&e, 999, false, "099999"));
+    TR_CHECK(tr_engine_select_symbol(&e, 999, false, "099999", &TEST_SESS));
     TR_CHECK(e.generation == 2);
     TR_CHECK(e.cfg.instrument_id == 999);
     TR_CHECK(strcmp(e.shcode, "099999") == 0); /* 전환 종목 코드가 파이프라인에 실린다 */
     TR_CHECK(!e.lr3.reg_valid); /* 지표는 새 종목 기준으로 다시 워밍업 */
     TR_CHECK(e.status_cb == capture_cb); /* 출력 연결은 보존 */
-    TR_CHECK(tr_engine_select_symbol(&e, 1000, true, "1000F0"));
+    TR_CHECK(tr_engine_select_symbol(&e, 1000, true, "1000F0", &TEST_SESS));
     TR_CHECK(e.generation == 3);
 
     /* 전환 후에도 상태 발행이 계속된다 */
@@ -385,14 +388,15 @@ static void test_pipe_slot_reuse(void) {
     init_engine(&e, &cap);
     static tr_candle_t bb_a[BB_CAP], bb_b[BB_CAP], bb_c[BB_CAP], bb_d[BB_CAP];
     static double mid_a[32], mid_b[32], mid_c[32], mid_d[32];
-    tr_pipeline_t *pa = tr_engine_pipe_add(&e, 100, true, "0100A0", bb_a, BB_CAP, mid_a, 32);
-    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 200, true, "0200B0", bb_b, BB_CAP, mid_b, 32);
-    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 300, true, "0300C0", bb_c, BB_CAP, mid_c, 32);
+    tr_pipeline_t *pa = tr_engine_pipe_add(&e, 100, true, "0100A0", &TEST_SESS, bb_a, BB_CAP, mid_a, 32);
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 200, true, "0200B0", &TEST_SESS, bb_b, BB_CAP, mid_b, 32);
+    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 300, true, "0300C0", &TEST_SESS, bb_c, BB_CAP, mid_c, 32);
     TR_CHECK(pa != 0 && pb != 0 && pc != 0);
     TR_CHECK(e.pipe_count == 4);
-    /* 저장소 인자 검증: NULL·용량 부족은 거부 */
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", 0, BB_CAP, mid_b, 32) == 0);
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", bb_b, BB_CAP, mid_b, 4) == 0);
+    /* 저장소·세션 인자 검증: NULL·용량 부족은 거부 */
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, 0, BB_CAP, mid_b, 32) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, bb_b, BB_CAP, mid_b, 4) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", 0, bb_b, BB_CAP, mid_b, 32) == 0);
     TR_CHECK(e.pipe_count == 4);
 
     /* C에 먼저 상태를 쌓아 둔다 (OPEN 봉 1개) */
@@ -403,7 +407,7 @@ static void test_pipe_slot_reuse(void) {
     TR_CHECK(tr_engine_pipe_remove(&e, 200));
     TR_CHECK(e.pipe_count == 3);
     TR_CHECK(tr_engine_pipe_find(&e, 200) == 0);
-    tr_pipeline_t *pd = tr_engine_pipe_add(&e, 400, true, "0400D0", bb_d, BB_CAP, mid_d, 32);
+    tr_pipeline_t *pd = tr_engine_pipe_add(&e, 400, true, "0400D0", &TEST_SESS, bb_d, BB_CAP, mid_d, 32);
     TR_CHECK(pd != 0);
     TR_CHECK(e.pipe_count == 4);
     /* D는 독립 저장소: 어느 활성 파이프라인과도 주소가 다르다 (on_timer 이중 호출 방지) */
@@ -482,9 +486,12 @@ static void test_two_pipes_independent(void) {
     static tr_candle_t bb_b[BB_CAP];
     static double mid_b[32];
     static tr_bar_status_t ring_b[BB_CAP];
-    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", bb_b, BB_CAP, mid_b, 32);
+    /* B는 파이프0과 다른 세션(선물형 08:45~익일 05:00)을 갖는다 — 종목별 세션 보관 검증 겸용 */
+    static const tr_session_policy_t fut_sess = {KST, 525, 300, TR_SESSION_WEEKDAYS};
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &fut_sess, bb_b, BB_CAP, mid_b, 32);
     TR_CHECK(pb != 0);
     TR_CHECK(strcmp(pb->shcode, "BBB002") == 0);
+    TR_CHECK(pb->session.open_min == 525 && pb->session.close_min == 300); /* 기동 세션 미상속 */
     TR_CHECK(tr_engine_pipe_attach_status_ring(&e, 100, ring_b, BB_CAP));
     TR_CHECK(!tr_engine_pipe_attach_status_ring(&e, 999, ring_b, BB_CAP)); /* 없는 종목 */
     TR_CHECK(tr_engine_pipe_attach_market(&e, 100, bb_b, 64));
@@ -550,7 +557,9 @@ static void test_two_pipes_independent(void) {
     TR_CHECK(e.pipes[0] == &e.pipe0);
     TR_CHECK(e.pipe0.instrument_id == 100);
     TR_CHECK(strcmp(e.pipe0.shcode, "BBB002") == 0);
+    TR_CHECK(e.pipe0.session.open_min == 525); /* 세션 정책도 이식된다 */
     TR_CHECK(e.cfg.instrument_id == 100); /* 공유 cfg도 생존 종목 기준으로 맞춘다 */
+    TR_CHECK(e.cfg.session.open_min == 525 && e.cfg.session.close_min == 300);
     TR_CHECK(tr_engine_pipe_find(&e, 100) == &e.pipe0);
     TR_CHECK(tr_ring_count(&e.bb.bars) == 2); /* 익명 뷰가 이식된 B 상태를 가리킨다 */
     TR_CHECK(tr_engine_pipe_status_count(&e, 100) == 2); /* 상태 링도 그대로 */
@@ -559,6 +568,74 @@ static void test_two_pipes_independent(void) {
 
     /* 마지막 1개는 제거할 수 없다 */
     TR_CHECK(!tr_engine_pipe_remove(&e, 100));
+}
+
+/* 혼합 시장: 파이프라인은 종목별 세션을 갖는다 — 기동 종목 세션을 상속하지 않는다.
+ * 선물 세션(08:45~익일 05:00) 엔진에 주식 세션(08:00~20:00) 파이프라인을 add하면
+ * 08:15 틱은 주식 파이프만 받고, 20:30 틱은 선물 파이프만 받는다 (그 역도 성립). */
+static void feed_at(tr_engine_t *e, uint64_t instrument_id, unsigned h, unsigned mi,
+                    tr_price_t price, uint64_t id, tr_bb_status_t expect) {
+    tr_event_envelope_t env;
+    memset(&env, 0, sizeof(env));
+    env.kind = TR_EVENT_TICK;
+    tr_civil_t c = {2024, 1, 2, h, mi, 0};
+    tr_time_us_from_civil(&c, KST, &env.event_time_us);
+    env.received_time_us = env.event_time_us;
+    tr_tick_t tk;
+    memset(&tk, 0, sizeof(tk));
+    tk.instrument_id = instrument_id;
+    tk.price = price;
+    tk.qty = 10;
+    tk.source_exec_id = id;
+    tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+    TR_CHECK(tr_engine_on_tick(e, &env, &tk) == expect);
+}
+
+static void test_mixed_market_sessions(void) {
+    tr_engine_t e;
+    capture_t cap;
+    memset(&cap, 0, sizeof(cap));
+    tr_engine_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.engine_instance_id = 1;
+    cfg.instrument_id = 1;
+    cfg.session = (tr_session_policy_t){KST, 525, 300, TR_SESSION_WEEKDAYS}; /* 선물: 08:45~익일 05:00 */
+    cfg.timeframe_sec = 60;
+    cfg.no_trade = TR_NO_TRADE_SKIP;
+    cfg.predict_bars[0] = 5;
+    cfg.predict_bars[1] = 10;
+    cfg.predict_bars[2] = 15;
+    cfg.htf_ticks = 10;
+    cfg.min_r2 = 0.40;
+    cfg.market_period = 20;
+    cfg.is_futures = true;
+    TR_CHECK(tr_engine_init(&e, &cfg, g_bb_storage, BB_CAP, g_score_mid, 32));
+    tr_engine_attach_status_cb(&e, capture_cb, &cap);
+
+    static tr_candle_t bb_s[BB_CAP];
+    static double mid_s[32];
+    static const tr_session_policy_t stk_sess = {KST, 480, 1200, TR_SESSION_WEEKDAYS}; /* 주식: 08:00~20:00 */
+    tr_pipeline_t *ps = tr_engine_pipe_add(&e, 100, false, "005930", &stk_sess, bb_s, BB_CAP, mid_s, 32);
+    TR_CHECK(ps != 0);
+    TR_CHECK(ps->session.open_min == 480 && ps->session.close_min == 1200);
+    TR_CHECK(e.pipe0.session.open_min == 525); /* 기동(선물) 세션 유지 */
+
+    /* 08:15: 주식 세션 안(08:00~), 선물 세션 밖(08:45 전) */
+    feed_at(&e, 100, 8, 15, 70000, 1, TR_BB_ACCEPTED);
+    feed_at(&e, 1, 8, 15, 10000, 2, TR_BB_REJECTED_OUT_OF_SESSION);
+    TR_CHECK(tr_ring_count(&ps->bb.bars) == 1);
+    TR_CHECK(tr_ring_count(&e.pipe0.bb.bars) == 0);
+    TR_CHECK(!e.pipe0.bb.has_open);
+
+    /* 20:30: 선물 세션 안(야간), 주식 세션 밖(20:00 이후) */
+    feed_at(&e, 1, 20, 30, 10050, 3, TR_BB_ACCEPTED);
+    feed_at(&e, 100, 20, 30, 70100, 4, TR_BB_REJECTED_OUT_OF_SESSION);
+    TR_CHECK(tr_ring_count(&ps->bb.bars) == 1);
+    TR_CHECK(tr_ring_count(&e.pipe0.bb.bars) == 1);
+
+    /* 지표 컨텍스트도 파이프라인 세션에서 계산된다 (trading day가 양쪽에 기록됨) */
+    TR_CHECK(e.pipe0.has_prev_day);
+    TR_CHECK(ps->has_prev_day);
 }
 
 int main(void) {
@@ -571,5 +648,6 @@ int main(void) {
     test_sma_payload();
     test_pipe_slot_reuse();
     test_two_pipes_independent();
+    test_mixed_market_sessions();
     TR_TEST_SUMMARY();
 }
