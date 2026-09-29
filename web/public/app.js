@@ -7,6 +7,7 @@
 const WS_URL = `ws://${location.host}/ws`;
 const bars = new Map(); // time(sec) → candle
 let generation = 0;     // 종목 전환 시 올려 늦은 응답을 폐기 (계획서 §18)
+let tickRaw = 5;        // raw 단위 틱 크기 (엔진 tick 키가 갱신; 선물 5, 주식 100)
 
 // 거래소 시간은 항상 KST(UTC+9, 서머타임 없음) — 라이브러리 기본 UTC 표시를 KST로 맞춘다
 const KST_OFFSET_SEC = 9 * 3600;
@@ -16,11 +17,22 @@ function kstParts(timeSec) {
 }
 const pad2 = (n) => String(n).padStart(2, "0");
 
+// 표시용 가격 포맷: 엔진 값은 raw(실제×100)이므로 ÷100. 소수 자리는 틱으로 결정
+// (선물 tick 5 raw = 0.05pt → 2자리, 주식 tick 100 raw = 1원 → 0자리)
+function fmtPrice(raw) {
+  if (!Number.isFinite(raw)) return "-";
+  const v = raw / 100;
+  return tickRaw >= 100
+    ? v.toLocaleString("ko-KR", { maximumFractionDigits: 0 })
+    : v.toFixed(2);
+}
+
 const chart = LightweightCharts.createChart(document.getElementById("chart"), {
   layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
   grid: { vertLines: { color: "#1e2530" }, horzLines: { color: "#1e2530" } },
   localization: {
     locale: "ko-KR",
+    priceFormatter: (p) => fmtPrice(p),
     timeFormatter: (t) => {
       const p = kstParts(t);
       return `${p.y}-${pad2(p.mo)}-${pad2(p.d)} ${pad2(p.hh)}:${pad2(p.mm)}:${pad2(p.ss)}`;
@@ -69,7 +81,6 @@ const barInd = new Map(); // time → { predDir[3], regValid, r2, regFlat, final
 const barSeq = [];        // 시각 오름차순 목록
 const barPos = new Map(); // time → barSeq 인덱스
 let lastMktCenter = NaN;  // ⑧ 마켓중심기울기 = 중심 − 이전중심
-let tickRaw = 5;          // raw 단위 틱 크기 (엔진 tick 키가 갱신; 선물 5, 주식 100)
 
 // ④ 세션 가드 (원본 v16:224-226): 10봉 전 봉이 다른 세션이면 결과 띠 무효(회색)
 function sameSession(src, cur) {
@@ -174,7 +185,7 @@ function applyStatus(msg) {
       score: Number.isFinite(p.score) ? p.score : 0, r2: ind.r2,
       finalState: ind.finalValid ? ind.finalState : 0,
     });
-    el.reg.textContent = `회귀선 ${p.reg_line.toFixed(1)} (R² ${ind.r2.toFixed(2)})`;
+    el.reg.textContent = `회귀선 ${fmtPrice(p.reg_line)} (R² ${ind.r2.toFixed(2)})`;
     el.reg.className = "badge ok";
   } else {
     regLineSeries.update({ time: t });
@@ -190,7 +201,7 @@ function applyStatus(msg) {
       pred: preds, predDir: ind.predDir, r2: ind.r2,
       resid: p.resid ?? 0, pvol: p.pvol ?? 0,
     });
-    el.pred.textContent = `예측 ${preds.map((v) => v.toFixed(1)).join(" / ")}`;
+    el.pred.textContent = `예측 ${preds.map((v) => fmtPrice(v)).join(" / ")}`;
   } else {
     futureRays.clear();
   }
@@ -409,10 +420,10 @@ async function seedChart() {
       el.score.style.color = scoreTextColor(last.score);
       updateFinalBadge(last.finalValid, last.finalState);
       if (last.regValid) {
-        el.reg.textContent = `회귀선 ${last.regLine.toFixed(1)} (R² ${last.r2.toFixed(2)})`;
+        el.reg.textContent = `회귀선 ${fmtPrice(last.regLine)} (R² ${last.r2.toFixed(2)})`;
         el.reg.className = "badge ok";
         if (last.pred.every(Number.isFinite)) {
-          el.pred.textContent = `예측 ${last.pred.map((v) => v.toFixed(1)).join(" / ")}`;
+          el.pred.textContent = `예측 ${last.pred.map((v) => fmtPrice(v)).join(" / ")}`;
           futureRays.set({
             time: lastBar.time,
             prevTime: dedup.length > 1 ? dedup[dedup.length - 2].time : lastBar.time - 60,
