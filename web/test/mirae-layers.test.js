@@ -403,7 +403,7 @@ test("parseInd: ind[28..31] SMA 확장 구간 파싱", () => {
   assert.ok(short.sma.every((v) => Number.isNaN(v)));
 });
 
-test("barInd 확장: sma/ob 필드가 시딩·라이브 공통 형태로 유지된다", () => {
+test("barInd 확장: sma/ob/regLine 필드가 시딩·라이브 공통 형태로 유지된다", () => {
   const ind = makeInd();
   ind[28] = 1; ind[29] = 101; ind[30] = 102; ind[31] = 103;
   const e = M.barIndFromInd(M.parseInd(ind));
@@ -411,18 +411,21 @@ test("barInd 확장: sma/ob 필드가 시딩·라이브 공통 형태로 유지�
   assert.deepEqual(e.sma, [101, 102, 103]);
   assert.equal(e.obValid, true);
   assert.equal(e.obScore, 1.5);
+  assert.equal(e.regLine, 34550); // 배지 복원이 라이브와 같은 출처(regLine)를 쓴다
 
-  const live = M.barIndFromPayload({ sma: [1, 201, 202, 203], ob_valid: 1, ob_score: -0.5 });
+  const live = M.barIndFromPayload({ sma: [1, 201, 202, 203], ob_valid: 1, ob_score: -0.5, reg_line: 34551 });
   assert.equal(live.smaValid, true);
   assert.deepEqual(live.sma, [201, 202, 203]);
   assert.equal(live.obValid, true);
   assert.equal(live.obScore, -0.5);
+  assert.equal(live.regLine, 34551);
 
   // sma 키가 없는 구형 엔진 페이로드는 무효로 둔다
   const bare = M.barIndFromPayload({ reg_valid: 0 });
   assert.equal(bare.smaValid, false);
   assert.ok(bare.sma.every((v) => Number.isNaN(v)));
   assert.equal(bare.obValid, false);
+  assert.ok(Number.isNaN(bare.regLine));
 });
 
 test("memItemFromPayload/pstItemFromPayload: 라이브 mem/pst → 봉별 아이템 (캐시 계약)", () => {

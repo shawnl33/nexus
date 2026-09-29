@@ -114,6 +114,7 @@ const MiraeLayers = (() => {
       predDir: d.predDir, regValid: d.regValid, r2: d.r2, regFlat: d.regFlat,
       finalValid: d.finalValid, finalState: d.finalState, day: d.day,
       mktValid: d.mktValid, mkt: d.mkt,
+      regLine: d.regLine,
       obValid: d.obValid, obScore: d.obScore,
       smaValid: d.smaValid, sma: d.sma,
     };
@@ -132,6 +133,7 @@ const MiraeLayers = (() => {
       day: num(p.day),
       mktValid: mkt[0] === 1,
       mkt: [num(mkt[1]), num(mkt[2]), num(mkt[3]), num(mkt[4]), num(mkt[5])],
+      regLine: num(p.reg_line),
       obValid: p.ob_valid === 1,
       obScore: num(p.ob_score),
       smaValid: sma[0] === 1,

@@ -6,7 +6,7 @@
 
 const Workspace = (() => {
   const SCHEMA_VERSION = 2;
-  const MIN_HEIGHT = 0.05; // 칸 최소 높이 비율
+  const MIN_HEIGHT = 0.1; // 칸 최소 높이 비율 (app.js MIN_PANE_FRAC와 동일하게 유지)
 
   // panesState: [{ height, indicators: [{ id, layers: { layerId: bool } }] }]
   function serialize(name, symbol, panesState) {
@@ -50,7 +50,17 @@ const Workspace = (() => {
     };
   }
 
-  return { SCHEMA_VERSION, MIN_HEIGHT, serialize, parse };
+  // 저장된 종목 바인딩 복원: 전환 콜백(switchSymbol)은 입력창 값을 읽으므로
+  // 반드시 입력창을 저장 종목으로 맞춘 뒤 호출한다. 전환 불필요(같은 종목/저장값 없음)면 false.
+  function restoreSymbol(parsed, input, switchSymbol) {
+    const target = typeof parsed?.symbol === "string" ? parsed.symbol.trim() : "";
+    if (!target || target === input.value.trim()) return false;
+    input.value = target;
+    switchSymbol();
+    return true;
+  }
+
+  return { SCHEMA_VERSION, MIN_HEIGHT, serialize, parse, restoreSymbol };
 })();
 
 if (typeof globalThis !== "undefined") {

@@ -351,8 +351,9 @@ function restoreHeaderBadges() {
     el.score.style.color = scoreTextColor(ind.score);
   }
   updateFinalBadge(ind.finalValid, ind.finalState);
-  if (ind.regValid && Number.isFinite(ind.regFlat)) {
-    el.reg.textContent = `회귀선 ${fmtPrice(ind.regFlat)} (R² ${ind.r2.toFixed(2)})`;
+  // 회귀선 배지는 라이브 경로(applyStatus의 p.reg_line)와 같은 출처를 쓴다
+  if (ind.regValid && Number.isFinite(ind.regLine)) {
+    el.reg.textContent = `회귀선 ${fmtPrice(ind.regLine)} (R² ${ind.r2.toFixed(2)})`;
     el.reg.className = "badge ok";
     if (Array.isArray(ind.pred) && ind.pred.every(Number.isFinite)) {
       el.pred.textContent = `예측 ${ind.pred.map((v) => fmtPrice(v)).join(" / ")}`;
@@ -611,8 +612,9 @@ function applyWorkspace(parsed) {
   normalizeHeights();
   rebuildResizeBars();
   updateBadgeVisibility();
-  // 저장된 종목 바인딩이 현재와 다르면 전환한다 (전환은 새 스냅샷으로 다시 시딩한다)
-  if (parsed.symbol && parsed.symbol !== symbolInput.value.trim()) switchSymbol();
+  // 저장된 종목 바인딩이 현재와 다르면 입력창을 저장 종목으로 맞추고 전환한다
+  // (switchSymbol은 입력창 값을 읽는다 — 대입이 먼저다). 전환은 새 스냅샷으로 다시 시딩한다.
+  Workspace.restoreSymbol(parsed, symbolInput, switchSymbol);
 }
 
 let cachedToken = null;

@@ -67,7 +67,8 @@ test("parse: 알 수 없는 지표는 걸러내고 레이어를 bool로 정규�
   assert.deepEqual(parsed.panels[0].indicators[0], { id: "mirae_v16", layers: { band: true, mktband: false } });
 });
 
-test("parse: 높이는 0.05~1로 클램프하고, 칸이 없으면 맨 차트 1칸이 기본이다", () => {
+test("parse: 높이는 0.1~1로 클램프하고, 칸이 없으면 맨 차트 1칸이 기본이다", () => {
+  assert.equal(W.MIN_HEIGHT, 0.1); // app.js 드래그 최소 높이(MIN_PANE_FRAC)와 같은 값이어야 한다
   const parsed = W.parse({
     schema_version: 2,
     panels: [{ height: 5, indicators: [] }, { height: -1, indicators: [] }, { indicators: [] }],
@@ -81,4 +82,30 @@ test("parse: 높이는 0.05~1로 클램프하고, 칸이 없으면 맨 차트 1�
 
   const sym = W.parse({ schema_version: 2, panels: [] }, known);
   assert.equal(sym.symbol, ""); // current_symbol 누락/비문자 허용
+});
+
+// 화면틀 적용 시 저장 종목 복원 — switchSymbol(app.js)은 입력창 값을 읽으므로
+// 입력창 대입이 전환 호출보다 먼저여야 한다 (Critical 회귀 방지).
+test("restoreSymbol: 저장 종목이 다르면 입력창을 저장 종목으로 맞춘 뒤 전환한다", () => {
+  const input = { value: "005930" }; // DOM 스텁
+  const calls = [];
+  const switchSymbol = () => calls.push(input.value); // 호출 시점의 입력창 값을 기록
+  const parsed = { symbol: "A016C000", panels: [] };
+
+  assert.equal(W.restoreSymbol(parsed, input, switchSymbol), true);
+  assert.equal(input.value, "A016C000");          // 입력창이 저장 종목으로 바뀐다
+  assert.deepEqual(calls, ["A016C000"]);          // 전환은 저장 종목으로 1회 호출된다
+});
+
+test("restoreSymbol: 같은 종목이거나 저장값이 없으면 전환하지 않는다", () => {
+  const input = { value: "005930" };
+  let called = 0;
+  const switchSymbol = () => called++;
+
+  assert.equal(W.restoreSymbol({ symbol: "005930", panels: [] }, input, switchSymbol), false);
+  assert.equal(W.restoreSymbol({ symbol: "", panels: [] }, input, switchSymbol), false);
+  assert.equal(W.restoreSymbol({ panels: [] }, input, switchSymbol), false);
+  assert.equal(W.restoreSymbol({ symbol: "  ", panels: [] }, input, switchSymbol), false);
+  assert.equal(called, 0);
+  assert.equal(input.value, "005930"); // 입력창 불변
 });
