@@ -15,6 +15,7 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
@@ -36,7 +37,8 @@ typedef struct {
     double prev_prev_close; /* 직전직전종가 */
     double tr_array[20];    /* [0]=최신 완성 세션 TR */
     int32_t tr_count;
-    int32_t completed_days; /* 완성일수 (첫 완성 세션 TR 규칙용) */
+    int32_t primed_count;   /* tr_gap1_prime으로 채운 완성 세션 TR 수 (마지막 프라임 기준 기록) */
+    int32_t completed_days; /* 완성일수 (첫 완성 세션 TR 규칙용, 실세션 완성만 센다) */
     /* 출력 */
     double gap_ratio;       /* 갭비율 */
     int gap_grade;          /* 갭등급: 0/1/2 */
@@ -51,5 +53,14 @@ void tr_gap1_init(tr_gap1_t *s, const tr_gap1_config_t *cfg);
 /* 매 봉 1회. bar_time_min은 봉의 현지 시각(자정 기준 분). is_session_first는 DayIndex==0 대응. */
 void tr_gap1_on_bar(tr_gap1_t *s, double o, double h, double l, double c,
                     int32_t bar_time_min, bool is_session_first, int64_t bar_index, bool is_min_1);
+
+/* 워밍업 프라임: 완성 세션 TR(고−저)을 **오래된 순**으로 주입해 과거 이력을 채운다.
+ * - 이미 보유한 완성 세션의 뒤(더 과거)에 이어 붙인다 — 기존 이력과 진행 중 세션 집계를
+ *   덮지 않는다 (프라임은 과거 채우기일 뿐이다).
+ * - prev_close/prev_prev_close/completed_days는 건드리지 않는다: 프라임 입력에는 종가가
+ *   없으므로 첫 실세션 완성은 기존 첫 완성 규칙(TR=고−저)을 따르고, 그때 prev_close가
+ *   채워지며 valid가 성립한다 (TR 개수 조건은 프라임으로 즉시 충족된다).
+ * - 이후 실세션이 완성되면 [0]에 push되어 프라임 이력은 뒤로 밀린다 (시간순 연속 유지). */
+void tr_gap1_prime(tr_gap1_t *s, const double *session_trs, size_t n);
 
 #endif

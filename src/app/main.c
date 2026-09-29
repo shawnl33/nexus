@@ -88,11 +88,13 @@ typedef struct {
 static tr_candle_t g_hist[2208]; /* 2일치(선물 2,130) + 페이지 경계 여유 */
 static tr_candle_t g_page[512];   /* 주간 페이지 스크래치 (비압축 500 상한) */
 static tr_candle_t g_night[1008]; /* 야간 t8461 (서버 상한 999) */
+static ls_daily_bar_t g_daily[32]; /* ⑤ 체인 프라임용 일봉 (t8410/t8466) */
 #define HIST_CAP ((size_t)(sizeof(g_hist) / sizeof(g_hist[0])))
 #define NIGHT_CAP ((size_t)(sizeof(g_night) / sizeof(g_night[0])))
 #define BACKFILL_PAGE_BARS 500 /* 비압축 qrycnt 상한 (t8465 명세) */
 #define BACKFILL_STOCK_BARS 1440 /* NXT 720봉 × 2일 */
 #define BACKFILL_FUT_BARS 2130   /* (주간 405 + 야간 660) × 2일 */
+#define BACKFILL_DAILY_BARS 15   /* ⑤ 체인 워밍업용 일봉 수 (dtl1/gap1 각 10세션 필요) */
 
 /* 워밍업 백필: 1분봉(실제 OHLC)을 2일치 조회해 봉 자체로 주입한다.
  * 주간은 t8465/t8412, 선물 야간은 t8461 — 두 계열을 시각으로 병합해 오름차순 주입한다.
@@ -133,6 +135,40 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, const char *s
     }
     const tr_candle_t *day = g_hist + hi;
     size_t nday = HIST_CAP - hi;
+
+    /* 1-1) ⑤ 매매 상태 체인(dtl1/gap1) 워밍업: 일봉(t8410/t8466)으로 과거 완성 세션을
+     * 프라임한다. 분봉 백필이 커버하는 세션(최근 ~2일)은 분봉 주입이 완성하므로 중복을
+     * 피해 그보다 오래된 일봉만 프라임한다. 실패해도 분봉 백필은 그대로 진행한다
+     * (기존 백필 실패 관용 패턴). */
+    if (nday > 0) {
+        int64_t oldest_day = 0;
+        tr_local_day_and_min(day[0].open_time_us, 540, &oldest_day, 0);
+        char derr[128] = {0};
+        size_t ndaily = 0;
+        int drc = ls_chart_fetch_daily(auth, is_fut ? LS_CHART_FUT_DAY : LS_CHART_STOCK_DAY,
+                                       shcode, BACKFILL_DAILY_BARS, "99999999",
+                                       g_daily, sizeof(g_daily) / sizeof(g_daily[0]),
+                                       &ndaily, derr, sizeof(derr));
+        if (drc == LS_HTTP_OK || drc == LS_CHART_EMPTY) {
+            double mids[32], trs[32]; /* g_daily와 같은 상한, 오래된 순으로 채운다 */
+            size_t nd = 0;
+            for (size_t i = 0; i < ndaily; i++) {
+                if (g_daily[i].day >= oldest_day) {
+                    continue; /* 분봉 커버 구간(당일 진행 중 포함)은 프라임하지 않는다 */
+                }
+                mids[nd] = ((double)g_daily[i].high + (double)g_daily[i].low) / 2.0;
+                trs[nd] = (double)(g_daily[i].high - g_daily[i].low);
+                nd++;
+            }
+            if (nd > 0) {
+                tr_dtl1_prime(&eng->dtl1, mids, nd);
+                tr_gap1_prime(&eng->gap1, trs, nd);
+            }
+        } else {
+            fprintf(stderr, "daily backfill unavailable rc=%d: %s (chain warmup skipped)\n",
+                    drc, derr);
+        }
+    }
 
     /* 2) 선물이면 야간 세션(t8461)도 가져온다. 주식은 t8412가 NXT까지 포함해 불필요.
      * 야간 봉은 날짜가 없어 실제 거래일(t8465 주간 봉의 날짜)로 부여한다 — 추석 같은

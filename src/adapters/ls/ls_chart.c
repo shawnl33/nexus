@@ -18,7 +18,7 @@
 
 /* 차트 TR은 초당 1건(1 TPS) 제한 — 연속 조회 시 서버가 HTTP 500으로 거절한다 (2026-09-28 실측).
  * 요청 간 최소 간격을 여기서 강제한다 (헤더 주석의 계약 구현). */
-static int64_t g_last_req_us[4]; /* 0=t8412, 1=t8465, 2=t8461 */
+static int64_t g_last_req_us[5]; /* 0=t8412, 1=t8465, 2=t8461, 3=t8410, 4=t8466 */
 
 static int64_t mono_us(void) {
     struct timespec ts;
@@ -53,8 +53,10 @@ static void throttle_slot(int slot) {
 
 static const char *path_for(ls_chart_kind_t kind) {
     switch (kind) {
-    case LS_CHART_STOCK_MIN: return "https://openapi.ls-sec.co.kr:8080/stock/chart";
-    case LS_CHART_FUT_MIN: return "https://openapi.ls-sec.co.kr:8080/futureoption/chart";
+    case LS_CHART_STOCK_MIN:
+    case LS_CHART_STOCK_DAY: return "https://openapi.ls-sec.co.kr:8080/stock/chart";
+    case LS_CHART_FUT_MIN:
+    case LS_CHART_FUT_DAY: return "https://openapi.ls-sec.co.kr:8080/futureoption/chart";
     }
     return 0;
 }
@@ -63,6 +65,8 @@ static const char *tr_for(ls_chart_kind_t kind) {
     switch (kind) {
     case LS_CHART_STOCK_MIN: return "t8412";
     case LS_CHART_FUT_MIN: return "t8465";
+    case LS_CHART_STOCK_DAY: return "t8410";
+    case LS_CHART_FUT_DAY: return "t8466";
     }
     return 0;
 }
@@ -128,6 +132,10 @@ int ls_chart_parse_page(const char *body, size_t body_len, ls_chart_kind_t kind,
                         tr_candle_t *out, size_t out_cap, ls_chart_page_t *page,
                         char *errbuf, size_t errlen) {
     memset(page, 0, sizeof(*page));
+    if (kind != LS_CHART_STOCK_MIN && kind != LS_CHART_FUT_MIN) {
+        snprintf(errbuf, errlen, "parse_page is for minute TRs only");
+        return LS_HTTP_PARSE_ERR;
+    }
     yyjson_doc *doc = yyjson_read((char *)body, body_len, 0);
     if (doc == 0) {
         snprintf(errbuf, errlen, "chart response is not JSON");
@@ -214,6 +222,10 @@ int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shc
                           tr_candle_t *out, size_t out_cap, ls_chart_page_t *page,
                           char *errbuf, size_t errlen) {
     if (shcode == 0 || out == 0 || page == 0 || ncnt <= 0 || qrycnt <= 0) {
+        return LS_HTTP_PARSE_ERR;
+    }
+    if (kind != LS_CHART_STOCK_MIN && kind != LS_CHART_FUT_MIN) {
+        snprintf(errbuf, errlen, "fetch_minute is for minute TRs only");
         return LS_HTTP_PARSE_ERR;
     }
     const char *token;
@@ -421,4 +433,139 @@ int ls_chart_fetch_fut_night(ls_auth_t *auth, const char *focode, int32_t cnt,
     }
     *out_count = (size_t)n;
     return n > 0 ? LS_HTTP_OK : LS_CHART_EMPTY;
+}
+
+/* ---------- 일봉 (t8410 주식 / t8466 선물, 미검증 TR) ---------- */
+
+/* date "20260928" (KST 날짜) → days since epoch */
+static bool parse_date_day(const char *date, int64_t *out) {
+    if (date == 0 || strlen(date) != 8) {
+        return false;
+    }
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.4s", date);
+    int y = atoi(buf);
+    snprintf(buf, sizeof(buf), "%.2s", date + 4);
+    unsigned mo = (unsigned)atoi(buf);
+    snprintf(buf, sizeof(buf), "%.2s", date + 6);
+    unsigned d = (unsigned)atoi(buf);
+    if (y < 1970 || mo < 1 || mo > 12 || d < 1 || d > 31) {
+        return false;
+    }
+    *out = tr_days_from_civil(y, mo, d);
+    return true;
+}
+
+static int daily_bar_cmp(const void *a, const void *b) {
+    int64_t da = ((const ls_daily_bar_t *)a)->day;
+    int64_t db = ((const ls_daily_bar_t *)b)->day;
+    return (da > db) - (da < db);
+}
+
+int ls_chart_parse_daily(const char *body, size_t body_len, ls_chart_kind_t kind,
+                         ls_daily_bar_t *out, size_t out_cap, size_t *out_count,
+                         char *errbuf, size_t errlen) {
+    if (out == 0 || out_count == 0) {
+        return LS_HTTP_PARSE_ERR;
+    }
+    *out_count = 0;
+    if (kind != LS_CHART_STOCK_DAY && kind != LS_CHART_FUT_DAY) {
+        snprintf(errbuf, errlen, "parse_daily is for daily TRs only");
+        return LS_HTTP_PARSE_ERR;
+    }
+    yyjson_doc *doc = yyjson_read((char *)body, body_len, 0);
+    if (doc == 0) {
+        snprintf(errbuf, errlen, "daily chart response is not JSON");
+        return LS_HTTP_PARSE_ERR;
+    }
+    char ob1[24];
+    snprintf(ob1, sizeof(ob1), "%sOutBlock1", tr_for(kind));
+    yyjson_val *bars = yyjson_obj_get(yyjson_doc_get_root(doc), ob1);
+    if (!yyjson_is_arr(bars)) {
+        /* 성공이지만 데이터 없음: 오류가 아니다 (분봉 파서와 같은 규칙) */
+        yyjson_doc_free(doc);
+        return LS_CHART_EMPTY;
+    }
+    size_t n = 0;
+    size_t idx, max;
+    yyjson_val *bar;
+    yyjson_arr_foreach(bars, idx, max, bar) {
+        if (n >= out_cap) {
+            break;
+        }
+        ls_daily_bar_t *b = &out[n];
+        if (!parse_date_day(yyjson_get_str(yyjson_obj_get(bar, "date")), &b->day) ||
+            !parse_price_scaled(yyjson_obj_get(bar, "high"), &b->high) ||
+            !parse_price_scaled(yyjson_obj_get(bar, "low"), &b->low)) {
+            continue;
+        }
+        n++;
+    }
+    yyjson_doc_free(doc);
+
+    /* 행 순서는 명세에 없다 (분봉과 달리 미검증) — 거래일 오름차순으로 정렬하고
+     * 중복 거래일은 거부한다 (분봉 파서의 중복 거부와 같은 규칙) */
+    qsort(out, n, sizeof(out[0]), daily_bar_cmp);
+    for (size_t i = 1; i < n; i++) {
+        if (out[i].day == out[i - 1].day) {
+            snprintf(errbuf, errlen, "duplicate daily bar date");
+            return LS_HTTP_PARSE_ERR;
+        }
+    }
+    *out_count = n;
+    return n > 0 ? LS_HTTP_OK : LS_CHART_EMPTY;
+}
+
+int ls_chart_fetch_daily(ls_auth_t *auth, ls_chart_kind_t kind, const char *shcode,
+                         int32_t qrycnt, const char *edate,
+                         ls_daily_bar_t *out, size_t out_cap, size_t *out_count,
+                         char *errbuf, size_t errlen) {
+    if (shcode == 0 || out == 0 || out_count == 0 || qrycnt <= 0) {
+        return LS_HTTP_PARSE_ERR;
+    }
+    if (kind != LS_CHART_STOCK_DAY && kind != LS_CHART_FUT_DAY) {
+        snprintf(errbuf, errlen, "fetch_daily is for daily TRs only");
+        return LS_HTTP_PARSE_ERR;
+    }
+    const char *token;
+    if (!ls_auth_ensure(auth, &token)) {
+        snprintf(errbuf, errlen, "%.120s", auth->last_error);
+        return LS_HTTP_TRANSPORT_ERR;
+    }
+    const char *ed = edate != 0 && edate[0] > ' ' ? edate : "99999999";
+    char body[512];
+    if (kind == LS_CHART_STOCK_DAY) {
+        /* t8410은 수정주가 여부(sujung) 필드가 있다. 프라임한 과거 일봉이 분봉으로
+         * 완성되는 최근 세션(현재 가격 스케일)과 이어져야 하므로 수정주가를 적용한다 */
+        snprintf(body, sizeof(body),
+                 "{\"t8410InBlock\":{\"shcode\":\"%s\",\"gubun\":\"2\",\"qrycnt\":%d,"
+                 "\"sdate\":\" \",\"edate\":\"%s\",\"cts_date\":\" \",\"comp_yn\":\"N\",\"sujung\":\"Y\"}}",
+                 shcode, (int)qrycnt, ed);
+    } else {
+        snprintf(body, sizeof(body),
+                 "{\"t8466InBlock\":{\"shcode\":\"%s\",\"gubun\":\"2\",\"qrycnt\":%d,"
+                 "\"sdate\":\" \",\"edate\":\"%s\",\"cts_date\":\" \",\"comp_yn\":\"N\"}}",
+                 shcode, (int)qrycnt, ed);
+    }
+
+    ls_http_req_t req = {0};
+    req.url = path_for(kind);
+    req.token = token;
+    req.tr_cd = tr_for(kind);
+    req.tr_cont = "N";
+    req.body_json = body;
+    req.timeout_ms = 10000;
+
+    throttle_slot(kind == LS_CHART_FUT_DAY ? 4 : 3);
+    ls_http_resp_t resp;
+    ls_http_rc_t rc = ls_http_post(&req, &resp);
+    if (rc != LS_HTTP_OK) {
+        snprintf(errbuf, errlen, "%.80s %.40s", resp.err_detail, resp.rsp_msg);
+        ls_http_resp_free(&resp);
+        return rc;
+    }
+    rc = ls_chart_parse_daily(resp.body.data, resp.body.len, kind, out, out_cap, out_count,
+                              errbuf, errlen);
+    ls_http_resp_free(&resp);
+    return rc;
 }

@@ -11,6 +11,7 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "core/indicators/daily_linreg_trend_v1.h"
@@ -31,6 +32,7 @@ typedef struct {
     /* 완성 일봉 이력 */
     double day_mids[100];   /* 완성일봉중간, [0]=최신 */
     int32_t day_count;      /* 완성일수 */
+    int32_t primed_count;   /* tr_dtl1_prime으로 채운 완성 일봉 수 (마지막 프라임 기준 기록) */
     /* 출력 */
     double reg_line;        /* 일봉회귀선 (1봉 투영) */
     double reg_slope;       /* 일봉회귀기울기 */
@@ -45,5 +47,12 @@ void tr_dtl1_init(tr_dtl1_t *s, const tr_dtl1_config_t *cfg);
 /* 매 봉 1회. is_session_first는 DayIndex==0 대응. */
 void tr_dtl1_on_bar(tr_dtl1_t *s, double h, double l, double c,
                     bool is_session_first, int64_t bar_index, bool is_min_1);
+
+/* 워밍업 프라임: 완성 세션 대표값((고+저)/2)을 **오래된 순**으로 주입해 과거 이력을 채운다.
+ * - 이미 보유한 완성 일봉(실세션 집계분)의 뒤(더 과거)에 이어 붙인다 — 기존 이력과
+ *   진행 중 세션 집계를 덮지 않는다 (프라임은 과거 채우기일 뿐이다).
+ * - 주입 즉시 회귀 출력과 link_valid를 재계산한다 (추세 판정은 가격이 필요해 다음 봉에 이어짐).
+ * - 이후 실세션이 완성되면 [0]에 push되어 프라임 이력은 뒤로 밀린다 (시간순 연속 유지). */
+void tr_dtl1_prime(tr_dtl1_t *s, const double *day_mids, size_t n);
 
 #endif

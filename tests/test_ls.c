@@ -148,6 +148,97 @@ static void test_fut_night_parse(void) {
     TR_CHECK(g_bars[5].state == TR_CANDLE_CLOSED && g_bars[5].timeframe_sec == 60);
 }
 
+/* ---------- 일봉 (t8410/t8466, 미검증 TR — 명세 기반 파서 단위 테스트) ---------- */
+
+/* t8410 명세 형식: 주식 가격은 Number. 행 순서는 명세에 없어 최신→과거로 섞어 둔다 */
+static const char *STOCK_DAY_RESP =
+    "{\"t8410OutBlock\":{\"shcode\":\"005930\",\"cts_date\":\"20260910\",\"s_time\":\"090000\",\"e_time\":\"153000\",\"rec_count\":3},"
+    "\"t8410OutBlock1\":["
+    "{\"date\":\"20260928\",\"open\":271000,\"high\":272000,\"low\":270500,\"close\":271800,\"jdiff_vol\":12345678},"
+    "{\"date\":\"20260925\",\"open\":270000,\"high\":271500,\"low\":269500,\"close\":271000,\"jdiff_vol\":11345678},"
+    "{\"date\":\"20260924\",\"open\":269000,\"high\":270500,\"low\":268500,\"close\":270000,\"jdiff_vol\":10345678}],"
+    "\"rsp_cd\":\"00000\",\"rsp_msg\":\"정상적으로 조회가 완료되었습니다.\"}";
+
+/* t8466 명세 형식: 선물 가격은 소수 문자열 (분봉 t8465 실측과 같은 관행으로 가정) */
+static const char *FUT_DAY_RESP =
+    "{\"t8466OutBlock\":{\"shcode\":\"A016C000\",\"cts_date\":\"20260910\",\"s_time\":\"084500\",\"e_time\":\"154500\",\"rec_count\":2},"
+    "\"t8466OutBlock1\":["
+    "{\"date\":\"20260925\",\"open\":\"1092.00\",\"high\":\"1093.00\",\"low\":\"1091.50\",\"close\":\"1092.50\",\"jdiff_vol\":120000,\"openyak\":136000},"
+    "{\"date\":\"20260928\",\"open\":\"1093.90\",\"high\":\"1094.35\",\"low\":\"1093.65\",\"close\":\"1094.00\",\"jdiff_vol\":137000,\"openyak\":136315}],"
+    "\"rsp_cd\":\"00000\",\"rsp_msg\":\"정상적으로 조회가 완료되었습니다.\"}";
+
+static void test_stock_daily_parse(void) {
+    ls_daily_bar_t bars[8];
+    size_t n = 0;
+    char err[128] = {0};
+    int rc = ls_chart_parse_daily(STOCK_DAY_RESP, strlen(STOCK_DAY_RESP), LS_CHART_STOCK_DAY,
+                                  bars, 8, &n, err, sizeof(err));
+    TR_CHECK(rc == LS_HTTP_OK);
+    TR_CHECK(n == 3);
+    /* 입력은 최신→과거였지만 거래일 오름차순으로 정렬된다 */
+    TR_CHECK(bars[0].day == tr_days_from_civil(2026, 9, 24));
+    TR_CHECK(bars[1].day == tr_days_from_civil(2026, 9, 25));
+    TR_CHECK(bars[2].day == tr_days_from_civil(2026, 9, 28));
+    /* 주식 정수 가격 ×100 스케일 (분봉과 동일 규칙) */
+    TR_CHECK(bars[0].high == 27050000);
+    TR_CHECK(bars[0].low == 26850000);
+    TR_CHECK(bars[2].high == 27200000);
+    TR_CHECK(bars[2].low == 27050000);
+}
+
+static void test_fut_daily_parse(void) {
+    ls_daily_bar_t bars[8];
+    size_t n = 0;
+    char err[128] = {0};
+    int rc = ls_chart_parse_daily(FUT_DAY_RESP, strlen(FUT_DAY_RESP), LS_CHART_FUT_DAY,
+                                  bars, 8, &n, err, sizeof(err));
+    TR_CHECK(rc == LS_HTTP_OK);
+    TR_CHECK(n == 2);
+    TR_CHECK(bars[0].day == tr_days_from_civil(2026, 9, 25));
+    TR_CHECK(bars[1].day == tr_days_from_civil(2026, 9, 28));
+    /* 선물 문자열 가격 "1093.00" → 109300 (×100) */
+    TR_CHECK(bars[0].high == 109300);
+    TR_CHECK(bars[0].low == 109150);
+    TR_CHECK(bars[1].high == 109435);
+    TR_CHECK(bars[1].low == 109365);
+}
+
+static void test_daily_empty_is_not_error(void) {
+    ls_daily_bar_t bars[8];
+    size_t n = 99;
+    char err[128] = {0};
+    int rc = ls_chart_parse_daily(EMPTY_RESP, strlen(EMPTY_RESP), LS_CHART_STOCK_DAY,
+                                  bars, 8, &n, err, sizeof(err));
+    TR_CHECK(rc == LS_CHART_EMPTY);
+    TR_CHECK(n == 0);
+}
+
+static void test_daily_duplicate_detected(void) {
+    const char *dup =
+        "{\"t8410OutBlock\":{\"cts_date\":\" \"},"
+        "\"t8410OutBlock1\":["
+        "{\"date\":\"20260925\",\"open\":100,\"high\":110,\"low\":90,\"close\":105},"
+        "{\"date\":\"20260925\",\"open\":100,\"high\":111,\"low\":91,\"close\":106}]}";
+    ls_daily_bar_t bars[8];
+    size_t n = 0;
+    char err[128] = {0};
+    int rc = ls_chart_parse_daily(dup, strlen(dup), LS_CHART_STOCK_DAY,
+                                  bars, 8, &n, err, sizeof(err));
+    TR_CHECK(rc == LS_HTTP_PARSE_ERR);
+}
+
+static void test_daily_kind_guard(void) {
+    /* 분봉/일봉 파서는 서로의 kind를 거부한다 */
+    ls_daily_bar_t bars[8];
+    size_t n = 0;
+    char err[128] = {0};
+    TR_CHECK(ls_chart_parse_daily(FUT_DAY_RESP, strlen(FUT_DAY_RESP), LS_CHART_FUT_MIN,
+                                  bars, 8, &n, err, sizeof(err)) == LS_HTTP_PARSE_ERR);
+    ls_chart_page_t page;
+    TR_CHECK(ls_chart_parse_page(FUT_DAY_RESP, strlen(FUT_DAY_RESP), LS_CHART_FUT_DAY,
+                                 2, 7, 60, g_bars, CAP, &page, err, sizeof(err)) == LS_HTTP_PARSE_ERR);
+}
+
 int main(void) {
     test_stock_parse();
     test_futures_string_prices();
@@ -155,5 +246,10 @@ int main(void) {
     test_duplicate_detected();
     test_fut_night_session_day();
     test_fut_night_parse();
+    test_stock_daily_parse();
+    test_fut_daily_parse();
+    test_daily_empty_is_not_error();
+    test_daily_duplicate_detected();
+    test_daily_kind_guard();
     TR_TEST_SUMMARY();
 }

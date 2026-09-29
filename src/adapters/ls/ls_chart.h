@@ -1,7 +1,7 @@
 #ifndef TR_LS_CHART_H
 #define TR_LS_CHART_H
 
-/* LS 과거 분봉 차트 (계획서 §15, docs/ls_api_mapping.md §3).
+/* LS 과거 분봉·일봉 차트 (계획서 §15, docs/ls_api_mapping.md §3).
  *
  * - t8412(주식 N분) / t8465(선물 N분)를 조회해 tr_candle_t 배열로 정규화한다.
  * - 페이지/연속 조회(cts_date/cts_time)를 지원하고, 중복·누락·정렬을 확인한다.
@@ -18,7 +18,9 @@
 
 typedef enum {
     LS_CHART_STOCK_MIN = 0, /* t8412 */
-    LS_CHART_FUT_MIN = 1    /* t8465 */
+    LS_CHART_FUT_MIN = 1,   /* t8465 */
+    LS_CHART_STOCK_DAY = 2, /* t8410 */
+    LS_CHART_FUT_DAY = 3    /* t8466 */
 } ls_chart_kind_t;
 
 typedef struct {
@@ -71,5 +73,30 @@ int ls_chart_fetch_fut_night(ls_auth_t *auth, const char *focode, int32_t cnt,
                              uint64_t instrument_id, uint64_t source_id,
                              tr_candle_t *out, size_t out_cap, size_t *out_count,
                              char *errbuf, size_t errlen);
+
+/* ---------- 일봉 (t8410 주식 / t8466 선물) ----------
+ * ⑤ 매매 상태 체인(dtl1/gap1) 워밍업 프라이밍용. 분봉 TR과 같은 엔드포인트·같은
+ * InBlock 패턴이고 TR 코드와 주기 구분(gubun="2")만 다르다 (공식 tr-guides 명세).
+ * **미검증 TR**: 파서는 단위 테스트로 검증했고 실호출 검증은 남아 있다. */
+
+typedef struct {
+    int64_t day;   /* 거래일 (date 필드, days since epoch, KST 날짜) */
+    int64_t high;  /* ×100 스케일 raw (분봉과 동일 규칙) */
+    int64_t low;
+} ls_daily_bar_t;
+
+/* 일봉 응답 파서 (테스트 가능하도록 분리). OutBlock1의 행 순서는 명세에 없어
+ * 거래일 오름차순으로 정렬해 out에 기록한다. 중복 거래일은 LS_HTTP_PARSE_ERR.
+ * 반환: LS_HTTP_OK / LS_CHART_EMPTY(데이터 없음, 오류 아님) / 오류 코드. */
+int ls_chart_parse_daily(const char *body, size_t body_len, ls_chart_kind_t kind,
+                         ls_daily_bar_t *out, size_t out_cap, size_t *out_count,
+                         char *errbuf, size_t errlen);
+
+/* 일봉 조회 (1 TPS 스로틀 적용). edate 기준 최신 qrycnt개 (비압축 최대 500).
+ * edate는 "99999999"=당일 기준. 반환 코드는 parse_daily와 같다. */
+int ls_chart_fetch_daily(ls_auth_t *auth, ls_chart_kind_t kind, const char *shcode,
+                         int32_t qrycnt, const char *edate,
+                         ls_daily_bar_t *out, size_t out_cap, size_t *out_count,
+                         char *errbuf, size_t errlen);
 
 #endif

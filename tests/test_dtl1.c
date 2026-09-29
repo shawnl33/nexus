@@ -66,9 +66,42 @@ static void test_partial_first_session_excluded(void) {
     TR_CHECK(fabs(s.reg_slope - 2.0) < 1e-9);
 }
 
+static void test_prime(void) {
+    tr_dtl1_t s;
+    tr_dtl1_init(&s, &CFG);
+
+    /* 프라임: 오래된 순으로 100, 102, 104, 106, 108 → 즉시 유효 조건 만족 */
+    double mids[5] = {100, 102, 104, 106, 108};
+    tr_dtl1_prime(&s, mids, 5);
+    TR_CHECK(s.day_count == 5);
+    TR_CHECK(s.primed_count == 5);
+    TR_CHECK(s.link_valid);
+    TR_CHECK(fabs(s.reg_slope - 2.0) < 1e-9);
+    TR_CHECK(fabs(s.reg_r2 - 1.0) < 1e-9);
+    TR_CHECK(fabs(s.reg_line - 110.0) < 1e-9); /* 1봉 투영 */
+
+    /* 프라임 후 첫 실세션 완성이 정상 이어짐: 세션6(mid 110)이 [0]에 push */
+    tr_dtl1_on_bar(&s, 111.0, 109.0, 110.0, true, 1, true);  /* 세션6 시작 */
+    TR_CHECK(s.day_count == 5); /* 진행 중 세션은 이력을 바꾸지 않는다 */
+    tr_dtl1_on_bar(&s, 113.0, 111.0, 112.0, true, 2, true);  /* 세션7 시작 → 세션6 완성 */
+    TR_CHECK(s.day_count == 6);
+    TR_CHECK(fabs(s.day_mids[0] - 110.0) < 1e-9);
+    TR_CHECK(fabs(s.day_mids[1] - 108.0) < 1e-9); /* 프라임 최신값이 뒤로 밀림 */
+    /* 회귀는 최신 5개(102..110): 기울기 2, 투영 112 */
+    TR_CHECK(s.link_valid);
+    TR_CHECK(fabs(s.reg_slope - 2.0) < 1e-9);
+    TR_CHECK(fabs(s.reg_line - 112.0) < 1e-9);
+
+    /* 프라임은 진행 중 세션 집계를 덮지 않는다: 세션7 진행 갱신 */
+    tr_dtl1_on_bar(&s, 115.0, 113.0, 114.0, false, 3, true);
+    TR_CHECK(s.day_count == 6);
+    TR_CHECK(fabs(s.sess_high - 115.0) < 1e-9);
+}
+
 int main(void) {
     test_regression_and_projection();
     test_trend_weak_side();
     test_partial_first_session_excluded();
+    test_prime();
     TR_TEST_SUMMARY();
 }
