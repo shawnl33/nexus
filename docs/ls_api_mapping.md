@@ -43,7 +43,7 @@
 | 주식 차트 N분 | `t8412` | `/stock/chart` | 1 | ✅ 005930 1분봉 |
 | 주식 차트 일주월년 | `t8410` | `/stock/chart` | 1 | 미검증(명세 확보) |
 | 선물 차트 N분 | `t8465` | `/futureoption/chart` | 1 | ✅ A016C000 1분봉 |
-| 선물 차트 일주월 | `t8466` | `/futureoption/chart` | 1 | 미검증 |
+| 선물 차트 일주월 | `t8466` | `/futureoption/chart` | 1 | ✅ A016C000 일봉 (2026-09-29) |
 | 코스피200선물 마스터 | `t8467` | `/futureoption/market-data` | 2 | ✅ (gubun 공백 → 13종) |
 | 주식 현재가호가 | `t1101` | `/stock/market-data` | 10 | ✅ (구조) |
 | 주식 현재가시세 | `t1102` | `/stock/market-data` | 10 | ✅ (구조) |
@@ -61,8 +61,12 @@
   sdate/stime 구간 지정·edate/etime 앵커·InBlock cts 모두 그 이전으로 못 간다 (반복 또는 무시).
   즉 주식 1분 백필은 API상 최근 약 1.2일치(NXT 720봉/일 기준)가 한계다.
 
-**t8461 (KRX야간파생 틱분별, 야간 1분봉) 실측 규칙**:
-- InBlock: `focode`(String), `cgubun:"B"`(분차트), **`bgubun`은 명세와 달리 String `"1"`**(Number는 IGW40011),
+**t8410/t8466 (일주월 차트) 실측 규칙** (2026-09-29, t8466 A016C000 일봉):
+- InBlock: `shcode`, `gubun`("2"=일봉), `qrycnt`, `sdate`, `edate`("99999999"=당일), `cts_date`, **`comp_yn`("N") 필수** — 빠뜨리면 `rsp_msg "압축여부 구분코드 오류"` + 빈 OutBlock1. 주식 t8410은 `sujung`("Y"=수정주가) 추가.
+- 응답 `t8466OutBlock1`은 **오름차순(과거→최신)** — 분봉 TR과 행 순서가 반대. **당일 진행 중 일봉도 포함**된다(close는 현재가 수준). `date`는 "YYYYMMDD" 문자열, 가격은 분봉과 같은 문자열 소수 규칙.
+- 페이지네이션: OutBlock `cts_date`는 분봉과 같은 규칙(다음 페이지 edate로 사용).
+
+**t8461 (KRX야간파생 틱분별, 야간 1분봉) 실측 규칙**:- InBlock: `focode`(String), `cgubun:"B"`(분차트), **`bgubun`은 명세와 달리 String `"1"`**(Number는 IGW40011),
   `cnt`는 Number **최대 999** (1000 이상 IGW40011, 연속 조회 키 없음 — 최대 약 1.4 세션만 조회 가능).
 - 응답은 `t8461OutBlock1` **최신→과거 내림차순**, 요약 OutBlock 없음.
 - 행에 **날짜 필드가 없고 `chetime`(HHMMSS)만** 있다. 야간 세션은 자정을 넘으므로 날짜는 추론이 필요:
