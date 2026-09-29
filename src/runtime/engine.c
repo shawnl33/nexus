@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "core/model/civil_time.h"
+
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar);
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
@@ -30,6 +32,7 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
     e->prev_bar_open = 0;
     e->has_prev_bar = false;
     e->status_ring_on = false;
+    e->mkt_on = false; /* 미부착 기본값 (attach_market 성공 시에만 true) */
 
     tr_bar_builder_config_t bbcfg;
     memset(&bbcfg, 0, sizeof(bbcfg));
@@ -69,6 +72,13 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
         tr_regmem_init(&e->regmem, &rcfg);
         tr_persist_config_t pcfg = {ps, 5, cfg->min_r2};
         tr_persist_init(&e->persist, &pcfg);
+        /* ⑤ 매매 상태 체인 (원본 기본값: 갭 변동기간 10은 원본 호출부 고정 리터럴) */
+        tr_dtl1_config_t dcfg = {cfg->daily_reg_period, cfg->min_r2, ps};
+        tr_dtl1_init(&e->dtl1, &dcfg);
+        tr_gap1_config_t gcfg = {10, cfg->gap_mid, cfg->gap_big};
+        tr_gap1_init(&e->gap1, &gcfg);
+        memset(&e->dalign, 0, sizeof(e->dalign));
+        e->bar_index = 0;
     }
     return true;
 }
@@ -131,7 +141,11 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
     const tr_market_t *m = &e->mkt;
     const tr_regmem_t *rm = &e->regmem;
     const tr_persist_t *ps = &e->persist;
-    char payload[1408];
+    const tr_dalign2_output_t *fa = &e->dalign;
+    /* 곡선회귀선_평탄: 회귀선을 틱 단위로 반올림 (raw ×100 단위에서 선물 1틱=1, 주식 1원=100) */
+    double pscale = e->cfg.is_futures ? 1.0 : 100.0;
+    double reg_flat = floor(e->lr3.line / pscale + 0.5) * pscale;
+    char payload[1664];
     int n = snprintf(payload, sizeof(payload),
         "{\"bar_open_time\":\"%lld\",\"closed\":%d,"
         "\"ohlc\":[%lld,%lld,%lld,%lld],"
@@ -142,7 +156,8 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         "\"ob_valid\":%d,\"ob_score\":%.10g,\"generation\":%u,"
         "\"mkt\":[%d,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"mem\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
-        "\"pst\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g]}",
+        "\"pst\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
+        "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g}",
         (long long)bar->open_time_us, closed ? 1 : 0,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
@@ -160,7 +175,9 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         ps->saved_valid ? 1 : 0, ps->saved_dir,
         ps->target[0], ps->target[1], ps->target[2],
         ps->upper[0], ps->upper[1], ps->upper[2],
-        ps->lower[0], ps->lower[1], ps->lower[2]);
+        ps->lower[0], ps->lower[1], ps->lower[2],
+        fa->final_valid ? 1 : 0, fa->final_dir, fa->final_state, (int)fa->final_strength,
+        reg_flat);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -218,6 +235,47 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     sin.ob_score = e->obd2.validity == TR_VALIDITY_VALID ? e->obd2.score : 0.0;
     tr_score1m_on_bar(&e->score, &sin);
 
+    /* ⑤ 매매 상태 체인 (원본: DataCompress==2 && BarInterval==1 게이트).
+     * 봉당 1회 상태 진행: bar_index는 새 봉에서만 증가하고, 모듈은 세션 경계를
+     * bar_index 게이트로 1회만 저장한다 (진행 봉 재호출은 현재 봉 H/L/C 집계만 갱신).
+     * 과거 봉 정정(늦은 틱) 이벤트는 체인에서 제외한다 — 마지막 확정 final_* 값이 유지된다. */
+    if (e->cfg.timeframe_sec == 60 &&
+        (!e->has_prev_bar || bar->open_time_us >= e->prev_bar_open)) {
+        if (is_new_bar) {
+            e->bar_index++;
+        }
+        uint32_t bar_min = 0;
+        tr_local_day_and_min(bar->open_time_us, e->cfg.session.utc_offset_min, 0, &bar_min);
+        tr_dtl1_on_bar(&e->dtl1, (double)bar->high, (double)bar->low, (double)bar->close,
+                       session_first, (int64_t)e->bar_index, true);
+        tr_gap1_on_bar(&e->gap1, (double)bar->open, (double)bar->high, (double)bar->low,
+                       (double)bar->close, (int32_t)bar_min, session_first,
+                       (int64_t)e->bar_index, true);
+        if (e->gap1.valid) {
+            /* 원본 게이트: 운영갭유효==1 일 때만 일봉 정렬 평가 */
+            tr_dalign2_input_t din;
+            memset(&din, 0, sizeof(din));
+            din.pred_dir[0] = e->lr3.v4.pred_dir[0];
+            din.pred_dir[1] = e->lr3.v4.pred_dir[1];
+            din.pred_dir[2] = e->lr3.v4.pred_dir[2];
+            din.reg_valid = e->lr3.reg_valid;
+            din.r2 = e->lr3.r2;
+            din.trend_dir = e->dtl1.trend.dir;
+            din.trend_state = e->dtl1.trend.state;
+            din.trend_strength = e->dtl1.trend.strength;
+            din.trend_valid = e->dtl1.trend.valid;
+            din.gap_grade = e->gap1.gap_grade;
+            din.daily_weight_in = e->gap1.daily_weight;
+            din.elapsed_min = (double)e->gap1.elapsed_min;
+            din.big_gap_reeval_min = (double)e->cfg.big_gap_reeval_min;
+            din.min_r2 = e->cfg.min_r2;
+            din.min_final_strength = (double)e->cfg.min_final_strength;
+            tr_dalign2_eval(&din, &e->dalign);
+        } else {
+            memset(&e->dalign, 0, sizeof(e->dalign)); /* 갭 무효 → 운영최종*=0 유지 */
+        }
+    }
+
     /* MTF상단/하단1~3 (원본 메인의 오차 띠 공식, 부채꼴·기억선 공용):
      * 기준오차 = max(회귀잔차, 예측변동성×0.25), 범위 = 기준오차 × √예측봉수 */
     double band_base = e->lr3.residual > e->lr3.v4.volatility * 0.25
@@ -258,7 +316,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         }
     }
 
-    /* ⑥ 방향 기억 (운영최종방향 미제공 → final_dir=0, 회귀선_구분 부호 사용) */
+    /* ⑥ 방향 기억 (운영최종방향 = ⑤ 일봉 체인 결과, 무효 시 회귀선_구분 부호 폴백) */
     {
         tr_regmem_input_t rin;
         memset(&rin, 0, sizeof(rin));
@@ -266,8 +324,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         rin.line_flat = line_flat;
         rin.line_sign = e->lr3.line_sign;
         rin.slope = e->lr3.slope;
-        rin.final_dir = 0; /* 운영최종방향 = 일봉 체인 (미구현, MISSING_DEPENDENCY) */
-        rin.final_dir_valid = false;
+        rin.final_dir = e->dalign.final_dir;
+        rin.final_dir_valid = e->dalign.final_valid;
         rin.pred_price[0] = e->lr3.v4.pred_price[0];
         rin.pred_price[1] = e->lr3.v4.pred_price[1];
         rin.pred_price[2] = e->lr3.v4.pred_price[2];
@@ -348,6 +406,10 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         memcpy(st.pst_target, e->persist.target, sizeof(st.pst_target));
         memcpy(st.pst_upper, e->persist.upper, sizeof(st.pst_upper));
         memcpy(st.pst_lower, e->persist.lower, sizeof(st.pst_lower));
+        st.final_valid = e->dalign.final_valid ? 1 : 0;
+        st.final_dir = e->dalign.final_dir;
+        st.final_state = e->dalign.final_state;
+        st.final_strength = (int)e->dalign.final_strength;
         tr_bar_status_t newest;
         if (tr_ring_count(&e->status_ring) == 0 ||
             (tr_ring_at(&e->status_ring, 0, &newest) && bar->open_time_us > newest.open_time_us)) {
@@ -374,10 +436,15 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
 
     publish_status(e, bar, closed);
 
-    e->prev_trading_day = day;
-    e->has_prev_day = true;
-    e->prev_bar_open = bar->open_time_us;
-    e->has_prev_bar = true;
+    /* 스트림 위치 마커는 현재 봉 이벤트에서만 전진한다. 과거 봉 정정(늦은 틱)이
+     * trading day·봉 위치를 되돌리면 다음 현재 봉이 세션 첫 봉/새 봉으로 오인되어
+     * ⑤ 일봉 체인이 중간 집계를 완성 일봉으로 오저장할 수 있다 */
+    if (!e->has_prev_bar || bar->open_time_us >= e->prev_bar_open) {
+        e->prev_trading_day = day;
+        e->has_prev_day = true;
+        e->prev_bar_open = bar->open_time_us;
+        e->has_prev_bar = true;
+    }
 }
 
 tr_bb_status_t tr_engine_on_tick(tr_engine_t *e, const tr_event_envelope_t *env, const tr_tick_t *tick) {

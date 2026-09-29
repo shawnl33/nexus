@@ -16,6 +16,9 @@
 #include <stdint.h>
 
 #include "adapters/ipc/ipc.h"
+#include "core/indicators/daily_align_v2.h"
+#include "core/indicators/daily_trend_link_v1.h"
+#include "core/indicators/gap_regime_v1.h"
 #include "core/indicators/htf_curve_predict.h"
 #include "core/indicators/linreg_v3.h"
 #include "core/indicators/market_profile.h"
@@ -34,8 +37,14 @@ typedef struct {
     /* 지표 파라미터 (메인 원본 기본값 대응) */
     int32_t predict_bars[3];     /* 예측봉수1~3 (기본 5/10/15) */
     int32_t htf_ticks;           /* 예측변수 (기본 10) */
-    double min_r2;               /* 최소신뢰도 (기본 0.40) */
+    double min_r2;               /* 최소신뢰도 (기본 0.40). 일봉최소신뢰도·dalign 분봉최소신뢰도 겸용 */
     uint32_t market_period;      /* 마켓계산기간 (기본 20) */
+    /* ⑤ 매매 상태 체인 파라미터 (메인 원본 기본값 대응) */
+    int daily_reg_period;        /* 일봉회귀기간 (기본 10) */
+    double gap_mid;              /* 중간갭기준 (기본 0.35) */
+    double gap_big;              /* 큰갭기준 (기본 0.75) */
+    int big_gap_reeval_min;      /* 큰갭재평가분 (기본 30) */
+    int min_final_strength;      /* 최종최소강도 (기본 40) */
 } tr_engine_config_t;
 
 typedef void (*tr_engine_status_fn)(void *ctx, const char *stream_id, uint64_t sequence,
@@ -68,6 +77,11 @@ typedef struct {
     bool pst_saved, pst_valid;
     int pst_dir;
     double pst_target[3], pst_upper[3], pst_lower[3];
+    /* ⑤ 매매 상태 (운영최종방향/상태/강도/유효 — 일봉 추세 연결 → 갭 레짐 → 일봉 정렬 체인) */
+    int final_valid;
+    int final_dir;
+    int final_state;
+    int final_strength;
 } tr_bar_status_t;
 
 typedef struct {
@@ -95,7 +109,14 @@ typedef struct {
     bool status_ring_on;
     tr_market_t mkt;            /* ⑧ 마켓 밴드 (attach_market 시에만 평가) */
     bool mkt_on;
-    tr_regmem_t regmem;         /* ⑥ 방향 기억 (운영최종방향 미제공 → 회귀선_구분 부호 사용) */
+    /* ⑤ 매매 상태 체인 (1분봉 전용): 일봉 추세 연결 → 갭 레짐 → 일봉 정렬.
+     * bar_index는 체인에 공급한 봉 수(세션 경계 게이트용, 봉당 1회 증가) */
+    tr_dtl1_t dtl1;
+    tr_gap1_t gap1;
+    tr_dalign2_output_t dalign;
+    uint64_t bar_index;
+    /* ⑥ 방향 기억 (운영최종방향 = ⑤ dalign.final_dir, 무효 시 회귀선_구분 부호 폴백) */
+    tr_regmem_t regmem;
     tr_persist_t persist;       /* ⑦ 지속 사진 */
 } tr_engine_t;
 

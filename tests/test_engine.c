@@ -207,11 +207,116 @@ static void test_status_ring_alignment(void) {
     TR_CHECK(!tr_engine_status_at(&e2, 0, &st));
 }
 
+/* ⑤ 매매 상태 체인 통합: 11개 세션을 공급해 운영최종유효 전이를 확인한다.
+ * 세션 k 봉 i 중간값 = 1000 + 20k + 2i (저·고 ±2) — 세션 중간값은 1007+20k 완전 직선
+ * (일봉 기울기 20, r2=1), 갭 = 2/19.8 ≈ 0.10 (일반장), 분봉 회귀는 세션 5봉째부터 유효 */
+typedef struct {
+    char last[1664]; /* 엔진 페이로드 버퍼와 같은 크기 */
+    int n;
+} last_capture_t;
+
+static void last_capture_cb(void *ctx, const char *stream_id, uint64_t seq, const char *payload) {
+    last_capture_t *c = (last_capture_t *)ctx;
+    snprintf(c->last, sizeof(c->last), "%s", payload);
+    c->n++;
+    (void)stream_id;
+    (void)seq;
+}
+
+static void feed_day(tr_engine_t *e, int day, unsigned mi, unsigned s, tr_price_t price, uint64_t id) {
+    tr_event_envelope_t env;
+    memset(&env, 0, sizeof(env));
+    env.kind = TR_EVENT_TICK;
+    tr_civil_t c = {2024, 1, (unsigned)(2 + day), 9, mi, s};
+    tr_time_us_from_civil(&c, KST, &env.event_time_us);
+    env.received_time_us = env.event_time_us;
+    tr_tick_t tk;
+    memset(&tk, 0, sizeof(tk));
+    tk.instrument_id = e->cfg.instrument_id;
+    tk.price = price;
+    tk.qty = 10;
+    tk.source_exec_id = id;
+    tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+    TR_CHECK(tr_engine_on_tick(e, &env, &tk) != TR_BB_ERROR);
+}
+
+static void feed_session_bars(tr_engine_t *e, int k, int from_bar, int to_bar, uint64_t *id) {
+    for (int i = from_bar; i <= to_bar; i++) {
+        tr_price_t mid = 1000 + 20 * k + 2 * i;
+        feed_day(e, k, (unsigned)i, 0, mid - 2, (*id)++);
+        feed_day(e, k, (unsigned)i, 30, mid + 2, (*id)++);
+    }
+}
+
+static void test_daily_chain(void) {
+    tr_engine_t e;
+    last_capture_t cap;
+    memset(&cap, 0, sizeof(cap));
+    static tr_bar_status_t ring[BB_CAP];
+
+    tr_engine_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.engine_instance_id = 1;
+    cfg.instrument_id = 1;
+    cfg.session = (tr_session_policy_t){KST, 540, 930, TR_SESSION_EVERYDAY};
+    cfg.timeframe_sec = 60;
+    cfg.no_trade = TR_NO_TRADE_SKIP;
+    cfg.predict_bars[0] = 5;
+    cfg.predict_bars[1] = 10;
+    cfg.predict_bars[2] = 15;
+    cfg.htf_ticks = 10;
+    cfg.min_r2 = 0.40;
+    cfg.market_period = 20;
+    cfg.is_futures = true;
+    cfg.daily_reg_period = 10;
+    cfg.gap_mid = 0.35;
+    cfg.gap_big = 0.75;
+    cfg.big_gap_reeval_min = 30;
+    cfg.min_final_strength = 40;
+    TR_CHECK(tr_engine_init(&e, &cfg, g_bb_storage, BB_CAP, g_score_mid, 32));
+    tr_engine_attach_status_cb(&e, last_capture_cb, &cap);
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+
+    /* 10개 세션: 완성 일봉·TR이 10개 미만이라 체인은 무효를 유지한다 */
+    uint64_t id = 1;
+    for (int k = 0; k < 10; k++) {
+        feed_session_bars(&e, k, 0, 7, &id);
+    }
+    TR_CHECK(strstr(cap.last, "\"final\":[0,0,0,0]") != 0);
+    TR_CHECK(!e.gap1.valid && !e.dalign.final_valid);
+
+    /* 11번째 세션 진입: 첫 봉에서 10개 완성 일봉·TR이 확정된다 */
+    feed_session_bars(&e, 10, 0, 3, &id);
+    TR_CHECK(e.gap1.valid);
+    TR_CHECK(e.gap1.gap_grade == 0);
+    TR_CHECK(e.dtl1.link_valid);
+    TR_CHECK(e.dtl1.trend.valid && e.dtl1.trend.dir == 1);
+    TR_CHECK(strstr(cap.last, "\"final\":[0,0,0,0]") != 0); /* 분봉 회귀 워밍업(5봉) 전 */
+
+    /* 5봉째부터 분봉 회귀 유효 → 일봉 상승 추세와 3/3 합의 → 운영최종유효 1 */
+    feed_session_bars(&e, 10, 4, 7, &id);
+    TR_CHECK(e.dalign.final_valid);
+    TR_CHECK(e.dalign.final_dir == 1);
+    TR_CHECK(e.dalign.final_state == 2);
+    TR_CHECK(strstr(cap.last, "\"final\":[1,1,2,100]") != 0);
+    TR_CHECK(strstr(cap.last, "\"reg_flat\":1214") != 0); /* 회귀선 틱 반올림 (선물 ps=1) */
+    TR_CHECK(e.bar_index == 88); /* 11세션 × 8봉, 봉당 1회씩만 진행 */
+
+    /* 상태 링: 최신 봉은 유효, 링에 남은 가장 오래된 봉(세션 3 첫 봉)은 무효 */
+    tr_bar_status_t st;
+    TR_CHECK(tr_engine_status_at(&e, 0, &st));
+    TR_CHECK(st.final_valid == 1 && st.final_dir == 1 && st.final_state == 2 &&
+             st.final_strength == 100);
+    TR_CHECK(tr_engine_status_at(&e, 63, &st));
+    TR_CHECK(st.final_valid == 0);
+}
+
 int main(void) {
     test_replay_pipeline();
     test_session_first_reset();
     test_orderbook_path();
     test_select_symbol_generation();
     test_status_ring_alignment();
+    test_daily_chain();
     TR_TEST_SUMMARY();
 }

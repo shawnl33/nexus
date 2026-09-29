@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 199309L
 #endif
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -326,16 +327,18 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             first = false;
         }
         /* 봉별 지표(회귀·예측·점수·호가) — bars와 같은 순서. 스냅샷으로 과거 구간의
-         * 미래곡선 보조지표도 복원하기 위한 값이다 */
+         * 미래곡선 보조지표도 복원하기 위한 값이다.
+         * [21..25]는 ⑤ 매매 상태와 reg_flat(회귀선 틱 반올림, 엔진 페이로드와 동일 규칙) */
+        double ps_flat = eng->cfg.is_futures ? 1.0 : 100.0;
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ind\":[");
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 260;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 384;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_status_at(eng, k, &st);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off,
                             "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d,"
-                            "%d,%.10g,%.10g,%.10g,%.10g,%.10g]",
+                            "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g]",
                             first ? "" : ",",
                             st.closed ? 1 : 0, st.reg_valid ? 1 : 0, st.reg_line, st.reg_r2,
                             st.pred[0], st.pred[1], st.pred[2],
@@ -343,7 +346,9 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
                             st.residual, st.pvol,
                             st.pred_dir[0], st.pred_dir[1], st.pred_dir[2],
                             st.mkt_valid ? 1 : 0, st.mkt_center, st.mkt_u1, st.mkt_l1,
-                            st.mkt_u2, st.mkt_l2);
+                            st.mkt_u2, st.mkt_l2,
+                            st.final_valid, st.final_dir, st.final_state, st.final_strength,
+                            floor(st.reg_line / ps_flat + 0.5) * ps_flat);
             first = false;
         }
         /* ⑥ 방향 기억 갱신 이벤트 (updated 봉만, 창 안에서 오름차순) */
@@ -499,6 +504,11 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     ecfg.htf_ticks = 10;
     ecfg.min_r2 = 0.40;
     ecfg.market_period = 20;
+    ecfg.daily_reg_period = 10;
+    ecfg.gap_mid = 0.35;
+    ecfg.gap_big = 0.75;
+    ecfg.big_gap_reeval_min = 30;
+    ecfg.min_final_strength = 40;
 
     tr_engine_t engine;
     if (!tr_engine_init(&engine, &ecfg, g_bb_storage, BB_CAP, g_score_mid, 64)) {
@@ -672,6 +682,11 @@ static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep, 
     ecfg.htf_ticks = 10;
     ecfg.min_r2 = 0.40;
     ecfg.market_period = 20;
+    ecfg.daily_reg_period = 10;
+    ecfg.gap_mid = 0.35;
+    ecfg.gap_big = 0.75;
+    ecfg.big_gap_reeval_min = 30;
+    ecfg.min_final_strength = 40;
 
     tr_engine_t engine;
     if (!tr_engine_init(&engine, &ecfg, g_bb_storage, BB_CAP, g_score_mid, 64)) {
