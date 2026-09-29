@@ -111,10 +111,12 @@ const MiraeLayers = (() => {
     return {
       predDir: d.predDir, regValid: d.regValid, r2: d.r2, regFlat: d.regFlat,
       finalValid: d.finalValid, finalState: d.finalState, day: d.day,
+      mktValid: d.mktValid, mkt: d.mkt,
     };
   }
   function barIndFromPayload(p) {
     const fin = Array.isArray(p.final) ? p.final : [];
+    const mkt = Array.isArray(p.mkt) ? p.mkt : [];
     return {
       predDir: Array.isArray(p.pred_dir) ? p.pred_dir.map(int) : [0, 0, 0],
       regValid: p.reg_valid === 1,
@@ -123,6 +125,8 @@ const MiraeLayers = (() => {
       finalValid: fin[0] === 1,
       finalState: int(fin[2]),
       day: num(p.day),
+      mktValid: mkt[0] === 1,
+      mkt: [num(mkt[1]), num(mkt[2]), num(mkt[3]), num(mkt[4]), num(mkt[5])],
     };
   }
 

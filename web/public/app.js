@@ -81,6 +81,36 @@ const barInd = new Map(); // time → { predDir[3], regValid, r2, regFlat, final
 const barSeq = [];        // 시각 오름차순 목록
 const barPos = new Map(); // time → barSeq 인덱스
 let lastMktCenter = NaN;  // ⑧ 마켓중심기울기 = 중심 − 이전중심
+let mktBandOn = false;    // ⑧ 마켓 밴드 표시 (원본 입력 마켓밴드표시; 기본 숨김, 헤더 토글)
+
+// ⑧ 마켓 밴드 다시 그리기 — 토글 시 barInd 캐시에서 전체 복원/제거
+function rebuildMktBand() {
+  if (!mktBandOn) {
+    for (const s of [mktCenterSeries, mktU1, mktL1, mktU2, mktL2]) s.setData([]);
+    return;
+  }
+  const cData = [], u1 = [], l1 = [], u2 = [], l2 = [];
+  let prev = NaN;
+  for (const t of barSeq) {
+    const ind = barInd.get(t);
+    const bar = bars.get(t);
+    if (!ind || !ind.mktValid || !bar) continue;
+    const [center, u1v, l1v, u2v, l2v] = ind.mkt;
+    cData.push({ time: t, value: center,
+                 stage: MiraeLayers.mktStage(prev, center, bar.close, ind.regFlat, u1v, tickRaw) });
+    prev = center;
+    u1.push({ time: t, value: u1v });
+    l1.push({ time: t, value: l1v });
+    u2.push({ time: t, value: u2v });
+    l2.push({ time: t, value: l2v });
+  }
+  lastMktCenter = prev;
+  mktCenterSeries.setData(cData);
+  mktU1.setData(u1);
+  mktL1.setData(l1);
+  mktU2.setData(u2);
+  mktL2.setData(l2);
+}
 
 // ④ 세션 가드 (원본 v16:224-226): 10봉 전 봉이 다른 세션이면 결과 띠 무효(회색)
 function sameSession(src, cur) {
@@ -220,16 +250,18 @@ function applyStatus(msg) {
                         c: MiraeLayers.bandColor(src, sameSession(src, ind)) });
   }
 
-  // ⑧ 마켓 밴드: [valid, center, u1, l1, u2, l2]
+  // ⑧ 마켓 밴드: [valid, center, u1, l1, u2, l2] — 기본 숨김(헤더 토글로 표시)
   if (Array.isArray(p.mkt) && p.mkt[0] === 1) {
     const [, center, u1, l1, u2, l2] = p.mkt;
-    mktCenterSeries.update({ time: t, value: center, stage: MiraeLayers.mktStage(lastMktCenter, center, c, ind.regFlat, u1, tickRaw) });
+    if (mktBandOn) {
+      mktCenterSeries.update({ time: t, value: center, stage: MiraeLayers.mktStage(lastMktCenter, center, c, ind.regFlat, u1, tickRaw) });
+      mktU1.update({ time: t, value: u1 });
+      mktL1.update({ time: t, value: l1 });
+      mktU2.update({ time: t, value: u2 });
+      mktL2.update({ time: t, value: l2 });
+    }
     lastMktCenter = center;
-    mktU1.update({ time: t, value: u1 });
-    mktL1.update({ time: t, value: l1 });
-    mktU2.update({ time: t, value: u2 });
-    mktL2.update({ time: t, value: l2 });
-  } else {
+  } else if (mktBandOn) {
     mktCenterSeries.update({ time: t });
     mktU1.update({ time: t });
     mktL1.update({ time: t });
@@ -367,7 +399,6 @@ async function seedChart() {
     const regData = [];
     const scoreData = [];
     const bandData = [];
-    const mktC = [], mktU1d = [], mktL1d = [], mktU2d = [], mktL2d = [];
     for (let i = 0; i < dedup.length; i++) {
       const b = dedup[i];
       const d = MiraeLayers.parseInd(b.ind);
@@ -387,26 +418,11 @@ async function seedChart() {
         bandData.push({ time: b.time, value: d.regFlat - MiraeLayers.bandOffset(tickRaw),
                         c: MiraeLayers.bandColor(src, sameSession(src, d)) });
       }
-      // ⑧ 마켓 밴드
-      if (d.mktValid) {
-        const [center, u1, l1, u2, l2] = d.mkt;
-        mktC.push({ time: b.time, value: center,
-                    stage: MiraeLayers.mktStage(lastMktCenter, center, b.close, d.regFlat, u1, tickRaw) });
-        lastMktCenter = center;
-        mktU1d.push({ time: b.time, value: u1 });
-        mktL1d.push({ time: b.time, value: l1 });
-        mktU2d.push({ time: b.time, value: u2 });
-        mktL2d.push({ time: b.time, value: l2 });
-      }
     }
     regLineSeries.setData(regData);
     scoreSeries.setData(scoreData);
     bandSeries.setData(bandData);
-    mktCenterSeries.setData(mktC);
-    mktU1.setData(mktU1d);
-    mktL1.setData(mktL1d);
-    mktU2.setData(mktU2d);
-    mktL2.setData(mktL2d);
+    rebuildMktBand(); // ⑧ 마켓 밴드 (기본 숨김; 켜져 있으면 barInd 캐시에서 복원)
 
     // ⑥⑦ 이벤트 복원: 세트가 다음 갱신/저장까지 유지되는 수평 계단선
     memSeries.setData(buildMemItems(dedup, memEvents));
@@ -532,6 +548,14 @@ async function loadWorkspace() {
   // 화면 복원으로 전략을 자동 시작하거나 주문을 재실행하지 않는다.
   alert(`화면틀 '${name}' 적용 (generation ${generation})`);
 }
+
+// ⑧ 마켓 밴드 토글 (기본 숨김 — 원본 입력 마켓밴드표시=0에 해당)
+const mktbandBtn = document.getElementById("mktband-toggle");
+mktbandBtn.onclick = () => {
+  mktBandOn = !mktBandOn;
+  mktbandBtn.classList.toggle("on", mktBandOn);
+  rebuildMktBand();
+};
 
 document.getElementById("ws-save").onclick = saveWorkspace;
 document.getElementById("ws-load").onclick = loadWorkspace;
