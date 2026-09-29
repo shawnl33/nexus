@@ -70,6 +70,21 @@ test("reset: 맵 참조를 유지한 채 비우고 seedToken을 올린다", () =
   assert.equal(c.seedToken, tok + 1); // 늦은 시딩 응답 폐기 트리거
 });
 
+test("drop: 캐시를 제거하고, 같은 종목 재조회는 새 캐시를 만든다", () => {
+  const feed = Feed.create();
+  const a = feed.forSymbol("005930");
+  feed.noteBar(a, 1000, { time: 1000 });
+  a.name = "삼성전자";
+  assert.equal(feed.drop("005930"), true);
+  assert.equal(feed.get("005930"), undefined);
+  assert.deepEqual(feed.symbols(), []);
+  const fresh = feed.forSymbol("005930"); // unwatch 후 다시 watch하면 빈 캐시부터
+  assert.notEqual(fresh, a);
+  assert.equal(fresh.bars.size, 0);
+  assert.equal(fresh.name, "");
+  assert.equal(feed.drop("999999"), false); // 없는 종목 제거는 false
+});
+
 test("noteGeneration: 종목별로 새 세대만 true, 낮은 세대는 폐기 대상", () => {
   const feed = Feed.create();
   const a = feed.forSymbol("A");

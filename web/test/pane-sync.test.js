@@ -118,7 +118,7 @@ test("크로스헤어: 칸별 getPrice가 있으면 공유 값보다 우선한�
   const a = mockChart(), b = mockChart();
   const bBars = new Map([[1000, { time: 1000, close: 555 }]]); // B 칸 종목의 캐시
   sync.add(a.chart, { id: "sa" });
-  sync.add(b.chart, { id: "sb" }, (t) => bBars.get(t)?.close);
+  sync.add(b.chart, { id: "sb" }, { getPrice: (t) => bBars.get(t)?.close });
 
   fireCross(a, { time: 1000 });
   // B 칸에는 공유 캐시(11)가 아니라 B 종목 캐시의 555로 찍힌다
@@ -127,6 +127,48 @@ test("크로스헤어: 칸별 getPrice가 있으면 공유 값보다 우선한�
   fireCross(b, { time: 1000 });
   // A 칸은 칸별 getPrice가 없으므로 create의 공유 값을 쓴다
   assert.deepEqual(a.calls.setPos, [{ price: 11, time: 1000, series: { id: "sa" } }]);
+});
+
+// 길이를 아는 칸끼리의 시간축 전파 — 종목별 데이터 길이가 다른 다중 종목 대응.
+// 선물(2400봉)과 주식(499봉)처럼 길이가 달라도 같은 인덱스를 억지로 맞추지 않는다.
+function setupWithLengths(lens) {
+  const sync = PaneSync.create();
+  const ms = lens.map(() => mockChart());
+  ms.forEach((m, i) => sync.add(m.chart, { id: `s${i}` }, { getLength: () => lens[i] }));
+  return { sync, ms };
+}
+
+test("시간축(꼬리): 발생 칸이 최신에 붙어 있으면 대상 칸은 길이 무관하게 자기 최신 창으로 간다", () => {
+  const { ms } = setupWithLengths([2400, 499]);
+  fireRange(ms[1], { from: 449, to: 498 }); // 주식 칸이 자기 꼬리 (라이브 따라가기·시딩 직후)
+  // 선물 칸은 449~498(자기 데이터 중간)이 아니라 자기 최신 창으로 복귀한다
+  assert.deepEqual(ms[0].calls.setRange, [{ from: 2399 - 49, to: 2399 }]);
+});
+
+test("시간축(클램프): 중간 창이 대상 칸 데이터 밖이면 가장 가까운 유효 창으로 이동한다", () => {
+  const { ms } = setupWithLengths([2400, 499]);
+  fireRange(ms[0], { from: 1000, to: 1100 }); // 선물 칸의 중간 구간 탐색 (꼬리 아님)
+  // 주식 칸(499봉)에는 1000~1100이 데이터 밖 → 최신 창으로 클램프
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 498 - 100, to: 498 }]);
+});
+
+test("시간축(클램프): 첫 봉보다 왼쪽 창은 대상 칸의 첫 창으로 이동한다", () => {
+  const { ms } = setupWithLengths([499, 2400]);
+  fireRange(ms[0], { from: -30, to: -10 }); // 왼쪽 여백 너머 (꼬리 아님)
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 0, to: 20 }]);
+});
+
+test("시간축: 데이터 없는 칸(길이 0)에는 범위를 적용하지 않는다", () => {
+  const { ms } = setupWithLengths([2400, 0]);
+  fireRange(ms[0], { from: 2350, to: 2399 }); // 꼬리 창이어도
+  fireRange(ms[0], { from: 100, to: 200 });   // 중간 창이어도
+  assert.equal(ms[1].calls.setRange.length, 0);
+});
+
+test("시간축: 데이터와 겹치는 중간 창은 같은 논리 범위를 그대로 적용한다", () => {
+  const { ms } = setupWithLengths([2400, 499]);
+  fireRange(ms[0], { from: 300, to: 400 }); // 2400봉 칸의 중간 창 — 주식 칸 데이터와 겹침
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 300, to: 400 }]);
 });
 
 test("칸 삭제: remove 후에는 구독이 해제되어 더 이상 전파되지 않는다", () => {

@@ -138,8 +138,11 @@ function createPane(heightFrac = 1) {
     borderUpColor: "#ef5350", borderDownColor: "#2962ff",
     wickUpColor: "#ef5350", wickDownColor: "#2962ff",
   });
-  pane.syncHandle = paneSync.add(pane.chart, pane.candleSeries,
-    (t) => paneCache(pane)?.bars.get(t)?.close);
+  pane.syncHandle = paneSync.add(pane.chart, pane.candleSeries, {
+    // 크로스헤어 가로선 값과 시간축 전파의 클램프/최신 창 계산은 이 칸 자기 종목의 캐시 기준이다
+    getPrice: (t) => paneCache(pane)?.bars.get(t)?.close,
+    getLength: () => feed.get(pane.symbol)?.barSeq.length ?? 0,
+  });
   buildPanePicker(pane); // 종목 입력은 칸 도구줄 맨 앞에 1회 만든다 (칩 재구성과 무관)
   const chips = document.createElement("span");
   chips.className = "chips";
@@ -150,7 +153,7 @@ function createPane(heightFrac = 1) {
   return pane;
 }
 
-function removePane(pane) {
+function removePane(pane, { release = true } = {}) {
   const i = panes.indexOf(pane);
   if (i < 0) return;
   panes.splice(i, 1);
@@ -170,6 +173,30 @@ function removePane(pane) {
   }
   rebuildResizeBars();
   updateBadgeVisibility();
+  if (release) releaseSymbol(pane.symbol); // 다른 칸이 안 보면 엔진 watch도 해지한다
+}
+
+// 더 이상 어느 칸도 보지 않는 종목을 정리한다: 엔진 watch를 해지하고 로컬 캐시를 지운다.
+// (화면 구독 자원 정리 — 전략 거래 대상과는 무관하다, 계획서 §18)
+async function releaseSymbol(shcode) {
+  if (!shcode || panes.some((p) => p.symbol === shcode)) return;
+  seedInflight.delete(shcode); // 진행 중 시딩은 고아 캐시를 채우고 렌더 없이 끝난다
+  feed.drop(shcode);
+  const token = await apiToken();
+  if (!token) return;
+  try {
+    const res = await fetch("/api/symbols/unwatch", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-trader-token": token },
+      body: JSON.stringify({ shcode }),
+    });
+    if (res.ok) {
+      engineWatches = engineWatches.filter((s) => s !== shcode);
+    } else if (res.status === 403) {
+      resetToken();
+    }
+    // 그 외 거부(마지막 watch 해지 불가 등)는 화면 동작에 영향이 없으므로 조용히 넘긴다
+  } catch { /* 엔진 미응답이면 엔진 재시작 시 관측 목록이 초기화되며 정리된다 */ }
 }
 
 // 인접 칸 경계의 리사이즈바를 현재 칸 목록에 맞춰 다시 단다
@@ -324,7 +351,8 @@ async function watchSymbol(shcode) {
 }
 
 // 칸에 종목을 설정한다: watch → 캐시에 반영 → 시딩(완료 시 그 종목의 모든 칸을 다시 그림).
-// 실패하면 칸은 미선택으로 돌아간다. selSeq는 빠른 연속 선택 시 늦은 완료를 폐기한다.
+// 실패하면 칸은 기존 종목과 화면을 그대로 유지한다 (입력창만 현재 종목으로 되돌린다).
+// selSeq는 빠른 연속 선택 시 늦은 완료를 폐기한다.
 async function selectPaneSymbol(pane, shcode, name) {
   shcode = String(shcode ?? "").trim();
   hidePaneResults(pane);
@@ -339,6 +367,7 @@ async function selectPaneSymbol(pane, shcode, name) {
     syncPaneSymbolUi(pane);
     return alert(`종목 관측 실패 (${shcode}): ${w.error}`);
   }
+  const prev = pane.symbol;
   pane.symbol = shcode;
   pane.symName = name ?? "";
   clearPaneData(pane); // 이전 종목의 잔여 표시를 지운다
@@ -349,9 +378,12 @@ async function selectPaneSymbol(pane, shcode, name) {
   }
   // 엔진이 알려준 현 세대를 바닥으로 깐다 — 이보다 낮은 세대의 늦은 메시지가 리셋을 일으키지 않게
   if (typeof w.generation === "number") feed.noteGeneration(cache, w.generation);
+  if (!engineWatches.includes(shcode)) engineWatches.push(shcode);
   syncPaneSymbolUi(pane);
   buildPaneTools(pane); // 지표 칩이 보이기 시작한다
   updateBadgeVisibility();
+  // 이전 종목은 새 watch가 붙은 뒤에 해제한다 (엔진의 마지막-watch 해지 거부를 피한다)
+  if (prev) releaseSymbol(prev);
   await seedSymbol(shcode);
 }
 
@@ -649,6 +681,9 @@ function renderSymbolPanes(shcode) {
   for (const pane of panes) {
     if (pane.symbol !== shcode) continue;
     pane.candleSeries.setData(rows);
+    // 시딩 직후에는 그 칸이 자기 최신 범위로 돌아온다. 이 이벤트는 꼬리 기준 전파 규칙으로
+    // 다른 칸에도 자기 최신 창으로 전파된다 (pane-sync propagateRange 참조)
+    if (rows.length) pane.chart.timeScale().scrollToRealTime();
     for (const { handle } of pane.active.values()) handle.applySeed(ctx);
   }
   restoreHeaderBadges();
@@ -829,17 +864,25 @@ function normalizeHeights() {
 
 // 화면틀 v2 적용: 칸을 재구성하고 칸별 종목은 watch→시딩으로 복원한다 (비동기 진행).
 // symbol 없는 칸(구 화면틀)은 parse 단에서 current_symbol로 폴백되어 들어온다.
-function applyWorkspace(parsed) {
-  while (panes.length) removePane(panes[panes.length - 1]);
+// 사라진 종목의 unwatch는 새 칸의 watch가 끝난 뒤에 한다 (엔진의 마지막-watch 해지 거부 회피).
+async function applyWorkspace(parsed) {
+  const before = new Set(panes.map((p) => p.symbol).filter(Boolean));
+  while (panes.length) removePane(panes[panes.length - 1], { release: false });
+  const jobs = [];
   for (const spec of parsed.panels) {
     const pane = createPane(spec.height);
     for (const ind of spec.indicators) activateIndicator(pane, ind.id, ind.layers);
     buildPaneTools(pane);
-    if (spec.symbol) selectPaneSymbol(pane, spec.symbol);
+    if (spec.symbol) jobs.push(selectPaneSymbol(pane, spec.symbol).catch(() => {}));
   }
   normalizeHeights();
   rebuildResizeBars();
   updateBadgeVisibility();
+  await Promise.all(jobs);
+  const after = new Set(panes.map((p) => p.symbol).filter(Boolean));
+  for (const sh of before) {
+    if (!after.has(sh)) await releaseSymbol(sh);
+  }
 }
 
 let cachedToken = null;
@@ -891,7 +934,8 @@ async function loadWorkspace() {
   const parsed = Workspace.parse(data, (id) => id in RENDERERS);
   if (!parsed) return alert("구 버전 화면틀은 적용할 수 없습니다 — 기본 상태를 유지합니다");
   // 화면 복원으로 전략을 자동 시작하거나 주문을 재실행하지 않는다.
-  applyWorkspace(parsed);
+  // 칸별 watch→시딩과 사라진 종목의 unwatch는 백그라운드로 진행한다.
+  applyWorkspace(parsed).catch(() => {});
   alert(`화면틀 '${name}' 적용`);
 }
 

@@ -36,6 +36,10 @@ const Feed = (() => {
     const get = (shcode) => caches.get(shcode);
     const symbols = () => [...caches.keys()];
 
+    // 캐시 제거 — 어느 칸도 보지 않는 종목을 unwatch할 때 정리한다.
+    // 진행 중인 시딩이 있으면 고아 캐시를 채우지만 맵에서 빠졌으므로 렌더되지 않는다.
+    const drop = (shcode) => caches.delete(shcode);
+
     // 캐시를 비운다 (세대 교체·엔진 재시작·재시딩). 맵/배열 참조는 유지하므로
     // 렌더러에 건넨 ctx가 끊기지 않는다. seedToken을 올려 진행 중인 시딩이
     // 리셋 이후 상태를 늦게 덮어쓰지 않게 한다.
@@ -86,7 +90,7 @@ const Feed = (() => {
       return true;
     }
 
-    return { forSymbol, get, symbols, reset, noteBar, recentBars, noteGeneration };
+    return { forSymbol, get, symbols, drop, reset, noteBar, recentBars, noteGeneration };
   }
 
   return { create };
