@@ -69,6 +69,14 @@ const barInd = new Map(); // time → { predDir[3], regValid, r2, regFlat, final
 const barSeq = [];        // 시각 오름차순 목록
 const barPos = new Map(); // time → barSeq 인덱스
 let lastMktCenter = NaN;  // ⑧ 마켓중심기울기 = 중심 − 이전중심
+let tickRaw = 5;          // raw 단위 틱 크기 (엔진 tick 키가 갱신; 선물 5, 주식 100)
+
+// ④ 세션 가드 (원본 v16:224-226): 10봉 전 봉이 다른 세션이면 결과 띠 무효(회색)
+function sameSession(src, cur) {
+  if (!src) return false;
+  if (!Number.isFinite(src.day) || !Number.isFinite(cur.day)) return true; // day 미제공 구형 엔진 호환
+  return src.day === cur.day;
+}
 
 function noteBar(t, bar) {
   bars.set(t, bar);
@@ -104,6 +112,7 @@ function resetIndicators() {
   barSeq.length = 0;
   barPos.clear();
   lastMktCenter = NaN;
+  tickRaw = 5;
   candleSeries.setData([]);
   for (const s of [regLineSeries, scoreSeries, bandSeries, memSeries, pstSeries,
                    mktCenterSeries, mktU1, mktL1, mktU2, mktL2]) s.setData([]);
@@ -156,6 +165,7 @@ function applyStatus(msg) {
   const pos = barPos.get(t);
   const ind = MiraeLayers.barIndFromPayload(p);
   barInd.set(t, ind);
+  if (typeof p.tick === "number" && Number.isFinite(p.tick) && p.tick > 0) tickRaw = p.tick;
 
   // ② 회귀선 (reg_flat) + ⑤ 매매 상태 덧선. reg_valid==0이면 갭
   if (ind.regValid && Number.isFinite(ind.regFlat)) {
@@ -195,13 +205,14 @@ function applyStatus(msg) {
   // ④ 과거 채점 결과 띠: reg_flat − tick×4, 색은 10봉 전 예측방향2·신뢰도 기준
   if (Number.isFinite(ind.regFlat)) {
     const src = pos !== undefined && pos >= 10 ? barInd.get(barSeq[pos - 10]) : undefined;
-    bandSeries.update({ time: t, value: ind.regFlat - MiraeLayers.BAND_OFFSET, c: MiraeLayers.bandColor(src) });
+    bandSeries.update({ time: t, value: ind.regFlat - MiraeLayers.bandOffset(tickRaw),
+                        c: MiraeLayers.bandColor(src, sameSession(src, ind)) });
   }
 
   // ⑧ 마켓 밴드: [valid, center, u1, l1, u2, l2]
   if (Array.isArray(p.mkt) && p.mkt[0] === 1) {
     const [, center, u1, l1, u2, l2] = p.mkt;
-    mktCenterSeries.update({ time: t, value: center, stage: MiraeLayers.mktStage(lastMktCenter, center, c, ind.regFlat, u1) });
+    mktCenterSeries.update({ time: t, value: center, stage: MiraeLayers.mktStage(lastMktCenter, center, c, ind.regFlat, u1, tickRaw) });
     lastMktCenter = center;
     mktU1.update({ time: t, value: u1 });
     mktL1.update({ time: t, value: l1 });
@@ -350,6 +361,7 @@ async function seedChart() {
       const b = dedup[i];
       const d = MiraeLayers.parseInd(b.ind);
       if (!d) continue;
+      if (Number.isFinite(d.tick) && d.tick > 0) tickRaw = d.tick;
       barInd.set(b.time, MiraeLayers.barIndFromInd(d));
       if (Number.isFinite(d.score)) {
         scoreData.push({ time: b.time, value: d.score });
@@ -361,14 +373,14 @@ async function seedChart() {
       }
       if (Number.isFinite(d.regFlat)) {
         const src = i >= 10 ? barInd.get(dedup[i - 10].time) : undefined;
-        bandData.push({ time: b.time, value: d.regFlat - MiraeLayers.BAND_OFFSET,
-                        c: MiraeLayers.bandColor(src) });
+        bandData.push({ time: b.time, value: d.regFlat - MiraeLayers.bandOffset(tickRaw),
+                        c: MiraeLayers.bandColor(src, sameSession(src, d)) });
       }
       // ⑧ 마켓 밴드
       if (d.mktValid) {
         const [center, u1, l1, u2, l2] = d.mkt;
         mktC.push({ time: b.time, value: center,
-                    stage: MiraeLayers.mktStage(lastMktCenter, center, b.close, d.regFlat, u1) });
+                    stage: MiraeLayers.mktStage(lastMktCenter, center, b.close, d.regFlat, u1, tickRaw) });
         lastMktCenter = center;
         mktU1d.push({ time: b.time, value: u1 });
         mktL1d.push({ time: b.time, value: l1 });

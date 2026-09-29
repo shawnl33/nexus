@@ -82,6 +82,7 @@ typedef struct {
     int final_dir;
     int final_state;
     int final_strength;
+    int64_t trading_day;        /* 이 봉의 거래일 (④ 결과 띠의 세션 가드에 사용) */
 } tr_bar_status_t;
 
 typedef struct {

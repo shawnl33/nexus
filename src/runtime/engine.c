@@ -141,7 +141,7 @@ bool tr_engine_attach_market(tr_engine_t *e, tr_candle_t *storage, size_t capaci
     return true;
 }
 
-static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) {
+static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed, int64_t trading_day) {
     const tr_lr3_t *r = &e->lr3;
     const tr_score1m_t *sc = &e->score;
     const tr_market_t *m = &e->mkt;
@@ -163,7 +163,7 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         "\"mkt\":[%d,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"mem\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"pst\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
-        "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g}",
+        "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g,\"tick\":%g,\"day\":%lld}",
         (long long)bar->open_time_us, closed ? 1 : 0,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
@@ -183,7 +183,7 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed) 
         ps->upper[0], ps->upper[1], ps->upper[2],
         ps->lower[0], ps->lower[1], ps->lower[2],
         fa->final_valid ? 1 : 0, fa->final_dir, fa->final_state, (int)fa->final_strength,
-        reg_flat);
+        reg_flat, tick_scale(e), (long long)trading_day);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -416,6 +416,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         st.final_dir = e->dalign.final_dir;
         st.final_state = e->dalign.final_state;
         st.final_strength = (int)e->dalign.final_strength;
+        st.trading_day = day;
         tr_bar_status_t newest;
         if (tr_ring_count(&e->status_ring) == 0 ||
             (tr_ring_at(&e->status_ring, 0, &newest) && bar->open_time_us > newest.open_time_us)) {
@@ -440,7 +441,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         }
     }
 
-    publish_status(e, bar, closed);
+    publish_status(e, bar, closed, day);
 
     /* 스트림 위치 마커는 현재 봉 이벤트에서만 전진한다. 과거 봉 정정(늦은 틱)이
      * trading day·봉 위치를 되돌리면 다음 현재 봉이 세션 첫 봉/새 봉으로 오인되어

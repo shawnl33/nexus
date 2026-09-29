@@ -365,7 +365,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         /* 봉별 지표(회귀·예측·점수·호가) — bars와 같은 순서. 스냅샷으로 과거 구간의
          * 미래곡선 보조지표도 복원하기 위한 값이다.
          * [21..25]는 ⑤ 매매 상태와 reg_flat(회귀선 틱 반올림, 엔진 페이로드와 동일 규칙:
-         * 선물 0.05pt×100=5 raw, 주식 1원×100=100 raw) */
+         * 선물 0.05pt×100=5 raw, 주식 1원×100=100 raw).
+         * [26]=틱 크기(raw, ④ 결과 띠 오프셋·⑧ 거리 기준에 사용), [27]=거래일(④ 세션 가드) */
         double ps_flat = eng->cfg.is_futures ? 5.0 : 100.0;
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ind\":[");
         first = true;
@@ -375,7 +376,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             tr_engine_status_at(eng, k, &st);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off,
                             "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d,"
-                            "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g]",
+                            "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%d,%lld]",
                             first ? "" : ",",
                             st.closed ? 1 : 0, st.reg_valid ? 1 : 0, st.reg_line, st.reg_r2,
                             st.pred[0], st.pred[1], st.pred[2],
@@ -385,7 +386,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
                             st.mkt_valid ? 1 : 0, st.mkt_center, st.mkt_u1, st.mkt_l1,
                             st.mkt_u2, st.mkt_l2,
                             st.final_valid, st.final_dir, st.final_state, st.final_strength,
-                            floor(st.reg_line / ps_flat + 0.5) * ps_flat);
+                            floor(st.reg_line / ps_flat + 0.5) * ps_flat,
+                            (int)ps_flat, (long long)st.trading_day);
             first = false;
         }
         /* ⑥ 방향 기억 갱신 이벤트 (updated 봉만, 창 안에서 오름차순) */

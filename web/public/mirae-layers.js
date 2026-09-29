@@ -9,10 +9,8 @@ const MiraeLayers = (() => {
   const SPANS = [5, 10, 15]; // 예측봉수1~3
   const MIN_R2 = 0.4;  // 원본 최소신뢰도
   const HIGH_R2 = 0.7; // 회귀선 굵기 상단 기준
-  // ④ 결과 띠 오프셋: tick×4 (선물 tick 0.05pt → raw ×100 기준 20)
-  const BAND_OFFSET = 20;
-  // ⑧ 마켓거리기준 하한: 선물 1틱(0.05pt) = raw 5
-  const MKT_TICK = 5;
+  // ④ 결과 띠 오프셋: tick×4 (원본 PriceScale×4). raw 기준 틱은 엔진 페이로드 tick 키가 준다
+  const bandOffset = (tick) => tick * 4;
 
   const rgb = (r, g, b) => `rgb(${r},${g},${b})`;
   const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
@@ -40,9 +38,10 @@ const MiraeLayers = (() => {
     if (state === -1) return { color: rgb(0, 160, 200), width: 2 };
     return null; // state==0/무효 → NoPlot
   }
-  // ④ 결과 띠 색 (v16:237-242, 254-256) — src는 10봉 전 봉의 지표 엔트리
-  function bandColor(src) {
-    if (!src || !src.regValid) return rgb(205, 205, 205);
+  // ④ 결과 띠 색 (v16:237-242, 254-256) — src는 10봉 전 봉의 지표 엔트리.
+  // sameSession=false면 원본의 세션 가드(v16:224-226)로 무효 → 회색
+  function bandColor(src, sameSession) {
+    if (sameSession === false || !src || !src.regValid) return rgb(205, 205, 205);
     const d = src.predDir ? src.predDir[1] : 0;
     const strong = src.r2 >= MIN_R2;
     if (d > 0) return strong ? rgb(255, 0, 0) : rgb(255, 145, 145);
@@ -60,9 +59,9 @@ const MiraeLayers = (() => {
     }
     return { showU: !below, showL: !above };
   }
-  // ⑧ 마켓중심단계 (v16:878-893)
-  function mktStage(prevCenter, center, close, regFlat, u1) {
-    const basis = Math.max(MKT_TICK, Math.abs(u1 - center));
+  // ⑧ 마켓중심단계 (v16:878-893) — tick은 마켓거리기준 하한 (원본 Max(PriceScale, …))
+  function mktStage(prevCenter, center, close, regFlat, u1, tick) {
+    const basis = Math.max(tick > 0 ? tick : 5, Math.abs(u1 - center));
     const strength = Math.max(-100, Math.min(100, ((close - center) / basis) * 100));
     const slope = center - prevCenter;
     if (slope > 0 && close > center && close > regFlat) return strength >= 66 ? 3 : strength >= 33 ? 2 : 1;
@@ -81,7 +80,7 @@ const MiraeLayers = (() => {
 
   // ---- 페이로드 파싱 (docs/display_payload.md 레이아웃) ----
 
-  // 스냅샷 ind 배열 [0..25] → 정규화 객체
+  // 스냅샷 ind 배열 [0..27] → 정규화 객체
   function parseInd(ind) {
     if (!Array.isArray(ind)) return null;
     return {
@@ -103,13 +102,15 @@ const MiraeLayers = (() => {
       finalState: int(ind[23]),
       finalStrength: num(ind[24]),
       regFlat: num(ind[25]),
+      tick: num(ind[26]),
+      day: num(ind[27]),
     };
   }
   // 봉별 지표 캐시(barInd) 엔트리: 시딩(parseInd 결과)과 라이브(status 페이로드) 공통 형태
   function barIndFromInd(d) {
     return {
       predDir: d.predDir, regValid: d.regValid, r2: d.r2, regFlat: d.regFlat,
-      finalValid: d.finalValid, finalState: d.finalState,
+      finalValid: d.finalValid, finalState: d.finalState, day: d.day,
     };
   }
   function barIndFromPayload(p) {
@@ -121,6 +122,7 @@ const MiraeLayers = (() => {
       regFlat: num(p.reg_flat),
       finalValid: fin[0] === 1,
       finalState: int(fin[2]),
+      day: num(p.day),
     };
   }
 
@@ -368,7 +370,7 @@ const MiraeLayers = (() => {
   }
 
   return {
-    SPANS, MIN_R2, HIGH_R2, BAND_OFFSET, MKT_TICK,
+    SPANS, MIN_R2, HIGH_R2, bandOffset,
     scoreColor, regWidth, tradeStyle, bandColor, rangeFlags, mktStage, mktStageColor,
     parseInd, barIndFromInd, barIndFromPayload,
     createRegLinePaneView, createScoreBarPaneView, createResultBandPaneView,

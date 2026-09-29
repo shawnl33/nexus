@@ -114,6 +114,17 @@ test("bandColor: 10봉 전 방향2·신뢰도 기준 (원본 MTF검증색상2)",
   assert.equal(M.bandColor({ regValid: true, predDir: [1, 0, 1], r2: 0.9 }), "rgb(150,150,150)");
 });
 
+test("bandColor: 세션 가드 — 10봉 전이 다른 세션이면 무효(회색) (원본 v16:224-226)", () => {
+  const up = { regValid: true, predDir: [0, 1, 0], r2: 0.9 };
+  assert.equal(M.bandColor(up, false), "rgb(205,205,205)"); // 세션 경계 넘음
+  assert.equal(M.bandColor(up, true), "rgb(255,0,0)");      // 같은 세션
+});
+
+test("bandOffset: tick×4 (원본 PriceScale×4)", () => {
+  assert.equal(M.bandOffset(5), 20);   // 선물 0.05pt×100
+  assert.equal(M.bandOffset(100), 400); // 주식 1원×100
+});
+
 test("rangeFlags: 최근 5봉 H/L이 목표3를 완전히 벗어나야 숨김", () => {
   const mk = (high, low) => ({ high, low });
   const below5 = [mk(90, 80), mk(91, 81), mk(92, 82), mk(93, 83), mk(94, 84)];
@@ -147,6 +158,9 @@ test("mktStage: 기울기·종가 위치·회귀선 조합의 7단계", () => {
   assert.equal(M.mktStage(99, 100, 95, 90, 140), 0);
   // 밴드 폭이 0이면 틱(raw 5)이 하한
   assert.equal(M.mktStage(99, 100, 104, 90, 100), 3); // 강도 4/5*100=80
+  // tick 인자: 주식(100 raw)이면 하한이 100
+  assert.equal(M.mktStage(99, 100, 104, 90, 100, 100), 1); // 강도 4/100*100=4
+  assert.equal(M.mktStage(99, 100, 104, 90, 100, 5), 3);   // 선물과 동일
 });
 
 test("mktStageColor: 단계별 색", () => {
