@@ -25,6 +25,7 @@
 #include "core/indicators/memory_lines.h"
 #include "core/indicators/orderbook_dir_v2.h"
 #include "core/indicators/score_1m.h"
+#include "core/indicators/sma.h"
 #include "core/market/bar_builder.h"
 
 typedef struct {
@@ -83,6 +84,9 @@ typedef struct {
     int final_state;
     int final_strength;
     int64_t trading_day;        /* 이 봉의 거래일 (④ 결과 띠의 세션 가드에 사용) */
+    /* SMA 5/20/60 (모든 timeframe에서 평가, 진행 봉 포함 현재 값) */
+    int sma_valid;              /* 세 기간 모두 valid일 때 1 */
+    double sma[3];              /* 5/20/60 순 */
 } tr_bar_status_t;
 
 typedef struct {
@@ -119,6 +123,7 @@ typedef struct {
     /* ⑥ 방향 기억 (운영최종방향 = ⑤ dalign.final_dir, 무효 시 회귀선_구분 부호 폴백) */
     tr_regmem_t regmem;
     tr_persist_t persist;       /* ⑦ 지속 사진 */
+    tr_sma_t sma5, sma20, sma60; /* 이평선 (게이트 없음, 모든 timeframe) */
 } tr_engine_t;
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,

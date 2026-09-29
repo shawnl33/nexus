@@ -198,6 +198,10 @@ static void test_status_ring_alignment(void) {
     TR_CHECK(last.reg_valid);
     TR_CHECK(last.reg_line == 114.0);
 
+    /* SMA: 8봉으로 5일선만 창 완성 (최근 5봉 종가 108,110,112,114,116 → 112) */
+    TR_CHECK(last.sma_valid == 0);
+    TR_CHECK(last.sma[0] == 112.0);
+
     /* 미부착 엔진은 0/false */
     tr_engine_t e2;
     capture_t cap2;
@@ -211,7 +215,7 @@ static void test_status_ring_alignment(void) {
  * 세션 k 봉 i 중간값 = 1000 + 20k + 2i (저·고 ±2) — 세션 중간값은 1007+20k 완전 직선
  * (일봉 기울기 20, r2=1), 갭 = 2/19.8 ≈ 0.10 (일반장), 분봉 회귀는 세션 5봉째부터 유효 */
 typedef struct {
-    char last[1664]; /* 엔진 페이로드 버퍼와 같은 크기 */
+    char last[1792]; /* 엔진 페이로드 버퍼와 같은 크기 */
     int n;
 } last_capture_t;
 
@@ -311,6 +315,50 @@ static void test_daily_chain(void) {
     TR_CHECK(st.final_valid == 0);
 }
 
+/* SMA 페이로드: 워밍업 [0,0,0,0] → 5일선만 완성 → 61봉에서 5/20/60 모두 유효.
+ * 진행 봉 덮어쓰기 계약 덕에 봉당 1슬롯만 쌓이는 것을 값으로 증명한다. */
+static void feed_min1(tr_engine_t *e, int min_of_day, tr_price_t price, uint64_t id) {
+    tr_event_envelope_t env;
+    memset(&env, 0, sizeof(env));
+    env.kind = TR_EVENT_TICK;
+    tr_civil_t c = {2024, 1, 2, (unsigned)(9 + min_of_day / 60), (unsigned)(min_of_day % 60), 0};
+    tr_time_us_from_civil(&c, KST, &env.event_time_us);
+    env.received_time_us = env.event_time_us;
+    tr_tick_t tk;
+    memset(&tk, 0, sizeof(tk));
+    tk.instrument_id = e->cfg.instrument_id;
+    tk.price = price;
+    tk.qty = 10;
+    tk.source_exec_id = id;
+    tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+    TR_CHECK(tr_engine_on_tick(e, &env, &tk) != TR_BB_ERROR);
+}
+
+static void test_sma_payload(void) {
+    tr_engine_t e;
+    capture_t dummy;
+    last_capture_t cap;
+    memset(&cap, 0, sizeof(cap));
+    init_engine(&e, &dummy);
+    tr_engine_attach_status_cb(&e, last_capture_cb, &cap);
+
+    /* 봉 i(9시+i분) 종가 = 100+i */
+    uint64_t id = 1;
+    for (int i = 1; i <= 4; i++) {
+        feed_min1(&e, i, 100 + i, id++);
+    }
+    TR_CHECK(strstr(cap.last, "\"sma\":[0,0,0,0]") != 0); /* 워밍업: 5봉 미만 */
+
+    feed_min1(&e, 5, 105, id++);
+    TR_CHECK(strstr(cap.last, "\"sma\":[0,103,0,0]") != 0); /* SMA5만 창 완성 (101..105) */
+
+    for (int i = 6; i <= 61; i++) {
+        feed_min1(&e, i, 100 + i, id++);
+    }
+    /* 최근 종가 5개 157..161 → 159, 20개 142..161 → 151.5, 60개 102..161 → 131.5 */
+    TR_CHECK(strstr(cap.last, "\"sma\":[1,159,151.5,131.5]") != 0);
+}
+
 int main(void) {
     test_replay_pipeline();
     test_session_first_reset();
@@ -318,5 +366,6 @@ int main(void) {
     test_select_symbol_generation();
     test_status_ring_alignment();
     test_daily_chain();
+    test_sma_payload();
     TR_TEST_SUMMARY();
 }

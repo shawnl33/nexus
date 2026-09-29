@@ -366,17 +366,18 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
          * 미래곡선 보조지표도 복원하기 위한 값이다.
          * [21..25]는 ⑤ 매매 상태와 reg_flat(회귀선 틱 반올림, 엔진 페이로드와 동일 규칙:
          * 선물 0.05pt×100=5 raw, 주식 1원×100=100 raw).
-         * [26]=틱 크기(raw, ④ 결과 띠 오프셋·⑧ 거리 기준에 사용), [27]=거래일(④ 세션 가드) */
+         * [26]=틱 크기(raw, ④ 결과 띠 오프셋·⑧ 거리 기준에 사용), [27]=거래일(④ 세션 가드),
+         * [28]=SMA 유효(5/20/60 모두 창 완성), [29..31]=SMA 5/20/60 (종가 기준) */
         double ps_flat = eng->cfg.is_futures ? 5.0 : 100.0;
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ind\":[");
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 384;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 448;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_status_at(eng, k, &st);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off,
                             "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d,"
-                            "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%d,%lld]",
+                            "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%d,%lld,%d,%.10g,%.10g,%.10g]",
                             first ? "" : ",",
                             st.closed ? 1 : 0, st.reg_valid ? 1 : 0, st.reg_line, st.reg_r2,
                             st.pred[0], st.pred[1], st.pred[2],
@@ -387,7 +388,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
                             st.mkt_u2, st.mkt_l2,
                             st.final_valid, st.final_dir, st.final_state, st.final_strength,
                             floor(st.reg_line / ps_flat + 0.5) * ps_flat,
-                            (int)ps_flat, (long long)st.trading_day);
+                            (int)ps_flat, (long long)st.trading_day,
+                            st.sma_valid, st.sma[0], st.sma[1], st.sma[2]);
             first = false;
         }
         /* ⑥ 방향 기억 갱신 이벤트 (updated 봉만, 창 안에서 오름차순) */
@@ -430,7 +432,22 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
                             st.pst_lower[0], st.pst_lower[1], st.pst_lower[2]);
             first = false;
         }
-        snprintf(buf + off, sizeof(buf) - (size_t)off, "]}");
+        /* 지표 매니페스트: 대시보드 지표 선택 패널의 표시 목록 (레이어 defaultOn 포함) */
+        snprintf(buf + off, sizeof(buf) - (size_t)off,
+                 "],\"indicators\":["
+                 "{\"id\":\"mirae_v16\",\"name\":\"미래곡선 V16\",\"layers\":["
+                 "{\"id\":\"score\",\"name\":\"① 통합 점수\",\"defaultOn\":true},"
+                 "{\"id\":\"reg\",\"name\":\"② 회귀선\",\"defaultOn\":true},"
+                 "{\"id\":\"rays\",\"name\":\"③ 미래 목표선\",\"defaultOn\":true},"
+                 "{\"id\":\"band\",\"name\":\"④ 결과 띠\",\"defaultOn\":true},"
+                 "{\"id\":\"state\",\"name\":\"⑤ 매매 상태\",\"defaultOn\":true},"
+                 "{\"id\":\"memory\",\"name\":\"⑥ 방향 기억\",\"defaultOn\":true},"
+                 "{\"id\":\"snap\",\"name\":\"⑦ 지속 사진\",\"defaultOn\":true},"
+                 "{\"id\":\"mktband\",\"name\":\"⑧ 마켓 밴드\",\"defaultOn\":false}]},"
+                 "{\"id\":\"sma\",\"name\":\"이평선 5/20/60\",\"layers\":["
+                 "{\"id\":\"sma5\",\"name\":\"SMA 5\",\"defaultOn\":true},"
+                 "{\"id\":\"sma20\",\"name\":\"SMA 20\",\"defaultOn\":true},"
+                 "{\"id\":\"sma60\",\"name\":\"SMA 60\",\"defaultOn\":true}]}]}");
         cmd->status = "applied";
         cmd->error_code = "none";
         cmd->payload_json = buf;

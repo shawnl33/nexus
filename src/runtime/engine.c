@@ -86,6 +86,10 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
         memset(&e->dalign, 0, sizeof(e->dalign));
         e->bar_index = 0;
     }
+    /* 이평선 5/20/60 (게이트 없음 — 모든 timeframe에서 평가) */
+    tr_sma_init(&e->sma5, 5);
+    tr_sma_init(&e->sma20, 20);
+    tr_sma_init(&e->sma60, 60);
     return true;
 }
 
@@ -151,7 +155,8 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed, 
     /* 곡선회귀선_평탄: 회귀선을 틱 단위로 반올림 (tick_scale 헬퍼 참조) */
     double pscale = tick_scale(e);
     double reg_flat = floor(e->lr3.line / pscale + 0.5) * pscale;
-    char payload[1664];
+    int sma_ok = (e->sma5.valid && e->sma20.valid && e->sma60.valid) ? 1 : 0;
+    char payload[1792];
     int n = snprintf(payload, sizeof(payload),
         "{\"bar_open_time\":\"%lld\",\"closed\":%d,"
         "\"ohlc\":[%lld,%lld,%lld,%lld],"
@@ -163,7 +168,8 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed, 
         "\"mkt\":[%d,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"mem\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"pst\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
-        "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g,\"tick\":%g,\"day\":%lld}",
+        "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g,\"tick\":%g,\"day\":%lld,"
+        "\"sma\":[%d,%.10g,%.10g,%.10g]}",
         (long long)bar->open_time_us, closed ? 1 : 0,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
@@ -183,7 +189,8 @@ static void publish_status(tr_engine_t *e, const tr_candle_t *bar, bool closed, 
         ps->upper[0], ps->upper[1], ps->upper[2],
         ps->lower[0], ps->lower[1], ps->lower[2],
         fa->final_valid ? 1 : 0, fa->final_dir, fa->final_state, (int)fa->final_strength,
-        reg_flat, tick_scale(e), (long long)trading_day);
+        reg_flat, tick_scale(e), (long long)trading_day,
+        sma_ok, e->sma5.value, e->sma20.value, e->sma60.value);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -225,6 +232,11 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         tr_lp4_on_bar_closed(&e->lr3.v4, (double)bar->high, (double)bar->low, (double)bar->close);
     }
     tr_htf_curve_eval(&e->htf, (double)bar->high, (double)bar->low);
+
+    /* 이평선 5/20/60: 진행 봉 재호출은 현재 슬롯 덮어쓰기 (tr_sma_on_bar 계약) */
+    tr_sma_on_bar(&e->sma5, (double)bar->close, is_new_bar);
+    tr_sma_on_bar(&e->sma20, (double)bar->close, is_new_bar);
+    tr_sma_on_bar(&e->sma60, (double)bar->close, is_new_bar);
 
     tr_score1m_input_t sin;
     memset(&sin, 0, sizeof(sin));
@@ -417,6 +429,10 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         st.final_state = e->dalign.final_state;
         st.final_strength = (int)e->dalign.final_strength;
         st.trading_day = day;
+        st.sma_valid = e->sma5.valid && e->sma20.valid && e->sma60.valid;
+        st.sma[0] = e->sma5.value;
+        st.sma[1] = e->sma20.value;
+        st.sma[2] = e->sma60.value;
         tr_bar_status_t newest;
         if (tr_ring_count(&e->status_ring) == 0 ||
             (tr_ring_at(&e->status_ring, 0, &newest) && bar->open_time_us > newest.open_time_us)) {

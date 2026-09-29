@@ -39,6 +39,7 @@
 | `reg_flat` | float | 곡선회귀선_평탄 (회귀선을 틱 단위로 반올림) |
 | `tick` | int | raw 단위 틱 크기 (선물 5 = 0.05pt, 주식 100 = 1원). ④ 결과 띠 오프셋(tick×4)·⑧ 거리 기준 하한에 사용 |
 | `day` | int | 이 봉의 거래일 (세션 규칙 기준 일련번호). ④ 결과 띠 세션 가드에 사용 |
+| `sma` | [valid,s5,s20,s60] | 이평선 5/20/60 (종가 기준 단순이동평균). 모든 timeframe에서 평가. valid=1은 세 기간 모두 창이 완성된 때 |
 
 ### `final` 배열 (⑤ 매매 상태)
 
@@ -59,7 +60,7 @@
 
 ### `bars[i]` = `[open_time, o, h, l, c, volume]`
 
-### `ind[i]` 레이아웃 (인덱스 0~27)
+### `ind[i]` 레이아웃 (인덱스 0~31)
 
 | 인덱스 | 키 대응 | 의미 |
 |---|---|---|
@@ -87,10 +88,38 @@
 | [25] | `reg_flat` | 곡선회귀선_평탄 (스냅샷에서는 `reg_line`을 틱 반올림해 재계산) |
 | [26] | `tick` | raw 단위 틱 크기 |
 | [27] | `day` | 거래일 (④ 세션 가드) |
+| [28] | `sma[0]` | 이평선 유효 (5/20/60 모두 창 완성 시 1) |
+| [29] | `sma[1]` | SMA 5 |
+| [30] | `sma[2]` | SMA 20 |
+| [31] | `sma[3]` | SMA 60 |
 
-인덱스 0~20은 기존 레이아웃과 호환된다. 21~25는 ⑤ 매매 상태 도입 시, 26~27은 ④ 세션 가드·틱 적응 도입 시 뒤에 추가되었다.
+인덱스 0~20은 기존 레이아웃과 호환된다. 21~25는 ⑤ 매매 상태 도입 시, 26~27은 ④ 세션 가드·틱 적응 도입 시, 28~31은 이평선(SMA 5/20/60) 도입 시 뒤에 추가되었다.
 
 ### `mem[i]` / `pst[i]`
 
 갱신(`mem_updated`)·저장(`pst_saved`)이 일어난 봉만 포함한다. 각 원소는
 `[open_time, ...]`로 시작해 어느 봉의 이벤트인지 식별할 수 있다.
+
+### `indicators` (지표 매니페스트)
+
+스냅샷 응답 루트에 포함되는 지표 목록이다. 대시보드 지표 선택 패널이 이 배열로
+표시할 지표·레이어와 초기 on/off(`defaultOn`)를 구성한다.
+
+```json
+"indicators":[
+ {"id":"mirae_v16","name":"미래곡선 V16","layers":[
+  {"id":"score","name":"① 통합 점수","defaultOn":true},
+  {"id":"reg","name":"② 회귀선","defaultOn":true},
+  {"id":"rays","name":"③ 미래 목표선","defaultOn":true},
+  {"id":"band","name":"④ 결과 띠","defaultOn":true},
+  {"id":"state","name":"⑤ 매매 상태","defaultOn":true},
+  {"id":"memory","name":"⑥ 방향 기억","defaultOn":true},
+  {"id":"snap","name":"⑦ 지속 사진","defaultOn":true},
+  {"id":"mktband","name":"⑧ 마켓 밴드","defaultOn":false}]},
+ {"id":"sma","name":"이평선 5/20/60","layers":[
+  {"id":"sma5","name":"SMA 5","defaultOn":true},
+  {"id":"sma20","name":"SMA 20","defaultOn":true},
+  {"id":"sma60","name":"SMA 60","defaultOn":true}]}]
+```
+
+`sma` 레이어의 데이터는 상태 스트림의 `sma` 키(현재 봉)와 스냅샷 `ind[28..31]`(과거 봉)에서 가져온다.
