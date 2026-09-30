@@ -20,7 +20,8 @@ const Feed = (() => {
       gaps: [],          // 시딩 스냅샷의 구멍 구간 ([startSec, endSec]) — 시리즈 whitespace로 펼친다
       wsCount: 0,        // 시딩이 만든 whitespace 포인트 수 — pane-sync getLength가 봉 수에 더해 쓴다
       seriesTimes: [],   // 차트 시리즈(봉+whitespace) 항목별 시각(초) 오름차순 — pane-sync getTimes의
-                         // 시각 변환 기준. renderSymbolPanes가 시딩 때 통째로 세우고 noteBar가 라이브를 민다
+                         // 시각 변환 기준. 시딩(renderSymbolPanes)과 정정 재구성(rebuildPaneCandles)이
+                         // 통째로 세우고, 라이브 꼬리는 noteBar가 민다
       ctx: null,         // 렌더러 컨텍스트 (app.js가 지연 생성해 붙인다)
     };
   }
@@ -60,16 +61,17 @@ const Feed = (() => {
     }
 
     // 봉 기록: 라이브는 대부분 뒤에 붙는다. 늦은 정정 등 순서 역행만 이진 삽입으로 처리한다.
-    // 반환: 새 시각이 추가됐으면 true, 같은 시각 갱신이면 false — 차트 범위 이벤트는
-    // 새 봉이 붙을 때만 발생하므로, 호출자(라이브 뮤트)가 갱신과 추가를 구분할 수 있게 한다.
+    // 반환 코드: 0 = 같은 시각의 기존 봉 갱신, 1 = 꼬리에 새 봉 추가, 2 = 중간 삽입
+    // (늦은 정정·구멍 채움). 호출자(app.js)는 1만 차트 update()로 반영한다 — update()는
+    // 시리즈 마지막보다 과거 시각에 throw하므로 2는 시리즈 재구성으로 처리한다.
     function noteBar(cache, t, bar) {
       cache.bars.set(t, bar);
-      if (cache.barPos.has(t)) return false;
+      if (cache.barPos.has(t)) return 0;
       // seriesTimes에도 같은 시각을 넣는다 — whitespace가 섞여 있으면 barSeq 인덱스와
       // 어긋나므로(구멍 수만큼 왼쪽으로 당겨진다) 같은 인덱스가 아니라 별도 이진 탐색으로
       // 오름차순 위치를 찾는다. 구멍(whitespace) 자리를 늦은 봉이 채우면 그 시각은 이미
-      // 있다 — 차트도 update가 그 자리를 캔들로 교체할 뿐 길이가 늘지 않으므로 중복 삽입
-      // 없이 wsCount만 내린다 (getLength = barSeq + wsCount 정합 유지).
+      // 있다 — 차트도 재구성 시 그 자리가 whitespace에서 캔들로 바뀔 뿐 길이가 늘지
+      // 않으므로, 중복 삽입 없이 wsCount만 내린다 (getLength = barSeq + wsCount 정합 유지).
       const st = cache.seriesTimes;
       let sLo = 0, sHi = st.length;
       while (sLo < sHi) {
@@ -85,7 +87,7 @@ const Feed = (() => {
       if (seq.length === 0 || t > seq[seq.length - 1]) {
         cache.barPos.set(t, seq.length);
         seq.push(t);
-        return true;
+        return 1;
       }
       let lo = 0, hi = seq.length;
       while (lo < hi) {
@@ -94,7 +96,26 @@ const Feed = (() => {
       }
       seq.splice(lo, 0, t);
       for (let i = lo; i < seq.length; i++) cache.barPos.set(seq[i], i);
-      return true;
+      return 2;
+    }
+
+    // 구멍 구간 수술: 늦은 봉이 채운 분 t가 cache.gaps 구간 안에 있으면 그 분을 구간에서
+    // 뺀다 (구간의 앞/뒤를 줄이거나, 가운데면 둘로 쪼개고, 1분짜리 구간은 제거한다).
+    // withWhitespace가 그 분의 whitespace를 다시 만들지 않게 하기 위함 — 채운 봉과 같은
+    // 시각의 whitespace가 남으면 setData가 중복 시각을 거부한다. 구간 간격은 1분봉 기준
+    // 60초 (gaps.js의 MIN_SEC과 같은 엔진 계약). 반환: 어느 구간에라도 속했으면 true.
+    function fillGapMinute(cache, t) {
+      const gaps = cache.gaps;
+      for (let i = 0; i < gaps.length; i++) {
+        const [a, b] = gaps[i];
+        if (t < a || t > b) continue;
+        if (a === b) gaps.splice(i, 1);                          // 1분짜리 구간 소멸
+        else if (t === a) gaps[i] = [a + 60, b];                 // 앞에서 하나 줄임
+        else if (t === b) gaps[i] = [a, b - 60];                 // 뒤에서 하나 줄임
+        else gaps.splice(i, 1, [a, t - 60], [t + 60, b]);        // 가운데 채움 — 분할
+        return true;
+      }
+      return false;
     }
 
     // barSeq[pos]까지 최근 n개 봉 (오름차순) — ⑥⑦ 5봉 규칙에 사용
@@ -116,7 +137,7 @@ const Feed = (() => {
       return true;
     }
 
-    return { forSymbol, get, symbols, drop, reset, noteBar, recentBars, noteGeneration };
+    return { forSymbol, get, symbols, drop, reset, noteBar, fillGapMinute, recentBars, noteGeneration };
   }
 
   return { create };

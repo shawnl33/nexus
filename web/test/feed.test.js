@@ -42,14 +42,51 @@ test("noteBar: 뒤에 붙는 순서와 역행(이진 삽입) 모두 시각 오�
   assert.equal(c.bars.get(1060).close, 9); // 값은 덮어쓴다
 });
 
-test("noteBar: 새 봉 추가 여부를 돌려준다 (범위 이벤트는 새 봉에서만 발생한다)", () => {
+test("noteBar: 갱신/꼬리 추가/중간 삽입을 코드로 돌려준다 (0 갱신, 1 꼬리, 2 중간)", () => {
   const feed = Feed.create();
   const c = feed.forSymbol("005930");
-  assert.equal(feed.noteBar(c, 1000, { time: 1000 }), true);  // 첫 봉 (꼬리 추가)
-  assert.equal(feed.noteBar(c, 1060, { time: 1060 }), true);  // 꼬리 추가
-  assert.equal(feed.noteBar(c, 1060, { time: 1060, close: 9 }), false); // 같은 봉 갱신
-  assert.equal(feed.noteBar(c, 1030, { time: 1030 }), true);  // 늦은 정정 역행 삽입도 새 봉
-  assert.equal(feed.noteBar(c, 1030, { time: 1030 }), false); // 역행 봉의 재갱신은 갱신
+  assert.equal(feed.noteBar(c, 1000, { time: 1000 }), 1);  // 첫 봉 (꼬리 추가)
+  assert.equal(feed.noteBar(c, 1060, { time: 1060 }), 1);  // 꼬리 추가
+  assert.equal(feed.noteBar(c, 1060, { time: 1060, close: 9 }), 0); // 같은 봉 갱신
+  assert.equal(feed.noteBar(c, 1030, { time: 1030 }), 2);  // 늦은 정정 역행 삽입
+  assert.equal(feed.noteBar(c, 1030, { time: 1030 }), 0);  // 역행 봉의 재갱신은 갱신
+});
+
+test("noteBar: 구멍(whitespace) 자리 채움은 중간 삽입 코드 2를 돌려준다", () => {
+  const feed = Feed.create();
+  const c = feed.forSymbol("005930");
+  for (const t of [1000, 1060, 1120]) feed.noteBar(c, t, { time: t });
+  // 시딩이 만든 whitespace 흉내: 1030, 1090 두 분이 봉 없이 시각 목록에만 있다
+  c.seriesTimes.splice(1, 0, 1030);
+  c.seriesTimes.splice(3, 0, 1090);
+  c.wsCount = 2;
+  c.gaps = [[1030, 1090]];
+  assert.equal(feed.noteBar(c, 1030, { time: 1030, close: 7 }), 2); // 구멍 채움
+  assert.equal(c.wsCount, 1); // whitespace 하나가 캔들로 교체됐다
+  assert.deepEqual(c.seriesTimes, [1000, 1030, 1060, 1090, 1120]); // 시각 목록 길이 불변
+  assert.equal(c.seriesTimes.length, c.barSeq.length + c.wsCount); // 시리즈 길이 정합
+});
+
+test("fillGapMinute: 구간 앞/가운데/끝의 분을 빼고, 구간 밖이면 false", () => {
+  const feed = Feed.create();
+  const c = feed.forSymbol("s");
+
+  c.gaps = [[1200, 1320]]; // 3분 구간 (1200, 1260, 1320)
+  assert.equal(feed.fillGapMinute(c, 1190), false); // 구간 밖 — 손대지 않는다
+  assert.deepEqual(c.gaps, [[1200, 1320]]);
+
+  assert.equal(feed.fillGapMinute(c, 1200), true);  // 앞 끝 채움 → 앞을 줄인다
+  assert.deepEqual(c.gaps, [[1260, 1320]]);
+
+  assert.equal(feed.fillGapMinute(c, 1320), true);  // 뒤 끝 채움 → 뒤를 줄인다
+  assert.deepEqual(c.gaps, [[1260, 1260]]);
+
+  assert.equal(feed.fillGapMinute(c, 1260), true);  // 1분짜리 구간은 소멸한다
+  assert.deepEqual(c.gaps, []);
+
+  c.gaps = [[1200, 1380]];
+  assert.equal(feed.fillGapMinute(c, 1260), true);  // 가운데 채움 → 둘로 쪼갠다
+  assert.deepEqual(c.gaps, [[1200, 1200], [1320, 1380]]);
 });
 
 test("noteBar: seriesTimes도 봉과 함께 시각 오름차순을 유지한다 (시간축 동기화의 시각 기준)", () => {

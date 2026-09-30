@@ -167,7 +167,8 @@ function createPane(heightFrac = 1) {
     getPrice: (t) => paneCache(pane)?.bars.get(t)?.close,
     // 시리즈 길이 = 봉 수 + whitespace(구멍) 포인트 수: setVisibleLogicalRange의 논리 인덱스는
     // whitespace를 포함한 시리즈 기준이라 봉 수만 재면 구멍 수만큼 어긋난다.
-    // wsCount는 renderSymbolPanes가 시딩 적용 때 같은 withWhitespace 결과로 갱신한다 (정합 고정).
+    // wsCount는 renderSymbolPanes(시딩)와 rebuildPaneCandles(정정)가 같은 withWhitespace
+    // 결과로 갱신한다 (정합 고정).
     // 라이브 꼬리는 봉이 1개 붙을 때 barSeq와 시리즈가 함께 +1되므로 이 합계식이 그대로 맞는다.
     // 시간축 전파에서 이 길이는 꼬리 판정(srcAtTail)에만 쓴다 — 창 변환은 getTimes 기준.
     getLength: () => {
@@ -633,23 +634,40 @@ function applyStatus(msg) {
   if (!Number.isFinite(t) || t <= 0) return;
 
   const [o, h, l, c] = p.ohlc ?? [];
-  if (o != null) {
-    const added = feed.noteBar(cache, t, { time: t, open: o, high: h, low: l, close: c });
+  // noteBar 코드: 0 기존 봉 갱신 / 1 꼬리 추가 / 2 중간 삽입(늦은 정정·구멍 채움),
+  // -1은 이 틱에 봉이 없음(ohlc 미포함). 꼬리 판정은 캐시 기준이라 봉 없는 틱에서도 성립한다.
+  const barCode = o != null ? feed.noteBar(cache, t, { time: t, open: o, high: h, low: l, close: c }) : -1;
+  const isTail = cache.barSeq[cache.barSeq.length - 1] === t;
+  if (barCode >= 0) {
     // 시딩 중인 종목의 칸에는 라이브를 그리지 않는다 — 봉은 캐시에 쌓이고 시딩 끝의
     // renderSymbolPanes가 통째로 그린다. 비운 차트에 1봉만 그리면 범위가 [0,1]로
     // 찌그러지고 그 이벤트가 동기화를 타고 다른 칸을 데이터 맨 앞으로 점프시킨다.
     const seeding = seedInflight.has(sh);
     for (const pane of panes) {
       if (pane.symbol !== sh || seeding) continue;
-      // 라이브 꼬리에는 whitespace를 넣지 않는다: 새 봉이 직전 봉과 60초 넘게 떨어져 와도
-      // (실시간으로 생기는 구멍) 그대로 붙인다. RT 캐치업이 빠진 봉을 채우고, 못 채운 구멍은
-      // generation 상승 → 재시딩(seedSymbol)의 gaps가 whitespace로 표시한다 — 구멍 표시는
-      // 시딩 경로(renderSymbolPanes) 한 곳에서만 만든다.
-      // 라이브 봉 적용으로 범위가 밀리는 건 새 봉이 붙을 때뿐이다 (같은 봉 갱신은 범위
-      // 이벤트가 없다 — 실측). 새 봉일 때만 이 칸을 뮤트해, 틱마다 뮤트 창이 열리며
-      // 사용자의 줌/스크롤 이벤트를 삼키는 일이 없게 한다.
-      if (added) mutePaneRange(pane);
-      pane.candleSeries.update(cache.bars.get(t));
+      // 칸별 격리: 한 칸의 렌더 실패가 다른 칸·지표 적용을 중단시키지 않게 try/catch로
+      // 감싸고 콘솔에 남긴다 (과거에는 update() throw가 onmessage에서 조용히 삼켜져
+      // 캐시와 차트가 영구 발산했다 — 2026-09-30 실측).
+      try {
+        if (isTail) {
+          // 라이브 꼬리에는 whitespace를 넣지 않는다: 새 봉이 직전 봉과 60초 넘게 떨어져
+          // 와도(실시간으로 생기는 구멍) 그대로 붙인다. RT 캐치업이 빠진 봉을 채우고, 못
+          // 채운 구멍은 generation 상승 → 재시딩(seedSymbol)의 gaps가 whitespace로 표시한다.
+          // 꼬리 갱신(code 0)은 범위 이벤트가 없고(실측) 꼬리 추가(code 1)만 범위가 밀리므로,
+          // 추가일 때만 이 칸을 뮤트한다 — 틱마다 뮤트 창이 열리며 사용자의 줌/스크롤
+          // 이벤트를 삼키는 일을 피한다.
+          if (barCode === 1) mutePaneRange(pane);
+          pane.candleSeries.update(cache.bars.get(t));
+        } else {
+          // 늦은 정정/구멍 채움(과거 시각): candleSeries.update()는 시리즈 마지막보다
+          // 과거 시각에 throw("Cannot update oldest data")하므로 캐시에서 다시 깐다.
+          // 중간 삽입이면 채운 분이 gaps에 남아 whitespace 중복이 생기지 않게 구간을 수술한다.
+          if (barCode === 2) feed.fillGapMinute(cache, t);
+          rebuildPaneCandles(pane, cache);
+        }
+      } catch (err) {
+        console.error(`[${sh}] 캔들 반영 실패 t=${t}`, err);
+      }
     }
   }
   const ind = MiraeLayers.barIndFromPayload(p);
@@ -673,8 +691,22 @@ function applyStatus(msg) {
   const seedingNow = seedInflight.has(sh);
   for (const pane of panes) {
     if (pane.symbol !== sh || seedingNow) continue;
-    for (const { handle } of pane.active.values()) handle.applyLive(p, ctx);
+    for (const [indId, { handle }] of pane.active) {
+      // 지표 시리즈도 칸별로 격리한다 — 한 지표의 실패가 다른 지표·칸으로 번지지 않게.
+      try {
+        // 정정(과거 시각) 틱에는 지표 시리즈의 update()도 같은 throw가 나므로
+        // (mirae-layers reg/score/band/mktband, sma-layers — 2026-09-30 실측),
+        // 캐시에서 전체를 다시 그리는 시딩 경로로 처리한다. 꼬리는 기존처럼 라이브 반영.
+        if (isTail) handle.applyLive(p, ctx);
+        else handle.applySeed(ctx);
+      } catch (err) {
+        console.error(`[${sh}] 지표(${indId}) 반영 실패 t=${t}`, err);
+      }
+    }
   }
+
+  // 헤더 배지는 최신(꼬리) 봉의 값으로만 갱신한다 — 과거 봉 정정 틱으로 덮어쓰지 않는다
+  if (!isTail) return;
 
   // 헤더 배지는 mirae_v16이 켜진 첫 칸이 이 종목을 볼 때만 갱신한다
   const mp = firstMiraePane();
@@ -734,6 +766,49 @@ function recentFromRows(rows, i, n) {
 // 보여주므로 그에 맞춘다. scrollToRealTime은 현재 봉 간격을 유지한 채 최신으로 갈 뿐이라
 // 첫 화면이 과도하게 확대되어 보였다 — 명식 범위 지정으로 봉 간격을 이 폭에 맞춘다.
 const INITIAL_VISIBLE_BARS = 380;
+
+// 시각 목록 이진 탐색 — 정정 재구성 때 보이는 시계 창을 새 시리즈의 논리 인덱스로
+// 되돌리는 데 쓴다 (pane-sync.js 내부의 lowerBound/upperBound와 같은 판 — 비공개라 여기 둔다).
+function timeLowerBound(times, t) {
+  let lo = 0, hi = times.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] < t) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+function timeUpperBound(times, t) {
+  let lo = 0, hi = times.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] <= t) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+// 늦은 정정·구멍 채움(과거 시각 봉)의 칸 반영: lightweight-charts update()는 시리즈
+// 마지막보다 과거 시각에 throw하므로("Cannot update oldest data", 2026-09-30 실측),
+// 이 칸의 캔들 시리즈를 캐시에서 통째로 다시 깐다. 재구성으로 봉/whitespace 수가 바뀌어
+// 논리 인덱스가 어긋나므로, 보이는 창은 먼저 시각(getVisibleRange)으로 받아 두고 새
+// 시리즈에서 같은 시각을 이진 탐색해 복원한다 — 사용자가 보던 시계 창이 유지된다.
+// pane-sync 기준값(wsCount/seriesTimes)도 setData에 넘긴 같은 rows에서 다시 세운다
+// (renderSymbolPanes와 같은 계약). 이벤트는 이 칸을 뮤트해 다른 칸으로 번지지 않게 한다 —
+// renderSymbolPanes와 달리 스크롤 애니메이션이 없어 프레임 뮤트(mutePaneRange)로 충분하다.
+function rebuildPaneCandles(pane, cache) {
+  const bars = cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean);
+  const rows = Gaps.withWhitespace(bars, cache.gaps ?? []);
+  const range = pane.chart.timeScale().getVisibleRange(); // 시각 창 (데이터 없으면 null)
+  mutePaneRange(pane);
+  pane.candleSeries.setData(rows);
+  cache.wsCount = rows.length - bars.length;
+  cache.seriesTimes = rows.map((r) => r.time);
+  if (range && rows.length) {
+    const times = cache.seriesTimes;
+    const from = timeLowerBound(times, Number(range.from));
+    const to = Math.max(from, timeUpperBound(times, Number(range.to)) - 1);
+    pane.chart.timeScale().setVisibleLogicalRange({ from, to });
+  }
+}
 
 // 시딩이 끝난 종목의 캐시로 그 종목을 보는 모든 칸을 다시 그린다
 function renderSymbolPanes(shcode) {
@@ -915,8 +990,10 @@ function connect() {
     }
     try {
       applyStatus(data.message ?? {});
-    } catch {
-      /* 시딩 직후 과거 봉의 늦은 갱신 등 표시상 무해한 순서 오류는 무시한다 */
+    } catch (err) {
+      // 칸·지표별 격리(applyStatus 내부 try/catch)까지 뚫고 온 예상 밖의 오류다.
+      // 조용히 삼키면 차트·캐시 발산 같은 결함이 숨으므로 콘솔에 남긴다 (스트림은 계속 받는다)
+      console.error("status 적용 실패", err);
     }
   };
 }
