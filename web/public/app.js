@@ -560,6 +560,7 @@ function firstMiraePane() {
 
 const el = {
   wsState: document.getElementById("ws-state"),
+  mode: document.getElementById("mode"),
   score: document.getElementById("score"),
   reg: document.getElementById("reg"),
   pred: document.getElementById("pred"),
@@ -944,6 +945,8 @@ async function refreshEngineWatches() {
     const res = await fetch("/api/status");
     if (!res.ok) return;
     const p = (await res.json()).payload ?? {};
+    // 모드 배지 — index.html의 정적 문자열("replay")은 초기값일 뿐, 실제 모드는 여기서 덮는다
+    if (typeof p.mode === "string" && p.mode !== "") el.mode.textContent = p.mode;
     if (Array.isArray(p.watches)) {
       engineWatches = p.watches.filter((s) => typeof s === "string" && s !== "");
     } else if (typeof p.shcode === "string" && p.shcode !== "") {
