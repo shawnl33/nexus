@@ -612,12 +612,13 @@ function applyStatus(msg) {
 
   const [o, h, l, c] = p.ohlc ?? [];
   if (o != null) {
-    feed.noteBar(cache, t, { time: t, open: o, high: h, low: l, close: c });
+    const added = feed.noteBar(cache, t, { time: t, open: o, high: h, low: l, close: c });
     for (const pane of panes) {
       if (pane.symbol !== sh) continue;
-      // 라이브 봉 적용(꼬리에 붙은 칸은 범위가 오른쪽으로 밀림)은 프로그램적 변경 —
-      // 다른 칸의 탐색 위치를 빼앗지 않게 이 칸의 범위 이벤트를 뮤트한다
-      mutePaneRange(pane);
+      // 라이브 봉 적용으로 범위가 밀리는 건 새 봉이 붙을 때뿐이다 (같은 봉 갱신은 범위
+      // 이벤트가 없다 — 실측). 새 봉일 때만 이 칸을 뮤트해, 틱마다 뮤트 창이 열리며
+      // 사용자의 줌/스크롤 이벤트를 삼키는 일이 없게 한다.
+      if (added) mutePaneRange(pane);
       pane.candleSeries.update(cache.bars.get(t));
     }
   }

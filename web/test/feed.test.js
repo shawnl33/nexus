@@ -42,6 +42,16 @@ test("noteBar: 뒤에 붙는 순서와 역행(이진 삽입) 모두 시각 오�
   assert.equal(c.bars.get(1060).close, 9); // 값은 덮어쓴다
 });
 
+test("noteBar: 새 봉 추가 여부를 돌려준다 (범위 이벤트는 새 봉에서만 발생한다)", () => {
+  const feed = Feed.create();
+  const c = feed.forSymbol("005930");
+  assert.equal(feed.noteBar(c, 1000, { time: 1000 }), true);  // 첫 봉 (꼬리 추가)
+  assert.equal(feed.noteBar(c, 1060, { time: 1060 }), true);  // 꼬리 추가
+  assert.equal(feed.noteBar(c, 1060, { time: 1060, close: 9 }), false); // 같은 봉 갱신
+  assert.equal(feed.noteBar(c, 1030, { time: 1030 }), true);  // 늦은 정정 역행 삽입도 새 봉
+  assert.equal(feed.noteBar(c, 1030, { time: 1030 }), false); // 역행 봉의 재갱신은 갱신
+});
+
 test("recentBars: pos까지 최근 n개를 오름차순으로 돌려준다", () => {
   const feed = Feed.create();
   const c = feed.forSymbol("s");

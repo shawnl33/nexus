@@ -53,14 +53,16 @@ const Feed = (() => {
     }
 
     // 봉 기록: 라이브는 대부분 뒤에 붙는다. 늦은 정정 등 순서 역행만 이진 삽입으로 처리한다.
+    // 반환: 새 시각이 추가됐으면 true, 같은 시각 갱신이면 false — 차트 범위 이벤트는
+    // 새 봉이 붙을 때만 발생하므로, 호출자(라이브 뮤트)가 갱신과 추가를 구분할 수 있게 한다.
     function noteBar(cache, t, bar) {
       cache.bars.set(t, bar);
-      if (cache.barPos.has(t)) return;
+      if (cache.barPos.has(t)) return false;
       const seq = cache.barSeq;
       if (seq.length === 0 || t > seq[seq.length - 1]) {
         cache.barPos.set(t, seq.length);
         seq.push(t);
-        return;
+        return true;
       }
       let lo = 0, hi = seq.length;
       while (lo < hi) {
@@ -69,6 +71,7 @@ const Feed = (() => {
       }
       seq.splice(lo, 0, t);
       for (let i = lo; i < seq.length; i++) cache.barPos.set(seq[i], i);
+      return true;
     }
 
     // barSeq[pos]까지 최근 n개 봉 (오름차순) — ⑥⑦ 5봉 규칙에 사용
