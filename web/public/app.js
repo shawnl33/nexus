@@ -630,8 +630,12 @@ function applyStatus(msg) {
   const [o, h, l, c] = p.ohlc ?? [];
   if (o != null) {
     const added = feed.noteBar(cache, t, { time: t, open: o, high: h, low: l, close: c });
+    // 시딩 중인 종목의 칸에는 라이브를 그리지 않는다 — 봉은 캐시에 쌓이고 시딩 끝의
+    // renderSymbolPanes가 통째로 그린다. 비운 차트에 1봉만 그리면 범위가 [0,1]로
+    // 찌그러지고 그 이벤트가 동기화를 타고 다른 칸을 데이터 맨 앞으로 점프시킨다.
+    const seeding = seedInflight.has(sh);
     for (const pane of panes) {
-      if (pane.symbol !== sh) continue;
+      if (pane.symbol !== sh || seeding) continue;
       // 라이브 꼬리에는 whitespace를 넣지 않는다: 새 봉이 직전 봉과 60초 넘게 떨어져 와도
       // (실시간으로 생기는 구멍) 그대로 붙인다. RT 캐치업이 빠진 봉을 채우고, 못 채운 구멍은
       // generation 상승 → 재시딩(seedSymbol)의 gaps가 whitespace로 표시한다 — 구멍 표시는
@@ -658,10 +662,12 @@ function applyStatus(msg) {
   const pstItem = MiraeLayers.pstItemFromPayload(t, p.pst, feed.recentBars(cache, pos, 5));
   if (pstItem !== undefined) ind.pstItem = pstItem;
 
-  // 지표 표시는 이 종목을 보는 칸의 활성 렌더러만 담당한다
+  // 지표 표시는 이 종목을 보는 칸의 활성 렌더러만 담당한다 (시딩 중인 칸은 건너뛴다 —
+  // 비운 차트에 라이브 지표를 그리는 것도 같은 클래스의 오염이다)
   const ctx = ctxFor(cache);
+  const seedingNow = seedInflight.has(sh);
   for (const pane of panes) {
-    if (pane.symbol !== sh) continue;
+    if (pane.symbol !== sh || seedingNow) continue;
     for (const { handle } of pane.active.values()) handle.applyLive(p, ctx);
   }
 
