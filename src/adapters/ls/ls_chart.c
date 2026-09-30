@@ -51,6 +51,15 @@ static void throttle_slot(int slot) {
     g_last_req_us[slot] = now;
 }
 
+bool ls_chart_retryable(int rc) {
+    return rc == LS_HTTP_TRANSPORT_ERR || rc == LS_HTTP_STATUS_ERR;
+}
+
+/* 조회 재시도 정책: 최초 1회 + 재시도 2회. 시도마다 throttle_slot이 1 TPS를 지키고,
+ * 재시도 사이에는 RETRY_WAIT만큼 더 기다린다 (서버 순간 과부하·행 hang 회복 여유) */
+#define LS_CHART_MAX_ATTEMPTS 3
+#define LS_CHART_RETRY_WAIT_US 2000000
+
 static const char *path_for(ls_chart_kind_t kind) {
     switch (kind) {
     case LS_CHART_STOCK_MIN:
@@ -228,11 +237,6 @@ int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shc
         snprintf(errbuf, errlen, "fetch_minute is for minute TRs only");
         return LS_HTTP_PARSE_ERR;
     }
-    const char *token;
-    if (!ls_auth_ensure(auth, &token)) {
-        snprintf(errbuf, errlen, "%.120s", auth->last_error);
-        return LS_HTTP_TRANSPORT_ERR;
-    }
 
     const char *inblock = tr_for(kind);
     char body[1024];
@@ -250,23 +254,40 @@ int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shc
 
     ls_http_req_t req = {0};
     req.url = path_for(kind);
-    req.token = token;
     req.tr_cd = tr_for(kind);
     req.tr_cont = "N";
     req.body_json = body;
     req.timeout_ms = 10000;
 
-    throttle_slot((int)kind);
-    ls_http_resp_t resp;
-    ls_http_rc_t rc = ls_http_post(&req, &resp);
-    if (rc != LS_HTTP_OK) {
-        snprintf(errbuf, errlen, "%.80s %.40s", resp.err_detail, resp.rsp_msg);
-        ls_http_resp_free(&resp);
-        return rc;
+    /* 재시도 가능한 실패(전송/HTTP 상태 오류)만 다시 조회한다 — 파서·API 오류는
+     * 서버가 답한 것이라 재시도해도 같다 (ls_chart_retryable). 재시도도 로그를 남긴다 */
+    int rc = LS_HTTP_TRANSPORT_ERR;
+    for (int attempt = 1; attempt <= LS_CHART_MAX_ATTEMPTS; attempt++) {
+        const char *token;
+        if (!ls_auth_ensure(auth, &token)) {
+            snprintf(errbuf, errlen, "%.120s", auth->last_error);
+            rc = LS_HTTP_TRANSPORT_ERR;
+        } else {
+            req.token = token;
+            throttle_slot((int)kind);
+            ls_http_resp_t resp;
+            rc = ls_http_post(&req, &resp);
+            if (rc == LS_HTTP_OK) {
+                rc = ls_chart_parse_page(resp.body.data, resp.body.len, kind, instrument_id,
+                                         source_id, (uint32_t)ncnt * 60u, out, out_cap, page,
+                                         errbuf, errlen);
+            } else {
+                snprintf(errbuf, errlen, "%.80s %.40s", resp.err_detail, resp.rsp_msg);
+            }
+            ls_http_resp_free(&resp);
+        }
+        if (!ls_chart_retryable(rc) || attempt == LS_CHART_MAX_ATTEMPTS) {
+            return rc;
+        }
+        fprintf(stderr, "%s fetch retry %d/%d rc=%d: %s\n",
+                tr_for(kind), attempt, LS_CHART_MAX_ATTEMPTS - 1, rc, errbuf);
+        sleep_us(LS_CHART_RETRY_WAIT_US);
     }
-    rc = ls_chart_parse_page(resp.body.data, resp.body.len, kind, instrument_id, source_id,
-                             (uint32_t)ncnt * 60u, out, out_cap, page, errbuf, errlen);
-    ls_http_resp_free(&resp);
     return rc;
 }
 
@@ -398,41 +419,53 @@ int ls_chart_fetch_fut_night(ls_auth_t *auth, const char *focode, int32_t cnt,
     if (cnt > 999) {
         cnt = 999; /* 서버 상한 (2026-09-28 실측, 1000 이상 IGW40011) */
     }
-    const char *token;
-    if (!ls_auth_ensure(auth, &token)) {
-        snprintf(errbuf, errlen, "%.120s", auth->last_error);
-        return LS_HTTP_TRANSPORT_ERR;
-    }
     char body[512];
     snprintf(body, sizeof(body),
              "{\"t8461InBlock\":{\"focode\":\"%s\",\"cgubun\":\"B\",\"bgubun\":\"1\",\"cnt\":%d}}",
              focode, (int)cnt);
     ls_http_req_t req = {0};
     req.url = "https://openapi.ls-sec.co.kr:8080/futureoption/chart";
-    req.token = token;
     req.tr_cd = "t8461";
     req.tr_cont = "N";
     req.body_json = body;
     req.timeout_ms = 10000;
 
-    throttle_slot(2);
-    ls_http_resp_t resp;
-    ls_http_rc_t rc = ls_http_post(&req, &resp);
-    if (rc != LS_HTTP_OK) {
-        snprintf(errbuf, errlen, "%.80s %.40s", resp.err_detail, resp.rsp_msg);
-        ls_http_resp_free(&resp);
-        return rc;
+    int rc = LS_HTTP_TRANSPORT_ERR;
+    for (int attempt = 1; attempt <= LS_CHART_MAX_ATTEMPTS; attempt++) {
+        const char *token;
+        if (!ls_auth_ensure(auth, &token)) {
+            snprintf(errbuf, errlen, "%.120s", auth->last_error);
+            rc = LS_HTTP_TRANSPORT_ERR;
+        } else {
+            req.token = token;
+            throttle_slot(2);
+            ls_http_resp_t resp;
+            rc = ls_http_post(&req, &resp);
+            if (rc == LS_HTTP_OK) {
+                int n = ls_chart_parse_fut_night(resp.body.data, resp.body.len,
+                                                 trading_days, n_trading_days,
+                                                 ls_fut_night_session_day((tr_time_us_t)time(0) * TR_US_PER_SEC),
+                                                 instrument_id, source_id, out, out_cap,
+                                                 errbuf, errlen);
+                if (n < 0) {
+                    rc = LS_HTTP_PARSE_ERR;
+                } else {
+                    *out_count = (size_t)n;
+                    rc = n > 0 ? LS_HTTP_OK : LS_CHART_EMPTY;
+                }
+            } else {
+                snprintf(errbuf, errlen, "%.80s %.40s", resp.err_detail, resp.rsp_msg);
+            }
+            ls_http_resp_free(&resp);
+        }
+        if (!ls_chart_retryable(rc) || attempt == LS_CHART_MAX_ATTEMPTS) {
+            return rc;
+        }
+        fprintf(stderr, "t8461 fetch retry %d/%d rc=%d: %s\n",
+                attempt, LS_CHART_MAX_ATTEMPTS - 1, rc, errbuf);
+        sleep_us(LS_CHART_RETRY_WAIT_US);
     }
-    int n = ls_chart_parse_fut_night(resp.body.data, resp.body.len,
-                                     trading_days, n_trading_days,
-                                     ls_fut_night_session_day((tr_time_us_t)time(0) * TR_US_PER_SEC),
-                                     instrument_id, source_id, out, out_cap, errbuf, errlen);
-    ls_http_resp_free(&resp);
-    if (n < 0) {
-        return LS_HTTP_PARSE_ERR;
-    }
-    *out_count = (size_t)n;
-    return n > 0 ? LS_HTTP_OK : LS_CHART_EMPTY;
+    return rc;
 }
 
 /* ---------- 일봉 (t8410 주식 / t8466 선물 — t8466 2026-09-29, t8410 2026-09-30 실측 완료) ---------- */
@@ -528,11 +561,6 @@ int ls_chart_fetch_daily(ls_auth_t *auth, ls_chart_kind_t kind, const char *shco
         snprintf(errbuf, errlen, "fetch_daily is for daily TRs only");
         return LS_HTTP_PARSE_ERR;
     }
-    const char *token;
-    if (!ls_auth_ensure(auth, &token)) {
-        snprintf(errbuf, errlen, "%.120s", auth->last_error);
-        return LS_HTTP_TRANSPORT_ERR;
-    }
     const char *ed = edate != 0 && edate[0] > ' ' ? edate : "99999999";
     char body[512];
     if (kind == LS_CHART_STOCK_DAY) {
@@ -551,22 +579,36 @@ int ls_chart_fetch_daily(ls_auth_t *auth, ls_chart_kind_t kind, const char *shco
 
     ls_http_req_t req = {0};
     req.url = path_for(kind);
-    req.token = token;
     req.tr_cd = tr_for(kind);
     req.tr_cont = "N";
     req.body_json = body;
     req.timeout_ms = 10000;
 
-    throttle_slot(kind == LS_CHART_FUT_DAY ? 4 : 3);
-    ls_http_resp_t resp;
-    ls_http_rc_t rc = ls_http_post(&req, &resp);
-    if (rc != LS_HTTP_OK) {
-        snprintf(errbuf, errlen, "%.80s %.40s", resp.err_detail, resp.rsp_msg);
-        ls_http_resp_free(&resp);
-        return rc;
+    int rc = LS_HTTP_TRANSPORT_ERR;
+    for (int attempt = 1; attempt <= LS_CHART_MAX_ATTEMPTS; attempt++) {
+        const char *token;
+        if (!ls_auth_ensure(auth, &token)) {
+            snprintf(errbuf, errlen, "%.120s", auth->last_error);
+            rc = LS_HTTP_TRANSPORT_ERR;
+        } else {
+            req.token = token;
+            throttle_slot(kind == LS_CHART_FUT_DAY ? 4 : 3);
+            ls_http_resp_t resp;
+            rc = ls_http_post(&req, &resp);
+            if (rc == LS_HTTP_OK) {
+                rc = ls_chart_parse_daily(resp.body.data, resp.body.len, kind, out, out_cap,
+                                          out_count, errbuf, errlen);
+            } else {
+                snprintf(errbuf, errlen, "%.80s %.40s", resp.err_detail, resp.rsp_msg);
+            }
+            ls_http_resp_free(&resp);
+        }
+        if (!ls_chart_retryable(rc) || attempt == LS_CHART_MAX_ATTEMPTS) {
+            return rc;
+        }
+        fprintf(stderr, "%s fetch retry %d/%d rc=%d: %s\n",
+                tr_for(kind), attempt, LS_CHART_MAX_ATTEMPTS - 1, rc, errbuf);
+        sleep_us(LS_CHART_RETRY_WAIT_US);
     }
-    rc = ls_chart_parse_daily(resp.body.data, resp.body.len, kind, out, out_cap, out_count,
-                              errbuf, errlen);
-    ls_http_resp_free(&resp);
     return rc;
 }

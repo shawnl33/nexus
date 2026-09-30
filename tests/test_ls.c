@@ -240,6 +240,16 @@ static void test_daily_kind_guard(void) {
                                  2, 7, 60, g_bars, CAP, &page, err, sizeof(err)) == LS_HTTP_PARSE_ERR);
 }
 
+/* 재시도 분류 고정: 전송/HTTP 상태 오류만 재시도한다 (백필 페이지 유실 방지 정책) */
+static void test_retryable_classification(void) {
+    TR_CHECK(ls_chart_retryable(LS_HTTP_TRANSPORT_ERR)); /* 타임아웃 등 서버 미응답 */
+    TR_CHECK(ls_chart_retryable(LS_HTTP_STATUS_ERR));    /* HTTP 5xx 등 */
+    TR_CHECK(!ls_chart_retryable(LS_HTTP_PARSE_ERR));    /* 서버가 답함 — 재시도 무의미 */
+    TR_CHECK(!ls_chart_retryable(LS_HTTP_API_ERR));
+    TR_CHECK(!ls_chart_retryable(LS_CHART_EMPTY));       /* 데이터 없음은 오류가 아니다 */
+    TR_CHECK(!ls_chart_retryable(LS_HTTP_OK));
+}
+
 int main(void) {
     test_stock_parse();
     test_futures_string_prices();
@@ -252,5 +262,6 @@ int main(void) {
     test_daily_empty_is_not_error();
     test_daily_duplicate_detected();
     test_daily_kind_guard();
+    test_retryable_classification();
     TR_TEST_SUMMARY();
 }

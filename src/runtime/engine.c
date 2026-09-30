@@ -747,6 +747,154 @@ bool tr_engine_inject_bar(tr_engine_t *e, const tr_candle_t *bar) {
     return tr_bar_builder_inject_bar(&p->bb, bar != 0 ? bar->close_time_us : 0, bar);
 }
 
+size_t tr_engine_pipe_merge_bars(tr_engine_t *e, uint64_t instrument_id,
+                                 const tr_candle_t *bars, size_t n, tr_time_us_t now_us,
+                                 tr_candle_t *bar_scratch, size_t bar_scratch_cap,
+                                 tr_bar_status_t *st_scratch, size_t st_scratch_cap) {
+    if (e == 0 || bars == 0 || n == 0) {
+        return 0;
+    }
+    tr_pipeline_t *p = tr_engine_pipe_find(e, instrument_id);
+    if (p == 0) {
+        return 0;
+    }
+    tr_ring *bring = &p->bb.bars;
+    if (bar_scratch == 0 || bar_scratch_cap < bring->capacity ||
+        (void *)bar_scratch == bring->storage) {
+        return 0;
+    }
+    tr_ring *sring = &p->status_ring;
+    if (p->status_ring_on &&
+        (st_scratch == 0 || st_scratch_cap < sring->capacity ||
+         sring->capacity < bring->capacity)) {
+        return 0; /* 상태 링 정합을 맞출 수 없으면 병합하지 않는다 */
+    }
+
+    /* 1) 기존 봉을 오름차순으로 비워낸다 (back_index count-1 = 가장 오래된 봉) */
+    size_t m = tr_ring_count(bring);
+    for (size_t k = 0; k < m; k++) {
+        tr_ring_at(bring, m - 1 - k, &bar_scratch[k]);
+    }
+
+    /* 2) 정체된 OPEN 봉 처리: 조회 결과에 그보다 새로운 확정 봉이 있으면 서버 측에서
+     * 그 봉의 창은 이미 닫혔다는 뜻이다. 제자리에서 닫아 두어야 병합 후에도 링 최신이
+     * 확정 봉이 되고, 다음 라이브 틱이 새 봉을 정상으로 연다.
+     * 수용 필터는 병합 루프와 같다 — 세션 밖·미확정 행에 OPEN 봉이 닫히면 안 된다 */
+    bool force_closed = false;
+    if (p->bb.has_open && m > 0) {
+        tr_candle_t *open_bar = &bar_scratch[m - 1];
+        for (size_t j = 0; j < n; j++) {
+            const tr_candle_t *b = &bars[j];
+            if (b->instrument_id == p->instrument_id &&
+                b->timeframe_sec == p->bb.cfg.timeframe_sec &&
+                b->close_time_us <= now_us &&
+                b->open_time_us > open_bar->open_time_us &&
+                tr_session_span(&p->session, b->open_time_us, 0, 0)) {
+                open_bar->state = TR_CANDLE_CLOSED;
+                p->bb.has_open = false;
+                p->bb.last_close = open_bar->close;
+                p->bb.has_last_close = true;
+                force_closed = true;
+                break;
+            }
+        }
+    }
+
+    /* 3) 뒤(최신)에서부터 병합해 저장소 끝에서 앞으로 채운다 — 용량 초과 시 가장
+     * 오래된 봉이 밀리는 링 계약과 같다. floor는 조회 행의 오름차순·중복을 강제한다 */
+    size_t cap = bring->capacity;
+    size_t out = cap;
+    size_t i = m, j = n;
+    size_t inserted = 0;
+    tr_time_us_t floor = INT64_MAX;
+    while (out > 0 && (i > 0 || j > 0)) {
+        /* 조회 후보 미리보기: 수용 불가 행(다른 종목·주기, 역순·중복, 미확정, 세션 밖)은
+         * 여기서 소비하며 건너뛴다 */
+        const tr_candle_t *f = 0;
+        while (j > 0) {
+            const tr_candle_t *cand = &bars[j - 1];
+            if (cand->instrument_id == p->instrument_id &&
+                cand->timeframe_sec == p->bb.cfg.timeframe_sec &&
+                cand->open_time_us < floor &&
+                cand->close_time_us <= now_us &&
+                tr_session_span(&p->session, cand->open_time_us, 0, 0)) {
+                f = cand;
+                break;
+            }
+            j--;
+        }
+        if (i > 0 && (f == 0 || bar_scratch[i - 1].open_time_us >= f->open_time_us)) {
+            const tr_candle_t *ex = &bar_scratch[--i];
+            if (f != 0 && f->open_time_us == ex->open_time_us) {
+                floor = f->open_time_us;
+                j--; /* 중복 조회 봉 폐기 — 기존 봉 보존 */
+            }
+            out--;
+            memcpy((char *)bring->storage + out * bring->elem_size, ex, bring->elem_size);
+        } else if (f != 0) {
+            floor = f->open_time_us;
+            j--;
+            out--;
+            memcpy((char *)bring->storage + out * bring->elem_size, f, bring->elem_size);
+            inserted++;
+        } else {
+            break;
+        }
+    }
+    if (inserted == 0) {
+        /* 삽입이 없으면 병합 쓰기는 기존 봉의 재배치였다 — 비워둔 사본으로 되돌려
+         * 링을 원래 내용 그대로(head=0 정규화) 복원한다. 래핑된 링(head != 0)에서
+         * 그대로 반환하면 저장소 상단에 쓴 사본과 메타가 어긋나 링이 깨진다 */
+        memcpy(bring->storage, bar_scratch, m * bring->elem_size);
+        bring->head = 0;
+        bring->count = m;
+        return 0; /* generation도 그대로 */
+    }
+    size_t new_count = cap - out;
+    if (out > 0) {
+        memmove(bring->storage, (const char *)bring->storage + out * bring->elem_size,
+                new_count * bring->elem_size);
+    }
+    bring->head = 0;
+    bring->count = new_count;
+
+    /* 4) 상태 링 재구성: 병합된 봉 순서에 맞춰 기존 슬롯을 open_time으로 매칭하고,
+     * 새로 들어온 봉 자리에는 지표 무효 슬롯을 둔다 (인덱스 정합 유지) */
+    if (p->status_ring_on) {
+        size_t sm = tr_ring_count(sring);
+        for (size_t k = 0; k < sm; k++) {
+            tr_ring_at(sring, sm - 1 - k, &st_scratch[k]);
+        }
+        if (force_closed && sm > 0 &&
+            st_scratch[sm - 1].open_time_us == bar_scratch[m - 1].open_time_us) {
+            st_scratch[sm - 1].closed = true; /* 강제 확정된 OPEN 봉의 슬롯 갱신 */
+        }
+        size_t si = 0;
+        for (size_t k = 0; k < new_count; k++) {
+            const tr_candle_t *b =
+                (const tr_candle_t *)((const char *)bring->storage + k * bring->elem_size);
+            tr_bar_status_t st;
+            while (si < sm && st_scratch[si].open_time_us < b->open_time_us) {
+                si++;
+            }
+            if (si < sm && st_scratch[si].open_time_us == b->open_time_us) {
+                st = st_scratch[si++];
+            } else {
+                memset(&st, 0, sizeof(st));
+                st.open_time_us = b->open_time_us;
+                st.closed = true;
+                tr_session_trading_day(&p->session, b->open_time_us, &st.trading_day);
+            }
+            memcpy((char *)sring->storage + k * sring->elem_size, &st, sring->elem_size);
+        }
+        sring->head = 0;
+        sring->count = new_count;
+    }
+
+    p->generation++; /* 대시보드가 스냅샷을 다시 가져가도록 (feed.noteGeneration) */
+    return inserted;
+}
+
 void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
                             int64_t event_time_us, double bids, double asks) {
     if (e == 0) {

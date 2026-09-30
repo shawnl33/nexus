@@ -971,7 +971,251 @@ static void test_mixed_market_sessions(void) {
     TR_CHECK(ps->has_prev_day);
 }
 
+/* RT 캐치업 병합 (tr_engine_pipe_merge_bars): 공백 구간의 과거 확정 봉이 봉 링에
+ * 지표 재평가 없이 삽입되고, 상태 링 인덱스 정합이 유지되며, generation이 오른다 */
+static tr_candle_t fetched_bar(unsigned h, unsigned mi, tr_price_t close) {
+    tr_candle_t b;
+    memset(&b, 0, sizeof(b));
+    b.instrument_id = 1;
+    b.timeframe_sec = 60;
+    b.open_time_us = kst(h, mi, 0);
+    b.close_time_us = kst(h, mi, 0) + 60 * TR_US_PER_SEC;
+    b.open = close;
+    b.high = close;
+    b.low = close;
+    b.close = close;
+    b.volume = 100;
+    b.state = TR_CANDLE_CLOSED;
+    return b;
+}
+
+static void test_merge_bars_catchup(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap);
+    static tr_bar_status_t ring[BB_CAP];
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+
+    /* 라이브: 9:01~9:05 봉 (9:05는 진행 중 OPEN). 여기서 9:06~9:08이 RT 공백으로 빠졌다 */
+    uint64_t id = 1;
+    for (int i = 1; i <= 5; i++) {
+        feed_min1(&e, i, 100 + i, id++);
+    }
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 5);
+    TR_CHECK(tr_engine_status_count(&e) == 5);
+    TR_CHECK(e.bb.has_open); /* 9:05 진행 중 */
+    tr_bar_status_t open_st;
+    TR_CHECK(tr_engine_status_at(&e, 0, &open_st));
+    TR_CHECK(!open_st.closed);
+    double reg_before = e.lr3.line;
+    int payloads_before = cap.n;
+    uint32_t gen_before = e.generation;
+
+    /* 캐치업 조회 결과: 9:03(중복 — 기존 봉 유지 확인용으로 종가를 다르게), 9:06~9:08(구멍),
+     * 9:09(아직 안 닫힌 봉 — close > now 이므로 제외), 20:00(세션 밖 — 제외) */
+    tr_candle_t fetched[6];
+    fetched[0] = fetched_bar(9, 3, 9999); /* 중복: 기존 9:03(종가 103)을 덮으면 안 된다 */
+    fetched[1] = fetched_bar(9, 6, 200);
+    fetched[2] = fetched_bar(9, 7, 201);
+    fetched[3] = fetched_bar(9, 8, 202);
+    fetched[4] = fetched_bar(9, 9, 203);  /* 미확정 (now=9:09:30) */
+    fetched[5] = fetched_bar(20, 0, 300); /* 세션 밖 */
+    static tr_candle_t bscr[BB_CAP];
+    static tr_bar_status_t sscr[BB_CAP];
+    size_t ins = tr_engine_pipe_merge_bars(&e, 1, fetched, 6, kst(9, 9, 30),
+                                           bscr, BB_CAP, sscr, BB_CAP);
+    TR_CHECK(ins == 3);
+    TR_CHECK(e.generation == gen_before + 1); /* 대시보드 재시딩 트리거 */
+
+    /* 봉 링: 9:01..9:08 오름차순 8개. 정체된 9:05 OPEN 봉은 제자리에서 닫혔다 */
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 8);
+    TR_CHECK(!e.bb.has_open);
+    for (size_t i = 0; i < 8; i++) {
+        tr_candle_t c;
+        TR_CHECK(tr_ring_at(&e.bb.bars, i, &c));
+        TR_CHECK(c.open_time_us == kst(9, (unsigned)(8 - i), 0)); /* back 0 = 9:08 */
+        TR_CHECK(c.state == TR_CANDLE_CLOSED);
+    }
+    {
+        tr_candle_t c;
+        TR_CHECK(tr_ring_at(&e.bb.bars, 5, &c)); /* 9:03 */
+        TR_CHECK(c.close == 103); /* 중복 조회 봉에 덮이지 않았다 */
+    }
+
+    /* 지표·발행은 건드리지 않는다 */
+    TR_CHECK(e.lr3.line == reg_before);
+    TR_CHECK(cap.n == payloads_before);
+
+    /* 상태 링: 같은 8개로 인덱스 정합. 삽입 봉은 지표 무효, 기존 봉은 값 보존 */
+    TR_CHECK(tr_engine_status_count(&e) == 8);
+    for (size_t i = 0; i < 8; i++) {
+        tr_candle_t c;
+        tr_bar_status_t st;
+        TR_CHECK(tr_ring_at(&e.bb.bars, i, &c));
+        TR_CHECK(tr_engine_status_at(&e, i, &st));
+        TR_CHECK(st.open_time_us == c.open_time_us);
+        TR_CHECK(st.closed);
+    }
+    tr_bar_status_t st;
+    TR_CHECK(tr_engine_status_at(&e, 0, &st)); /* 9:08 (삽입) */
+    TR_CHECK(!st.reg_valid && st.score == 0);
+    TR_CHECK(st.trading_day == tr_days_from_civil(2024, 1, 2));
+    TR_CHECK(tr_engine_status_at(&e, 3, &st)); /* 9:05 (강제 확정) — 지표 값 보존 */
+    TR_CHECK(st.closed);
+    TR_CHECK(st.reg_line == open_st.reg_line && st.score == open_st.score);
+
+    /* 라이브 재개: 다음 틱이 새 봉을 정상으로 연다 */
+    feed_min1(&e, 9, 210, id++);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 9);
+    TR_CHECK(e.bb.has_open);
+    {
+        tr_candle_t c;
+        TR_CHECK(tr_ring_at(&e.bb.bars, 0, &c));
+        TR_CHECK(c.open_time_us == kst(9, 9, 0) && c.state == TR_CANDLE_OPEN);
+    }
+
+    /* 같은 조회 결과로 다시 병합해도 모두 중복이라 삽입 0, generation 불변 */
+    ins = tr_engine_pipe_merge_bars(&e, 1, fetched, 6, kst(9, 9, 40), bscr, BB_CAP, sscr, BB_CAP);
+    TR_CHECK(ins == 0);
+    TR_CHECK(e.generation == gen_before + 1);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 9);
+
+    /* 방어: 모르는 종목 / 스크래치 없음 / 용량 부족 */
+    TR_CHECK(tr_engine_pipe_merge_bars(&e, 999, fetched, 6, kst(9, 9, 40),
+                                       bscr, BB_CAP, sscr, BB_CAP) == 0);
+    TR_CHECK(tr_engine_pipe_merge_bars(&e, 1, fetched, 6, kst(9, 9, 40),
+                                       0, BB_CAP, sscr, BB_CAP) == 0);
+    TR_CHECK(tr_engine_pipe_merge_bars(&e, 1, fetched, 6, kst(9, 9, 40),
+                                       bscr, 4, sscr, BB_CAP) == 0);
+}
+
+/* 캐치업 병합 — OPEN 봉이 정체되지 않은 경우(구멍이 OPEN 봉보다 과거): OPEN 봉은
+ * 그대로 유지되고 구멍만 채워진다 */
+static void test_merge_bars_keeps_live_open(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap);
+    static tr_bar_status_t ring[BB_CAP];
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+
+    /* 9:01 확정 + 9:04 진행 중 (9:02, 9:03 구멍) */
+    feed_min1(&e, 1, 101, 1);
+    feed_min1(&e, 4, 104, 2);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 2);
+    TR_CHECK(e.bb.has_open);
+
+    tr_candle_t fetched[2];
+    fetched[0] = fetched_bar(9, 2, 102);
+    fetched[1] = fetched_bar(9, 3, 103);
+    static tr_candle_t bscr[BB_CAP];
+    static tr_bar_status_t sscr[BB_CAP];
+    size_t ins = tr_engine_pipe_merge_bars(&e, 1, fetched, 2, kst(9, 4, 30),
+                                           bscr, BB_CAP, sscr, BB_CAP);
+    TR_CHECK(ins == 2);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 4);
+    TR_CHECK(e.bb.has_open); /* 진행 중 봉은 열린 채로 남는다 */
+
+    /* 최신은 여전히 9:04 OPEN, 그 아래로 구멍이 채워졌다 */
+    for (size_t i = 0; i < 4; i++) {
+        tr_candle_t c;
+        TR_CHECK(tr_ring_at(&e.bb.bars, i, &c));
+        TR_CHECK(c.open_time_us == kst(9, (unsigned)(4 - i), 0));
+    }
+    tr_candle_t c;
+    TR_CHECK(tr_ring_at(&e.bb.bars, 0, &c));
+    TR_CHECK(c.state == TR_CANDLE_OPEN);
+
+    /* 상태 링 정합 유지 */
+    TR_CHECK(tr_engine_status_count(&e) == 4);
+    tr_bar_status_t st;
+    TR_CHECK(tr_engine_status_at(&e, 0, &st));
+    TR_CHECK(!st.closed); /* 9:04 진행 중 슬롯 보존 */
+    TR_CHECK(tr_engine_status_at(&e, 1, &st));
+    TR_CHECK(st.closed && !st.reg_valid); /* 9:03 삽입 슬롯 */
+
+    /* 라이브 갱신이 정상 계속된다 */
+    feed_min1(&e, 4, 106, 3);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 4); /* 같은 봉 갱신 */
+    TR_CHECK(tr_ring_at(&e.bb.bars, 0, &c));
+    TR_CHECK(c.close == 106);
+}
+
+/* 캐치업 병합 — 래핑된 링(head != 0): 삽입 0인 병합(모두 중복)은 내용을 바꾸지 않고,
+ * 삽입 병합은 가장 오래된 봉을 밀어내며 구멍을 채운다. 상태 링 정합은 끝까지 유지 */
+static void test_merge_bars_wrapped_ring(void) {
+    tr_engine_t e;
+    capture_t dummy;
+    last_capture_t cap;
+    memset(&cap, 0, sizeof(cap));
+    init_engine(&e, &dummy);
+    tr_engine_attach_status_cb(&e, last_capture_cb, &cap); /* 64페이로드 상한 캡처 회피 */
+    static tr_bar_status_t ring[BB_CAP];
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+
+    /* BB_CAP(64)을 넘겨 채워 링을 래핑시킨다: 9:00+i분 봉, i=0..69 중 30~32(구멍) 제외.
+     * 67봉 공급 → 가장 오래된 3봉(i=0..2)이 밀려 oldest는 9:03 */
+    uint64_t id = 1;
+    for (int i = 0; i <= 69; i++) {
+        if (i >= 30 && i <= 32) {
+            continue;
+        }
+        feed_min1(&e, i, 100 + i, id++);
+    }
+    TR_CHECK(tr_ring_count(&e.bb.bars) == BB_CAP);
+    TR_CHECK(e.bb.bars.head != 0); /* 래핑 확인 */
+    TR_CHECK(e.bb.has_open);       /* 10:09 진행 중 */
+
+    static tr_candle_t bscr[BB_CAP];
+    static tr_bar_status_t sscr[BB_CAP];
+
+    /* 삽입 0 병합(기존 봉과 중복만): 래핑된 링의 내용이 한 봉도 바뀌면 안 된다 */
+    tr_candle_t dups[2] = {fetched_bar(10, 7, 1), fetched_bar(10, 8, 1)};
+    size_t ins = tr_engine_pipe_merge_bars(&e, 1, dups, 2, kst(10, 9, 30),
+                                           bscr, BB_CAP, sscr, BB_CAP);
+    TR_CHECK(ins == 0);
+    TR_CHECK(e.generation == 1);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == BB_CAP);
+    for (size_t b = 0; b < BB_CAP; b++) {
+        tr_candle_t c;
+        tr_bar_status_t st;
+        TR_CHECK(tr_ring_at(&e.bb.bars, b, &c));
+        TR_CHECK(tr_engine_status_at(&e, b, &st));
+        TR_CHECK(st.open_time_us == c.open_time_us);
+        int mi = 69 - (int)b;      /* newest 10:09(i=69)에서 뒤로 */
+        if (mi <= 32) {
+            mi -= 3;               /* 구멍 9:30~9:32 건너뜀 */
+        }
+        TR_CHECK(c.open_time_us == kst((unsigned)(9 + mi / 60), (unsigned)(mi % 60), 0));
+    }
+
+    /* 구멍 병합: 3봉 삽입, 가장 오래된 3봉(9:03~9:05)이 밀려 oldest는 9:06 */
+    tr_candle_t fill[3] = {fetched_bar(9, 30, 201), fetched_bar(9, 31, 202),
+                           fetched_bar(9, 32, 203)};
+    ins = tr_engine_pipe_merge_bars(&e, 1, fill, 3, kst(10, 9, 30),
+                                    bscr, BB_CAP, sscr, BB_CAP);
+    TR_CHECK(ins == 3);
+    TR_CHECK(e.generation == 2);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == BB_CAP);
+    TR_CHECK(e.bb.has_open); /* OPEN 봉(10:09)은 그대로 */
+    for (size_t b = 0; b < BB_CAP; b++) {
+        tr_candle_t c;
+        tr_bar_status_t st;
+        int mi = 69 - (int)b; /* 6..69 연속 (구멍 메워짐) */
+        TR_CHECK(tr_ring_at(&e.bb.bars, b, &c));
+        TR_CHECK(c.open_time_us == kst((unsigned)(9 + mi / 60), (unsigned)(mi % 60), 0));
+        TR_CHECK(tr_engine_status_at(&e, b, &st));
+        TR_CHECK(st.open_time_us == c.open_time_us);
+    }
+    /* 삽입 슬롯(9:32, back=37)은 지표 무효·확정으로 기록된다 */
+    tr_bar_status_t st;
+    TR_CHECK(tr_engine_status_at(&e, 37, &st));
+    TR_CHECK(st.closed && !st.reg_valid);
+}
+
 int main(void) {
+    test_merge_bars_catchup();
+    test_merge_bars_keeps_live_open();
+    test_merge_bars_wrapped_ring();
     test_replay_pipeline();
     test_session_first_reset();
     test_orderbook_path();

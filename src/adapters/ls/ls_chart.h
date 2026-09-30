@@ -33,8 +33,15 @@ typedef struct {
 } ls_chart_page_t;
 
 /* 한 페이지 조회. out에는 open_time 오름차순으로 기록된다.
- * 반환: LS_HTTP_OK 외에 LS_CHART_EMPTY(데이터 없음, 오류 아님) 가능. */
+ * 반환: LS_HTTP_OK 외에 LS_CHART_EMPTY(데이터 없음, 오류 아님) 가능.
+ * 재시도 가능한 실패(ls_chart_retryable)는 최대 2회 재시도한다 (1 TPS 스로틀 유지). */
 #define LS_CHART_EMPTY 100
+
+/* 재시도 가능한 실패인지 분류한다 (조회 함수들의 재시도 정책이 여기서 고정된다).
+ * 전송 오류(타임아웃)·HTTP 상태 오류(5xx 등)는 서버가 답하지 못한 것이므로 재시도한다.
+ * PARSE/API 오류는 서버가 답한 것이므로 재시도해도 같고, EMPTY·OK는 실패가 아니다.
+ * (2026-09-30 실측: 차트 API가 간헐적으로 10초 타임아웃/500을 내 백필 페이지가 유실됐다) */
+bool ls_chart_retryable(int rc);
 
 int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shcode,
                           int32_t ncnt, int32_t qrycnt, const char *edate, const char *etime,

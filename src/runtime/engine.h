@@ -292,6 +292,32 @@ void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us);
 /* 백필: 과거 확정 봉(실제 OHLC)을 직접 주입한다. tr_bar_builder_inject_bar 래퍼. */
 bool tr_engine_inject_bar(tr_engine_t *e, const tr_candle_t *bar);
 
+/* RT 공백 캐치업 병합 (2026-09-30, RT 재연결 공백 유실 사건 후속):
+ * 조회해 온 과거 확정 봉을 봉 링에 **지표 재평가 없이** 병합한다.
+ * watch 백필 경로(tr_engine_inject_bar → engine_on_bar)는 봉마다 지표를 돌리므로
+ * 라이브 워밍업 상태(회귀 창·호가·⑤ 체인)가 있는 파이프라인에는 쓸 수 없고,
+ * tr_bar_builder_inject_bar 자체가 OPEN 봉 존재 시와 최신보다 과거인 봉을 거부해
+ * 중간 구멍을 채우지 못한다 — 그래서 링 수준 병합으로 빠진 봉만 삽입한다.
+ *
+ * 규칙:
+ * - bars는 open_time 오름차순(어긋난 행은 건너뛴다). 기존 봉과 open_time이 같으면
+ *   기존 봉을 유지한다 (라이브 OPEN 봉·늦은 틱 정정 이력 보호).
+ * - 종목·timeframe 불일치, 세션 밖, close_time > now_us(아직 안 닫힌 봉)는 건너뛴다.
+ * - 진행 중이던 OPEN 봉보다 새로운 조회 봉이 오면(정체된 OPEN 봉) 그 봉을 제자리에서
+ *   닫고(has_open 해제) 병합한다 — 다음 라이브 틱이 새 봉을 열 수 있게 한다.
+ * - 상태 링(부착 시)은 봉 링과 인덱스 정합이므로, 삽입된 봉 자리에는 지표 무효 슬롯
+ *   (open_time·closed·trading_day만 기록)을 같은 위치에 넣어 정합을 유지한다.
+ * - 1봉 이상 삽입되면 generation을 올린다 (대시보드 재시딩 트리거, 계획서 §18).
+ * - 지표·스트림 발행에는 아무 영향이 없다 (봉 이벤트를 발생시키지 않는다).
+ *
+ * scratch는 링 저장소와 겹치지 않는 호출자 소유 버퍼로, 각 링 용량 이상이어야 한다.
+ * 상태 링 부착 시 그 용량이 봉 링보다 작으면 병합을 거부하고 0을 돌려준다.
+ * 반환: 실제로 삽입된 봉 수. */
+size_t tr_engine_pipe_merge_bars(tr_engine_t *e, uint64_t instrument_id,
+                                 const tr_candle_t *bars, size_t n, tr_time_us_t now_us,
+                                 tr_candle_t *bar_scratch, size_t bar_scratch_cap,
+                                 tr_bar_status_t *st_scratch, size_t st_scratch_cap);
+
 /* 호가 입력 (H1_/FH9). bids/asks는 총잔량(totbidrem/totofferrem).
  * instrument_id로 파이프라인을 찾아 라우팅한다 (없으면 드롭). */
 void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,

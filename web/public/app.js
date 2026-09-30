@@ -606,6 +606,9 @@ function applyStatus(msg) {
   if (feed.noteGeneration(cache, p.generation)) {
     feed.reset(cache);
     clearSymbolPanes(sh);
+    // 세대 상승은 엔진 쪽 재구성 신호다 (종목 전환·RT 캐치업 병합). 비운 뒤 스냅샷을
+    // 다시 가져와야 병합된 과거 봉(캐치업)까지 화면에 반영된다 — 라이브만으로는 구멍이 남는다
+    if (panes.some((pane) => pane.symbol === sh)) seedSymbol(sh);
   }
   const t = Number(p.bar_open_time) / 1e6;
   if (!Number.isFinite(t) || t <= 0) return;

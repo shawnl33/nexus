@@ -104,12 +104,15 @@ static tr_candle_t g_hist[2208]; /* 2일치(선물 2,130) + 페이지 경계 여
 static tr_candle_t g_page[512];   /* 주간 페이지 스크래치 (비압축 500 상한) */
 static tr_candle_t g_night[1008]; /* 야간 t8461 (서버 상한 999) */
 static ls_daily_bar_t g_daily[32]; /* ⑤ 체인 프라임용 일봉 (t8410/t8466) */
+static tr_candle_t g_merge_bars[BB_CAP];       /* RT 캐치업 병합 스크래치 (링 저장소와 분리) */
+static tr_bar_status_t g_merge_status[BB_CAP];
 #define HIST_CAP ((size_t)(sizeof(g_hist) / sizeof(g_hist[0])))
 #define NIGHT_CAP ((size_t)(sizeof(g_night) / sizeof(g_night[0])))
 #define BACKFILL_PAGE_BARS 500 /* 비압축 qrycnt 상한 (t8465 명세) */
 #define BACKFILL_STOCK_BARS 1440 /* NXT 720봉 × 2일 */
 #define BACKFILL_FUT_BARS 2130   /* (주간 405 + 야간 660) × 2일 */
 #define BACKFILL_DAILY_BARS 15   /* ⑤ 체인 워밍업용 일봉 수 (dtl1/gap1 각 10세션 필요) */
+#define RT_CATCHUP_GAP_US (120 * TR_US_PER_SEC) /* 이 이상 RT 이벤트가 끊기면 공백-재개로 본다 */
 
 /* 워밍업 백필: 1분봉(실제 OHLC)을 2일치 조회해 봉 자체로 주입한다.
  * 주간은 t8465/t8412, 선물 야간은 t8461 — 두 계열을 시각으로 병합해 오름차순 주입한다.
@@ -229,6 +232,37 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
         }
     }
     return injected;
+}
+
+/* RT 공백 캐치업: 실시간 이벤트가 RT_CATCHUP_GAP_US 이상 끊겼다가 재개될 때 호출된다.
+ * 재연결만으로는 공백 구간의 봉이 영구 유실되므로(2026-09-30 사건: 13:08~13:34 반복
+ * 접속 끊김), 모든 관측 종목의 최근 분봉을 다시 조회해(edate=99999999 — 공백은 항상
+ * 최근 구간이라 1페이지 500봉이면 수 시간을 커버한다) 봉 링에 병합한다.
+ * 병합은 지표 재평가 없이 빠진 봉만 삽입한다 (tr_engine_pipe_merge_bars) — 라이브
+ * 워밍업된 호가·회귀 상태를 보존하기 위한다. watch 백필과 마찬가지로 루프를 막는다.
+ * 선물 야간 세션(t8461)은 커버하지 않는다 — 주간 TR(t8465)만 조회한다 (후속 과제). */
+static void rt_catchup_missing_bars(live_ctx_t *lc, tr_time_us_t now_us) {
+    fprintf(stderr, "rt catch-up: start (watches=%d)\n", lc->watch_count);
+    for (int i = 0; i < lc->watch_count; i++) {
+        const watch_entry_t *w = &lc->watches[i];
+        ls_chart_page_t page;
+        char cerr[128] = {0};
+        int rc = ls_chart_fetch_minute(lc->auth, w->is_fut ? LS_CHART_FUT_MIN : LS_CHART_STOCK_MIN,
+                                       w->shcode, 1, BACKFILL_PAGE_BARS, "99999999", " ", " ", " ",
+                                       w->instrument_id, 2, g_page,
+                                       sizeof(g_page) / sizeof(g_page[0]), &page, cerr, sizeof(cerr));
+        if (rc != LS_HTTP_OK && rc != LS_CHART_EMPTY) {
+            fprintf(stderr, "rt catch-up %s: fetch failed rc=%d: %s\n", w->shcode, rc, cerr);
+            continue;
+        }
+        size_t merged = tr_engine_pipe_merge_bars(lc->engine, w->instrument_id,
+                                                  g_page, page.count, now_us,
+                                                  g_merge_bars, BB_CAP,
+                                                  g_merge_status, BB_CAP);
+        fprintf(stderr, "rt catch-up %s: merged %zu bars (page=%zu)\n", w->shcode, merged,
+                page.count);
+    }
+    fprintf(stderr, "rt catch-up: done\n");
 }
 
 static live_ctx_t g_live_ctx;
@@ -872,10 +906,20 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
            is_fut ? "FUT" : "STK", shcode);
 
     int rc = 0;
+    /* 직전 RT 이벤트 수신 시각. 0이면 기동 후 첫 이벤트 전 — 기동 백필과 중복 캐치업하지 않는다 */
+    int64_t last_rt_event_us = 0;
+    bool need_catchup = false;
     while (!g_stop) {
         tr_ls_rt_service(rt, 20);
         ls_rt_event_t ev;
         while (tr_ls_rt_next(rt, &ev)) {
+            /* 공백-재개 감지: 직전 이벤트와 120초 이상 끊겼으면 큐 소비 후 캐치업한다
+             * (재연결만으로는 공백 구간의 봉이 복구되지 않는다 — 2026-09-30 사건) */
+            if (last_rt_event_us != 0 &&
+                ev.recv_time_us - last_rt_event_us > RT_CATCHUP_GAP_US) {
+                need_catchup = true;
+            }
+            last_rt_event_us = ev.recv_time_us;
             /* instrument_id로 파이프라인을 찾아 라우팅한다. 미관측 id는 엔진이 드롭한다
              * (구독 해지된 채널의 지연 메시지) */
             if (ev.kind == LS_RT_TICK) {
@@ -897,6 +941,10 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                 tr_engine_on_orderbook(&engine, ev.instrument_id, ev.event_time_us,
                                        (double)ev.bid_total, (double)ev.ask_total);
             }
+        }
+        if (need_catchup) {
+            need_catchup = false;
+            rt_catchup_missing_bars(&g_live_ctx, (tr_time_us_t)time(0) * TR_US_PER_SEC);
         }
         tr_ipc_poll(ipc, 0, 4, live_command_handler, 0);
         if (tr_ls_rt_state(rt) == LS_RT_FAILED) {
