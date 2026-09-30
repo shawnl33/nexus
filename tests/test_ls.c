@@ -148,7 +148,7 @@ static void test_fut_night_parse(void) {
     TR_CHECK(g_bars[5].state == TR_CANDLE_CLOSED && g_bars[5].timeframe_sec == 60);
 }
 
-/* ---------- 일봉 (t8410 미검증 / t8466 2026-09-29 실측 완료 — 파서 단위 테스트) ---------- */
+/* ---------- 일봉 (t8466 2026-09-29 / t8410 2026-09-30 실측 완료 — 파서 단위 테스트) ---------- */
 
 /* t8410 명세 형식: 주식 가격은 Number. 행 순서는 명세에 없어 최신→과거로 섞어 둔다 */
 static const char *STOCK_DAY_RESP =

@@ -435,7 +435,7 @@ int ls_chart_fetch_fut_night(ls_auth_t *auth, const char *focode, int32_t cnt,
     return n > 0 ? LS_HTTP_OK : LS_CHART_EMPTY;
 }
 
-/* ---------- 일봉 (t8410 주식 / t8466 선물 — t8466은 2026-09-29 실측 완료, t8410은 미검증) ---------- */
+/* ---------- 일봉 (t8410 주식 / t8466 선물 — t8466 2026-09-29, t8410 2026-09-30 실측 완료) ---------- */
 
 /* date "20260928" (KST 날짜) → days since epoch */
 static bool parse_date_day(const char *date, int64_t *out) {
@@ -503,8 +503,8 @@ int ls_chart_parse_daily(const char *body, size_t body_len, ls_chart_kind_t kind
     }
     yyjson_doc_free(doc);
 
-    /* t8466은 실측으로 오름차순(과거→최신, 당일 진행 중 일봉 포함)을 확인했다
-     * (2026-09-29). t8410은 미검증 — 두 kind 모두 거래일 오름차순 정렬을 유지하고
+    /* 두 kind 모두 실측으로 오름차순(과거→최신, 당일 진행 중 일봉 포함)을 확인했다
+     * (t8466 2026-09-29, t8410 2026-09-30). 그래도 거래일 오름차순 정렬을 유지하고
      * 중복 거래일은 거부한다 (분봉 파서의 중복 거부와 같은 규칙) */
     qsort(out, n, sizeof(out[0]), daily_bar_cmp);
     for (size_t i = 1; i < n; i++) {
