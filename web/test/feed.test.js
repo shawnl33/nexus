@@ -67,6 +67,8 @@ test("reset: 맵 참조를 유지한 채 비우고 seedToken을 올린다", () =
   feed.noteBar(c, 1000, { time: 1000 });
   c.barInd.set(1000, { score: 1 });
   c.tickRaw = 100;
+  c.gaps = [[1060, 1120]]; // 시딩 구멍 구간
+  c.wsCount = 2;
   const barsRef = c.bars, seqRef = c.barSeq; // 렌더러 ctx가 잡는 참조
   const tok = c.seedToken;
 
@@ -75,6 +77,8 @@ test("reset: 맵 참조를 유지한 채 비우고 seedToken을 올린다", () =
   assert.equal(c.barSeq.length, 0);
   assert.equal(c.barPos.size, 0);
   assert.equal(c.tickRaw, 5);
+  assert.deepEqual(c.gaps, []); // 구멍·whitespace 카운트도 리셋된다
+  assert.equal(c.wsCount, 0);
   assert.equal(c.bars, barsRef); // 참조 유지 — 기존 ctx가 끊기지 않는다
   assert.equal(c.barSeq, seqRef);
   assert.equal(c.seedToken, tok + 1); // 늦은 시딩 응답 폐기 트리거

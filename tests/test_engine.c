@@ -1212,10 +1212,93 @@ static void test_merge_bars_wrapped_ring(void) {
     TR_CHECK(st.closed && !st.reg_valid);
 }
 
+/* chart.snapshot 시간축 공백 (tr_engine_pipe_find_gaps): 같은 세션 안에서 빠진 분만
+ * 구멍으로 나오고, 개장일이 다른 전이(익일 개장·야간 세션 경계)는 구멍이 아니다 */
+static tr_time_us_t kst_day(int day, unsigned h, unsigned mi) {
+    tr_civil_t c = {2024, 1, (unsigned)(2 + day), h, mi, 0};
+    tr_time_us_t t = 0;
+    tr_time_us_from_civil(&c, KST, &t);
+    return t;
+}
+
+static void feed_at_day(tr_engine_t *e, uint64_t instrument_id, int day, unsigned h,
+                        unsigned mi, tr_price_t price, uint64_t id) {
+    tr_event_envelope_t env;
+    memset(&env, 0, sizeof(env));
+    env.kind = TR_EVENT_TICK;
+    env.event_time_us = kst_day(day, h, mi);
+    env.received_time_us = env.event_time_us;
+    tr_tick_t tk;
+    memset(&tk, 0, sizeof(tk));
+    tk.instrument_id = instrument_id;
+    tk.price = price;
+    tk.qty = 10;
+    tk.source_exec_id = id;
+    tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+    TR_CHECK(tr_engine_on_tick(e, &env, &tk) != TR_BB_ERROR);
+}
+
+static void test_snapshot_gaps(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap); /* pipe0: id=1, TEST_SESS = 09:00~15:30 평일 (당일 세션) */
+
+    /* 1/2(화): 9:01, 9:02, 9:05, 9:06 — 세션 안 구멍 9:03~9:04
+     * 1/3(수): 9:00, 9:01 — 직전 봉(1/2 9:06)과 17시간 넘게 떨어져 있지만
+     * 개장일이 달라(세션 전이) 구멍이 아니다 */
+    uint64_t id = 1;
+    feed_at_day(&e, 1, 0, 9, 1, 101, id++);
+    feed_at_day(&e, 1, 0, 9, 2, 102, id++);
+    feed_at_day(&e, 1, 0, 9, 5, 105, id++);
+    feed_at_day(&e, 1, 0, 9, 6, 106, id++);
+    feed_at_day(&e, 1, 1, 9, 0, 200, id++);
+    feed_at_day(&e, 1, 1, 9, 1, 201, id++);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 6);
+
+    tr_time_us_t gaps[8][2];
+    /* 전체 창: 세션 안 구멍 하나만 [9:03, 9:04] (빈 분의 양 끝, µs) */
+    size_t ng = tr_engine_pipe_find_gaps(&e, 1, 0, 6, gaps, 8);
+    TR_CHECK(ng == 1);
+    TR_CHECK(gaps[0][0] == kst_day(0, 9, 3) && gaps[0][1] == kst_day(0, 9, 4));
+
+    /* 페이지 경계: 창 [2,4) (9:06, 9:05) — 직전 봉 9:02는 창 밖(다음 페이지)이어도
+     * 링에 있으면 쌍을 검사해 경계에 걸친 구멍이 빠지지 않는다 */
+    ng = tr_engine_pipe_find_gaps(&e, 1, 2, 2, gaps, 8);
+    TR_CHECK(ng == 1);
+    TR_CHECK(gaps[0][0] == kst_day(0, 9, 3) && gaps[0][1] == kst_day(0, 9, 4));
+
+    /* 세션 전이만 있는 창 [0,3) (1/3 9:01, 9:00, 1/2 9:06): 구멍 없음 */
+    ng = tr_engine_pipe_find_gaps(&e, 1, 0, 3, gaps, 8);
+    TR_CHECK(ng == 0);
+
+    /* 방어: 창이 링 밖 / 모르는 종목 / 출력 용량 0·NULL */
+    TR_CHECK(tr_engine_pipe_find_gaps(&e, 1, 99, 6, gaps, 8) == 0);
+    TR_CHECK(tr_engine_pipe_find_gaps(&e, 999, 0, 6, gaps, 8) == 0);
+    TR_CHECK(tr_engine_pipe_find_gaps(&e, 1, 0, 6, gaps, 0) == 0);
+    TR_CHECK(tr_engine_pipe_find_gaps(&e, 1, 0, 6, 0, 8) == 0);
+
+    /* 야간(익일 폐장) 세션 파이프라인: 자정을 넘겨도 개장일이 같으면 같은 세션이다.
+     * 1/2 23:58, 23:59 → 1/3 00:02, 00:03 (자정 경계지만 같은 세션 — 구멍 [00:00, 00:01]),
+     * 1/3 08:45 (새 세션 개장 — 앞봉과의 전이는 구멍 아님) */
+    static const tr_session_policy_t fut_sess = {KST, 525, 300, TR_SESSION_WEEKDAYS};
+    static tr_candle_t bb_f[BB_CAP];
+    static double mid_f[32];
+    TR_CHECK(tr_engine_pipe_add(&e, 100, true, "0100A0", &fut_sess, bb_f, BB_CAP, mid_f, 32) != 0);
+    feed_at_day(&e, 100, 0, 23, 58, 300, id++);
+    feed_at_day(&e, 100, 0, 23, 59, 301, id++);
+    feed_at_day(&e, 100, 1, 0, 2, 302, id++);
+    feed_at_day(&e, 100, 1, 0, 3, 303, id++);
+    feed_at_day(&e, 100, 1, 8, 45, 310, id++);
+    ng = tr_engine_pipe_find_gaps(&e, 100, 0, 5, gaps, 8);
+    TR_CHECK(ng == 1);
+    TR_CHECK(gaps[0][0] == kst_day(1, 0, 0) && gaps[0][1] == kst_day(1, 0, 1));
+}
+
 int main(void) {
     test_merge_bars_catchup();
     test_merge_bars_keeps_live_open();
     test_merge_bars_wrapped_ring();
+    test_snapshot_gaps();
     test_replay_pipeline();
     test_session_first_reset();
     test_orderbook_path();

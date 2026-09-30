@@ -318,6 +318,21 @@ size_t tr_engine_pipe_merge_bars(tr_engine_t *e, uint64_t instrument_id,
                                  tr_candle_t *bar_scratch, size_t bar_scratch_cap,
                                  tr_bar_status_t *st_scratch, size_t st_scratch_cap);
 
+/* chart.snapshot의 시간축 공백(gaps) 수집 (2026-09-30 RT 공백 사건 후속, G2):
+ * 봉 링의 창 [from, from+take) (back_index 기준) 안에서 시간상 이웃한 두 봉의
+ * open 시각 차가 timeframe을 넘고 **같은 세션**이면 구멍으로 기록한다.
+ * 같은 세션 판별은 파이프라인의 세션 정책(tr_session_span의 개장 시각 일치)으로 한다
+ * — 개장일이 다른 전이(주간→야간 정책 전환·익일 개장 등)는 구멍이 아니다.
+ * 거래 없는 분은 수신 유실과 구분할 수 없어 모두 구멍으로 표시한다 (세션 정책상 같은
+ * 세션인 휴장 — 선물 15:45~18:00 등 — 도 포함).
+ *
+ * 각 구간은 [이전 봉 open + timeframe, 다음 봉 open − timeframe] (빈 분의 양 끝, µs)로
+ * out에 시각 오름차순으로 채운다. 창의 가장 오래된 봉과 그 직전 봉(창 밖, 링에 있으면)
+ * 의 쌍도 검사해 페이지 경계에 걸친 구멍이 빠지지 않게 한다.
+ * 반환: 채운 구간 수 (cap까지만 채운다). */
+size_t tr_engine_pipe_find_gaps(const tr_engine_t *e, uint64_t instrument_id,
+                                size_t from, size_t take, tr_time_us_t (*out)[2], size_t cap);
+
 /* 호가 입력 (H1_/FH9). bids/asks는 총잔량(totbidrem/totofferrem).
  * instrument_id로 파이프라인을 찾아 라우팅한다 (없으면 드롭). */
 void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,

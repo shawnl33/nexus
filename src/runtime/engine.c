@@ -895,6 +895,54 @@ size_t tr_engine_pipe_merge_bars(tr_engine_t *e, uint64_t instrument_id,
     return inserted;
 }
 
+size_t tr_engine_pipe_find_gaps(const tr_engine_t *e, uint64_t instrument_id,
+                                size_t from, size_t take, tr_time_us_t (*out)[2], size_t cap) {
+    if (e == 0 || out == 0 || cap == 0) {
+        return 0;
+    }
+    const tr_pipeline_t *p = 0;
+    for (int i = 0; i < e->pipe_count; i++) {
+        if (e->pipes[i]->instrument_id == instrument_id) {
+            p = e->pipes[i];
+            break;
+        }
+    }
+    if (p == 0) {
+        return 0;
+    }
+    size_t n = tr_ring_count(&p->bb.bars);
+    if (from >= n) {
+        return 0;
+    }
+    if (take > n - from) {
+        take = n - from;
+    }
+    const tr_time_us_t tf_us = (tr_time_us_t)p->bb.cfg.timeframe_sec * TR_US_PER_SEC;
+    /* 창의 각 봉 k(시간상 뒤)와 직전 봉 k+1(시간상 앞)의 쌍을 본다. k를 내림차순으로
+     * 돌면 쌍은 시각 오름차순이 된다. 창의 가장 오래된 봉(k = from+take-1)의 쌍은
+     * 직전 봉이 창 밖(다음 페이지)에 있어도 링에 남아 있으면 검사한다 — 페이지를
+     * 이어 붙여 시딩하는 쪽에서 경계에 걸친 구멍이 빠지지 않게 하기 위해서다. */
+    size_t m = 0;
+    for (size_t k = from + take; k-- > from && m < cap;) {
+        if (k + 1 >= n) {
+            continue; /* 링에 더 오래된 봉이 없으면 쌍을 만들 수 없다 */
+        }
+        tr_candle_t newer, older;
+        tr_ring_at(&p->bb.bars, k, &newer);
+        tr_ring_at(&p->bb.bars, k + 1, &older);
+        tr_time_us_t open_a, open_b;
+        if (newer.open_time_us - older.open_time_us > tf_us &&
+            tr_session_span(&p->session, older.open_time_us, &open_a, 0) &&
+            tr_session_span(&p->session, newer.open_time_us, &open_b, 0) &&
+            open_a == open_b) {
+            out[m][0] = older.open_time_us + tf_us; /* 첫 빈 분 */
+            out[m][1] = newer.open_time_us - tf_us; /* 마지막 빈 분 */
+            m++;
+        }
+    }
+    return m;
+}
+
 void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
                             int64_t event_time_us, double bids, double asks) {
     if (e == 0) {

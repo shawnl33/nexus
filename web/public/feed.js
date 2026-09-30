@@ -17,6 +17,8 @@ const Feed = (() => {
       tickRaw: 5,        // raw 단위 틱 크기 (엔진 tick 키가 갱신; 선물 5, 주식 100)
       generation: 0,     // 이 종목의 최신 세대 — 더 큰 세대가 오면 리셋 트리거
       seedToken: 0,      // 리셋 때마다 증가 — 진행 중 시딩의 늦은 응답 폐기에 쓴다
+      gaps: [],          // 시딩 스냅샷의 구멍 구간 ([startSec, endSec]) — 시리즈 whitespace로 펼친다
+      wsCount: 0,        // 시딩이 만든 whitespace 포인트 수 — pane-sync getLength가 봉 수에 더해 쓴다
       ctx: null,         // 렌더러 컨텍스트 (app.js가 지연 생성해 붙인다)
     };
   }
@@ -49,6 +51,8 @@ const Feed = (() => {
       cache.barSeq.length = 0;
       cache.barPos.clear();
       cache.tickRaw = 5;
+      cache.gaps = [];   // ctx가 잡는 참조가 아니라 새 배열로 바꿔도 된다
+      cache.wsCount = 0;
       cache.seedToken++;
     }
 

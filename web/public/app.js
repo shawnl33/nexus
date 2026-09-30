@@ -156,9 +156,18 @@ function createPane(heightFrac = 1) {
     wickUpColor: "#ef5350", wickDownColor: "#2962ff",
   });
   pane.syncHandle = paneSync.add(pane.chart, pane.candleSeries, {
-    // 크로스헤어 가로선 값과 시간축 전파의 클램프/최신 창 계산은 이 칸 자기 종목의 캐시 기준이다
+    // 크로스헤어 가로선 값과 시간축 전파의 클램프/최신 창 계산은 이 칸 자기 종목의 캐시 기준이다.
+    // getPrice는 캐시의 봉 맵만 본다 — whitespace(구멍) 시각에는 항목이 없어 undefined가 나오고,
+    // pane-sync는 그 칸에 가로선을 그리지 않는다 (구멍 위 크로스헤어는 세로선만).
     getPrice: (t) => paneCache(pane)?.bars.get(t)?.close,
-    getLength: () => feed.get(pane.symbol)?.barSeq.length ?? 0,
+    // 시리즈 길이 = 봉 수 + whitespace(구멍) 포인트 수: setVisibleLogicalRange의 논리 인덱스는
+    // whitespace를 포함한 시리즈 기준이라 봉 수만 재면 구멍 수만큼 어긋난다.
+    // wsCount는 renderSymbolPanes가 시딩 적용 때 같은 withWhitespace 결과로 갱신한다 (정합 고정).
+    // 라이브 꼬리는 봉이 1개 붙을 때 barSeq와 시리즈가 함께 +1되므로 이 합계식이 그대로 맞는다.
+    getLength: () => {
+      const c = feed.get(pane.symbol);
+      return c ? c.barSeq.length + (c.wsCount ?? 0) : 0;
+    },
   });
   buildPanePicker(pane); // 종목 입력은 칸 도구줄 맨 앞에 1회 만든다 (칩 재구성과 무관)
   const chips = document.createElement("span");
@@ -618,6 +627,10 @@ function applyStatus(msg) {
     const added = feed.noteBar(cache, t, { time: t, open: o, high: h, low: l, close: c });
     for (const pane of panes) {
       if (pane.symbol !== sh) continue;
+      // 라이브 꼬리에는 whitespace를 넣지 않는다: 새 봉이 직전 봉과 60초 넘게 떨어져 와도
+      // (실시간으로 생기는 구멍) 그대로 붙인다. RT 캐치업이 빠진 봉을 채우고, 못 채운 구멍은
+      // generation 상승 → 재시딩(seedSymbol)의 gaps가 whitespace로 표시한다 — 구멍 표시는
+      // 시딩 경로(renderSymbolPanes) 한 곳에서만 만든다.
       // 라이브 봉 적용으로 범위가 밀리는 건 새 봉이 붙을 때뿐이다 (같은 봉 갱신은 범위
       // 이벤트가 없다 — 실측). 새 봉일 때만 이 칸을 뮤트해, 틱마다 뮤트 창이 열리며
       // 사용자의 줌/스크롤 이벤트를 삼키는 일이 없게 한다.
@@ -705,7 +718,13 @@ function recentFromRows(rows, i, n) {
 function renderSymbolPanes(shcode) {
   const cache = feed.get(shcode);
   if (!cache) return;
-  const rows = cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean);
+  const bars = cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean);
+  // 구멍 구간을 분 단위 whitespace({time}만 있는 항목)로 펼쳐 캔들 사이에 섞는다 (gaps.js) —
+  // 빠진 분이 이어 붙어 보이지 않게 시간축에 빈 칸으로 남는다. 라이브 꼬리에는 넣지 않는다
+  // (applyStatus 주석 참조).
+  const rows = Gaps.withWhitespace(bars, cache.gaps ?? []);
+  // pane-sync getLength의 시리즈 길이(봉 + whitespace)와 같은 기준 — 반드시 여기서 갱신한다
+  cache.wsCount = rows.length - bars.length;
   const ctx = ctxFor(cache);
   for (const pane of panes) {
     if (pane.symbol !== shcode) continue;
@@ -745,6 +764,7 @@ async function seedSymbolNow(shcode) {
       const all = [];
       const memEvents = [];
       const pstEvents = [];
+      const gapsSec = []; // 구멍 구간 누적 (µs → 초) — 페이지 경계 구멍은 엔진이 경계 쌍까지 검사해 준다
       let back = 0;
       for (let pages = 0; pages < 16; pages++) {
         const res = await fetch(`/api/chart?shcode=${encodeURIComponent(shcode)}&back_index=${back}`);
@@ -763,11 +783,13 @@ async function seedSymbolNow(shcode) {
         // ⑥⑦ 갱신·저장 이벤트 (희소) — 페이지 경계에서 중복되지 않게 시각으로 모은다
         for (const e of p.mem ?? []) memEvents.push(e);
         for (const e of p.pst ?? []) pstEvents.push(e);
+        for (const g of p.gaps ?? []) gapsSec.push([Number(g[0]) / 1e6, Number(g[1]) / 1e6]);
         if (!p.next_back_index) break;
         back = p.next_back_index;
       }
       if (cache.seedToken !== seedTok) continue; // 시딩 중 리셋 — 새 기준으로 다시 가져온다
       feed.reset(cache); // 시딩 중 라이브로 쌓인 봉과 혼합하지 않는다 (스냅샷 기준으로 다시 쌓음)
+      cache.gaps = gapsSec; // renderSymbolPanes가 whitespace로 펼친다 (reset 이후에 넣어야 지워지지 않는다)
       all.sort((a, b) => a.time - b.time);
       const dedup = all.filter((b, i) => i === 0 || b.time !== all[i - 1].time);
       for (const b of dedup) feed.noteBar(cache, b.time, b);

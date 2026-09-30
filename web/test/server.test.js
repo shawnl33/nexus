@@ -51,6 +51,7 @@ before(async () => {
               total: 3,
               next_back_index: 2,
               bars: [[1704153660000000, 105, 106, 101, 102, 40], [1704153720000000, 102, 108, 100, 107, 41]],
+              gaps: [[1704153480000000, 1704153540000000]], // 구멍 구간도 그대로 통과해야 한다
             }
           : {
               shcode,
@@ -59,6 +60,7 @@ before(async () => {
               total: 3,
               next_back_index: 0,
               bars: [[1704153600000000, 100, 110, 90, 105, 42]],
+              gaps: [],
             };
       } else if (type === "market.watch") {
         if (reqData.shcode === "999999") {
@@ -153,6 +155,7 @@ test("GET /api/chart proxies engine bar snapshot with pagination", async () => {
   assert.equal(data.payload.shcode, "005930");
   assert.equal(data.payload.bars.length, 2);
   assert.equal(data.payload.next_back_index, 2);
+  assert.deepEqual(data.payload.gaps, [[1704153480000000, 1704153540000000]]); // gaps 키 passthrough
 
   res = await fetch(`${base}/api/chart?back_index=2`);
   assert.equal(res.status, 200);
@@ -160,6 +163,7 @@ test("GET /api/chart proxies engine bar snapshot with pagination", async () => {
   assert.equal(data.payload.bars.length, 1);
   assert.equal(data.payload.bars[0][4], 105);
   assert.equal(data.payload.next_back_index, 0);
+  assert.deepEqual(data.payload.gaps, []);
 });
 
 test("GET /api/chart forwards shcode to engine and validates format", async () => {

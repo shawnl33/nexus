@@ -371,7 +371,9 @@ static const char SNAP_IND_MANIFEST[] =
 
 /* chart.snapshot 꼬리 고정 바이트: 섹션 구분자 3개(\"],\"ind|mem|pst\":[", 각 10자) +
  * 매니페스트 본문. 각 루프 가드는 항목 최악 크기에 이 고정 꼬리를 더한 만큼을 남긴다 —
- * 항목이 추정 최악 크기 안에 드는 동안은 꼬리(구분자·매니페스트)가 온전히 쓰인다 */
+ * 항목이 추정 최악 크기 안에 드는 동안은 꼬리(구분자·매니페스트)가 온전히 쓰인다.
+ * gaps 섹션은 길이가 가변이라 여기 포함하지 않고, 직렬화된 실제 길이(gaps_len)를
+ * 각 루프 가드가 따로 빼서 예약한다 */
 #define SNAP_TAIL_FIXED (30 + (int)sizeof(SNAP_IND_MANIFEST) - 1)
 
 /* snprintf는 잘리면 "썼어야 할 길이"를 돌려주므로 off가 buf 끝을 넘어설 수 있다.
@@ -598,7 +600,9 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         /* 늦게 접속한 대시보드의 과거 봉 시딩용. PUB/SUB는 과거 메시지를 보존하지 않으므로
          * 엔진의 봉 링에서 직접 돌려준다. data.back_index(최신 기준 건너뜀, 기본 0)로
          * 페이지를 나누고, 이어지면 next_back_index != 0 을 돌려준다 (페이지당 150봉, 오름차순).
-         * data.shcode로 대상 파이프라인을 고른다 (없으면 첫 파이프라인 — 구 호환). */
+         * data.shcode로 대상 파이프라인을 고른다 (없으면 첫 파이프라인 — 구 호환).
+         * 응답에는 봉·지표 외에 시간축 공백(gaps) 구간 목록도 실린다 — 대시보드가 빠진 분을
+         * whitespace로 표시하는 데 쓴다 (docs/display_payload.md §2). */
         static char buf[60 * 1024];
         tr_engine_t *eng = g_live_ctx.engine;
         long back_index = 0;
@@ -635,13 +639,28 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         size_t remain = from < n ? n - from : 0;
         size_t take = remain < 150 ? remain : 150;
         size_t next = from + take < n ? from + take : 0;
+        /* 시간축 공백(gaps): 같은 세션 안에서 이웃 봉의 시각 차가 timeframe을 넘는 구간을
+         * [start_us, end_us] 쌍으로 수집한다 (tr_engine_pipe_find_gaps — 판별 규칙은 그
+         * doc 주석 참조). 페이지 상한 150봉이면 경계 쌍을 포함해도 150구간을 넘지 않는다.
+         * 실제 직렬화 길이(gaps_len)를 아래 각 섹션 루프의 가드 예약에 반영한다 */
+        static tr_time_us_t gap_pairs[150][2];
+        static char gaps_buf[8 + 150 * 44 + 3]; /* "\"gaps\":[" + 구간당 최악 44 + "]," + NUL */
+        size_t ngaps = tr_engine_pipe_find_gaps(eng, pipe_id, from, take, gap_pairs, 150);
+        int gaps_len = snprintf(gaps_buf, sizeof(gaps_buf), "\"gaps\":[");
+        for (size_t gi = 0; gi < ngaps; gi++) {
+            gaps_len += snprintf(gaps_buf + gaps_len, sizeof(gaps_buf) - (size_t)gaps_len,
+                                 "%s[%lld,%lld]", gi > 0 ? "," : "",
+                                 (long long)gap_pairs[gi][0], (long long)gap_pairs[gi][1]);
+        }
+        gaps_len += snprintf(gaps_buf + gaps_len, sizeof(gaps_buf) - (size_t)gaps_len, "],");
+        SNAP_CLAMP(gaps_buf, gaps_len);
         int off = snprintf(buf, sizeof(buf),
                            "{\"shcode\":\"%s\",\"generation\":%u,\"timeframe_sec\":%u,\"total\":%zu,"
                            "\"next_back_index\":%zu,\"bars\":[",
                            pipe->shcode, pipe->generation, (unsigned)eng->cfg.timeframe_sec, n, next);
         SNAP_CLAMP(buf, off);
         bool first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 160 - SNAP_TAIL_FIXED;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 160 - SNAP_TAIL_FIXED - gaps_len;) {
             tr_candle_t c;
             tr_ring_at(&pipe->bb.bars, k, &c);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%lld,%lld,%lld,%lld,%lld,%lld]",
@@ -661,7 +680,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ind\":[");
         SNAP_CLAMP(buf, off);
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 448 - SNAP_TAIL_FIXED;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 448 - SNAP_TAIL_FIXED - gaps_len;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_pipe_status_at(eng, pipe_id, k, &st);
@@ -675,7 +694,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"mem\":[");
         SNAP_CLAMP(buf, off);
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 320 - SNAP_TAIL_FIXED;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 320 - SNAP_TAIL_FIXED - gaps_len;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_pipe_status_at(eng, pipe_id, k, &st);
@@ -691,7 +710,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"pst\":[");
         SNAP_CLAMP(buf, off);
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 260 - SNAP_TAIL_FIXED;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 260 - SNAP_TAIL_FIXED - gaps_len;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_pipe_status_at(eng, pipe_id, k, &st);
@@ -708,9 +727,10 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             SNAP_CLAMP(buf, off);
             first = false;
         }
-        /* 매니페스트는 고정 길이 — 루프 가드들이 SNAP_TAIL_FIXED만큼 남겨 두므로,
-         * 각 항목이 추정 최악 크기 안에 든 경우에 한해 잘리지 않고 온전히 쓰인다 */
-        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],%s", SNAP_IND_MANIFEST);
+        /* 매니페스트는 고정 길이 — 루프 가드들이 SNAP_TAIL_FIXED + gaps_len만큼 남겨 두므로,
+         * 각 항목이 추정 최악 크기 안에 든 경우에 한해 gaps 섹션·매니페스트가 잘리지 않고
+         * 온전히 쓰인다 */
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],%s%s", gaps_buf, SNAP_IND_MANIFEST);
         SNAP_CLAMP(buf, off);
         cmd->status = "applied";
         cmd->error_code = "none";
