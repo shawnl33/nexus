@@ -719,6 +719,11 @@ function recentFromRows(rows, i, n) {
   return rows.slice(Math.max(0, i - n + 1), i + 1);
 }
 
+// 시딩 직후 초기 표시 범위(봉 수). 원본 미래곡선 차트는 하루 전체(396봉)를 한 화면에
+// 보여주므로 그에 맞춘다. scrollToRealTime은 현재 봉 간격을 유지한 채 최신으로 갈 뿐이라
+// 첫 화면이 과도하게 확대되어 보였다 — 명식 범위 지정으로 봉 간격을 이 폭에 맞춘다.
+const INITIAL_VISIBLE_BARS = 380;
+
 // 시딩이 끝난 종목의 캐시로 그 종목을 보는 모든 칸을 다시 그린다
 function renderSymbolPanes(shcode) {
   const cache = feed.get(shcode);
@@ -733,12 +738,16 @@ function renderSymbolPanes(shcode) {
   const ctx = ctxFor(cache);
   for (const pane of panes) {
     if (pane.symbol !== shcode) continue;
-    // 시딩 적용(setData + scrollToRealTime)은 프로그램적 변경 — 그 칸이 자기 최신
-    // 범위로 돌아가며 내는 범위 이벤트가 다른 칸의 탐색 위치를 빼앗지 않게 뮤트한다
-    // (scrollToRealTime의 스크롤 애니메이션이 끝난 뒤 해제)
+    // 시딩 적용(setData + 초기 범위 지정)은 프로그램적 변경 — 그 칸이 자기 최신 범위로
+    // 돌아가며 내는 범위 이벤트가 다른 칸의 탐색 위치를 빼앗지 않게 뮤트한다
     mutePaneRangeForSeeding(pane);
     pane.candleSeries.setData(rows);
-    if (rows.length) pane.chart.timeScale().scrollToRealTime();
+    if (rows.length) {
+      pane.chart.timeScale().setVisibleLogicalRange({
+        from: Math.max(0, rows.length - INITIAL_VISIBLE_BARS),
+        to: rows.length - 1,
+      });
+    }
     for (const { handle } of pane.active.values()) handle.applySeed(ctx);
   }
   restoreHeaderBadges();
