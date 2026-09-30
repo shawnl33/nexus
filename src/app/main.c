@@ -337,11 +337,13 @@ static const char SNAP_IND_MANIFEST[] =
 
 /* chart.snapshot 꼬리 고정 바이트: 섹션 구분자 3개(\"],\"ind|mem|pst\":[", 각 10자) +
  * 매니페스트 본문. 각 루프 가드는 항목 최악 크기에 이 고정 꼬리를 더한 만큼을 남긴다 —
- * 이론적 최악에도 매니페스트가 잘려 malformed JSON이 되지 않게 한다 */
+ * 항목이 추정 최악 크기 안에 드는 동안은 꼬리(구분자·매니페스트)가 온전히 쓰인다 */
 #define SNAP_TAIL_FIXED (30 + (int)sizeof(SNAP_IND_MANIFEST) - 1)
 
 /* snprintf는 잘리면 "썼어야 할 길이"를 돌려주므로 off가 buf 끝을 넘어설 수 있다.
- * 누적할 때마다 클램프해 뒤따르는 쓰기(섹션 구분자·매니페스트)가 buf 안에서 이어지게 한다 */
+ * 누적할 때마다 클램프해 뒤따르는 쓰기가 buf 범위 밖으로 나가지 않게 한다(메모리 안전).
+ * 잘린 항목 자체는 복구되지 않으므로 추정 최악을 넘는 항목이 나오면 페이로드는 여전히
+ * 잘린(malformed) JSON이 된다 — 내용 완전성이 아니라 쓰기 범위를 보호하는 장치다 */
 #define SNAP_CLAMP(buf, off)                                                  \
     do {                                                                      \
         if ((off) < 0 || (size_t)(off) >= sizeof(buf)) {                      \
@@ -672,7 +674,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             SNAP_CLAMP(buf, off);
             first = false;
         }
-        /* 매니페스트는 고정 길이 — 위 루프 가드들이 SNAP_TAIL_FIXED만큼 남겨 두어 잘리지 않는다 */
+        /* 매니페스트는 고정 길이 — 루프 가드들이 SNAP_TAIL_FIXED만큼 남겨 두므로,
+         * 각 항목이 추정 최악 크기 안에 든 경우에 한해 잘리지 않고 온전히 쓰인다 */
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],%s", SNAP_IND_MANIFEST);
         SNAP_CLAMP(buf, off);
         cmd->status = "applied";
@@ -715,10 +718,12 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         size_t count = ls_master_count(g_live_ctx.master);
         size_t n = ls_master_search(g_live_ctx.master, q, hits, (size_t)limit);
         int off = snprintf(buf, sizeof(buf), "{\"total\":%zu,\"returned\":%zu,\"items\":[", count, n);
+        SNAP_CLAMP(buf, off);
         for (size_t i = 0; i < n && off < (int)sizeof(buf) - 130; i++) {
             const ls_instrument_info_t *it = hits[i];
             off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s{\"shcode\":\"%s\",\"name\":\"%s\",\"fut\":%d}",
                             i > 0 ? "," : "", it->shcode, it->name, it->is_futures ? 1 : 0);
+            SNAP_CLAMP(buf, off);
         }
         snprintf(buf + off, sizeof(buf) - (size_t)off, "]}");
         cmd->status = "applied";
@@ -731,9 +736,11 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         int off = snprintf(payload, sizeof(payload), "{\"mode\":\"live\",\"running\":%d,\"shcode\":\"%s\",\"watches\":[",
                            (int)g_running,
                            g_live_ctx.engine != 0 ? g_live_ctx.engine->pipes[0]->shcode : "");
+        SNAP_CLAMP(payload, off);
         for (int i = 0; i < g_live_ctx.watch_count && off < (int)sizeof(payload) - 20; i++) {
             off += snprintf(payload + off, sizeof(payload) - (size_t)off, "%s\"%s\"",
                             i > 0 ? "," : "", g_live_ctx.watches[i].shcode);
+            SNAP_CLAMP(payload, off);
         }
         snprintf(payload + off, sizeof(payload) - (size_t)off, "]}");
     }

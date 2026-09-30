@@ -685,9 +685,13 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
                     break;
                 }
                 if (old.open_time_us == bar->open_time_us) {
-                    /* 해당 과거 슬롯만 정정한다 (구조는 바꾸지 않음) */
+                    /* 해당 과거 슬롯만 정정한다 (구조는 바꾸지 않음). 덮어쓰기 전에
+                     * mem_reset을 래치한다 — 최신 슬롯 덮어쓰기(위)와 같이, 세션 경계
+                     * 봉에 한 번 선 리셋 표시가 늦은 틱 정정으로 지워지지 않게 한다.
+                     * 그래야 이후 스냅샷의 mem 이벤트가 경계 봉을 놓치지 않는다 */
                     tr_bar_status_t *slot = (tr_bar_status_t *)tr_ring_get_mut(&p->status_ring, i);
                     if (slot != 0) {
+                        st.mem_reset = st.mem_reset || slot->mem_reset;
                         *slot = st;
                     }
                     break;

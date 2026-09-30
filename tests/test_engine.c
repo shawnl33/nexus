@@ -469,6 +469,7 @@ static void test_ind_format(void) {
         TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 2)) == 1234.5);   /* reg_line */
         TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 3)) == 0.75);     /* reg_r2 */
         TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 4)) == 1.0);      /* pred[0] */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 5)) == 2.0);      /* pred[1] */
         TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 6)) == 3.0);      /* pred[2] */
         TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 7)) == -42);      /* score */
         TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 8)) == 1);        /* ob_valid */
@@ -476,9 +477,13 @@ static void test_ind_format(void) {
         TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 10)) == 7.5);     /* resid */
         TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 11)) == 2.5);     /* pvol */
         TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 12)) == 1);       /* pred_dir[0] */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 13)) == 0);       /* pred_dir[1] */
         TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 14)) == -1);      /* pred_dir[2] */
         TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 15)) == 1);       /* mkt 유효 */
         TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 16)) == 100.0);   /* mkt 중심 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 17)) == 101.0);   /* mkt 상단1 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 18)) == 99.0);    /* mkt 하단1 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 19)) == 102.0);   /* mkt 상단2 */
         TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 20)) == 98.0);    /* mkt 하단2 */
         TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 21)) == 1);       /* final_valid */
         TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 22)) == -1);      /* final_dir */
@@ -498,7 +503,10 @@ static void test_ind_format(void) {
     n = tr_bar_status_format_ind(&st, 5.0, false, buf, sizeof(buf));
     TR_CHECK(n > 0 && buf[0] == ',');
 
-    /* 엔진 상태 링 → ind 매핑: 6봉(종가 101..106)에서 최신 봉의 SMA5=104가 [29]에 온다 */
+    /* 엔진 상태 링 → ind 매핑: 6봉(종가 101..106)에서 최신 봉의 SMA5=104가 [29]에 온다.
+     * 나머지 필드는 실제 지표 계산값이라 시나리오에 따라 달려 고정할 수 없으므로,
+     * 여기서는 개수(32)와 대표 위치([28]/[29])만 고정한다 — 32개 전체 값 고정은 위의
+     * 고정 픽스처 블록이 담당한다 */
     {
         tr_engine_t e;
         capture_t dummy;
@@ -558,6 +566,73 @@ static void test_mem_reset_ring(void) {
     /* 엔진 첫 봉(back=11)도 0→첫 세션 진입 리셋이다 (원본 회귀기억세션(-1) 초기값과 동일) */
     TR_CHECK(tr_engine_status_at(&e, 11, &st));
     TR_CHECK(st.mem_reset);
+}
+
+/* mem_reset 래치의 과거 슬롯 정정 분기 미러: 세션 경계 봉이 최신 슬롯에서 밀려난 뒤
+ * 같은 세션의 늦은 틱으로 정정되어도(재평가 시점에는 session_reset이 내려가 있음)
+ * 링 슬롯의 리셋 표시가 유지되어야 한다. 비경계 봉 정정에는 래치가 새 표시를 만들지
+ * 않는다 */
+static void test_mem_reset_correction_latch(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap);
+    static tr_bar_status_t ring[BB_CAP];
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+
+    /* 세션 0(1/2 화): 봉 0..7, 세션 1(1/3 수): 봉 0..3 — 경계 봉은 back=3 */
+    uint64_t id = 1;
+    feed_session_bars(&e, 0, 0, 7, &id);
+    feed_session_bars(&e, 1, 0, 3, &id);
+    TR_CHECK(tr_engine_status_count(&e) == 12);
+
+    tr_bar_status_t st;
+    TR_CHECK(tr_engine_status_at(&e, 3, &st));
+    TR_CHECK(st.mem_reset);
+
+    /* 늦은 틱: 세션 1 경계 봉(9:00)을 정정한다. 재평가의 session_reset은 이미 내려가
+     * 있으므로(세션 번호가 갱신됨) 래치가 없으면 이 덮어쓰기가 리셋 표시를 지운다 */
+    {
+        tr_event_envelope_t env;
+        memset(&env, 0, sizeof(env));
+        env.kind = TR_EVENT_TICK;
+        tr_civil_t c = {2024, 1, 3, 9, 0, 45};
+        tr_time_us_from_civil(&c, KST, &env.event_time_us);
+        env.received_time_us = env.event_time_us;
+        tr_tick_t tk;
+        memset(&tk, 0, sizeof(tk));
+        tk.instrument_id = e.cfg.instrument_id;
+        tk.price = 1050;
+        tk.qty = 10;
+        tk.source_exec_id = id++;
+        tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+        TR_CHECK(tr_engine_on_tick(&e, &env, &tk) == TR_BB_LATE_CORRECTED);
+    }
+
+    /* 링 구조는 그대로(12개), 경계 봉 슬롯의 리셋 표시는 유지된다 */
+    TR_CHECK(tr_engine_status_count(&e) == 12);
+    TR_CHECK(tr_engine_status_at(&e, 3, &st));
+    TR_CHECK(st.mem_reset);
+
+    /* 비경계 봉(세션 1 봉 1, back=2) 정정: 래치가 없던 표시를 새로 만들지 않는다 */
+    {
+        tr_event_envelope_t env;
+        memset(&env, 0, sizeof(env));
+        env.kind = TR_EVENT_TICK;
+        tr_civil_t c = {2024, 1, 3, 9, 1, 45};
+        tr_time_us_from_civil(&c, KST, &env.event_time_us);
+        env.received_time_us = env.event_time_us;
+        tr_tick_t tk;
+        memset(&tk, 0, sizeof(tk));
+        tk.instrument_id = e.cfg.instrument_id;
+        tk.price = 1051;
+        tk.qty = 10;
+        tk.source_exec_id = id++;
+        tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+        TR_CHECK(tr_engine_on_tick(&e, &env, &tk) == TR_BB_LATE_CORRECTED);
+    }
+    TR_CHECK(tr_engine_status_count(&e) == 12);
+    TR_CHECK(tr_engine_status_at(&e, 2, &st));
+    TR_CHECK(!st.mem_reset);
 }
 
 /* chart.snapshot mem[i] 이벤트 포맷 회귀: 17개 값과 끝의 reset 플래그
@@ -907,6 +982,7 @@ int main(void) {
     test_sma_late_correction();
     test_ind_format();
     test_mem_reset_ring();
+    test_mem_reset_correction_latch();
     test_mem_event_format();
     test_pipe_slot_reuse();
     test_two_pipes_independent();
