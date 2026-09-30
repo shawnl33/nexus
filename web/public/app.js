@@ -117,11 +117,14 @@ function chartOptions(pane) {
     },
     timeScale: {
       timeVisible: true, secondsVisible: true,
-      // 양쪽 가장자리 고정: 마지막/첫 봉 너머의 빈 공간으로 스크롤하지 못하게 한다.
-      // 없으면 사용자가 오른쪽 끝 너머로 드래그할 수 있는데(range.to가 데이터 밖으로
-      // 넘어감), 전파받은 다른 칸은 자기 꼬리에 클램프되어 같은 "끝"인데 화면이
-      // 어긋난다 (③ 광선은 캔버스에 오른쪽 끝까지 그리므로 이 옵션과 무관하게 보인다).
-      fixLeftEdge: true, fixRightEdge: true,
+      // fixLeftEdge/fixRightEdge는 끈다 (기본 false): 칸 간 엄밀 시각 정렬(pane-sync.js
+      // 헤더 참조)은 대상 칸 데이터 밖의 빈 영역까지 범위를 적용해야 하는데, 이 옵션이
+      // 켜져 있으면 프로그램적 setVisibleLogicalRange도 클램프된다 — 2026-09-30 라이브
+      // 실측: 602개 항목 시리즈에 {from:570,to:650}을 적용하면 읽기 값이
+      // {from:521,to:601}로 시프트된다. 클램프된 에코는 pane-sync의 expectEcho(적용
+      // 값과 정확히 같은 에코만 삼킴)와 어긋나 재전파 루프를 일으킨다. 끄면 데이터 밖
+      // 소수·음수 범위({from:570.5,to:650.25}, {from:-40.5,to:30.25})도 요청 값 그대로
+      // 왕복한다 (③ 광선은 캔버스에 오른쪽 끝까지 그리므로 이 옵션과 무관하게 보인다).
       tickMarkFormatter: (t, tickMarkType) => {
         const p = kstParts(t);
         if (tickMarkType <= 1) return `${p.y}-${pad2(p.mo)}`;
@@ -170,7 +173,8 @@ function createPane(heightFrac = 1) {
     // wsCount는 renderSymbolPanes(시딩)와 rebuildPaneCandles(정정)가 같은 withWhitespace
     // 결과로 갱신한다 (정합 고정).
     // 라이브 꼬리는 봉이 1개 붙을 때 barSeq와 시리즈가 함께 +1되므로 이 합계식이 그대로 맞는다.
-    // 시간축 전파에서 이 길이는 꼬리 판정(srcAtTail)에만 쓴다 — 창 변환은 getTimes 기준.
+    // 시간축 전파에서 이 길이는 데이터 없는 칸 스킵과 레거시 폴백(시각 미제공 칸)에만
+    // 쓴다 — 창 변환은 getTimes 기준 (pane-sync.js 헤더의 엄밀 시각 정렬 참조).
     getLength: () => {
       const c = feed.get(pane.symbol);
       return c ? c.barSeq.length + (c.wsCount ?? 0) : 0;
@@ -767,30 +771,12 @@ function recentFromRows(rows, i, n) {
 // 첫 화면이 과도하게 확대되어 보였다 — 명식 범위 지정으로 봉 간격을 이 폭에 맞춘다.
 const INITIAL_VISIBLE_BARS = 380;
 
-// 시각 목록 이진 탐색 — 정정 재구성 때 보이는 시계 창을 새 시리즈의 논리 인덱스로
-// 되돌리는 데 쓴다 (pane-sync.js 내부의 lowerBound/upperBound와 같은 판 — 비공개라 여기 둔다).
-function timeLowerBound(times, t) {
-  let lo = 0, hi = times.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (times[mid] < t) lo = mid + 1; else hi = mid;
-  }
-  return lo;
-}
-function timeUpperBound(times, t) {
-  let lo = 0, hi = times.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (times[mid] <= t) lo = mid + 1; else hi = mid;
-  }
-  return lo;
-}
-
 // 늦은 정정·구멍 채움(과거 시각 봉)의 칸 반영: lightweight-charts update()는 시리즈
 // 마지막보다 과거 시각에 throw하므로("Cannot update oldest data", 2026-09-30 실측),
 // 이 칸의 캔들 시리즈를 캐시에서 통째로 다시 깐다. 재구성으로 봉/whitespace 수가 바뀌어
 // 논리 인덱스가 어긋나므로, 보이는 창은 먼저 시각(getVisibleRange)으로 받아 두고 새
-// 시리즈에서 같은 시각을 이진 탐색해 복원한다 — 사용자가 보던 시계 창이 유지된다.
+// 시리즈에서 PaneSync.logicalAt으로 같은 시각의 인덱스를 구해 복원한다 — 정수 스냅이
+// 아니라 소수 인덱스 그대로라 사용자가 보던 시계 창이 정확히 유지된다.
 // pane-sync 기준값(wsCount/seriesTimes)도 setData에 넘긴 같은 rows에서 다시 세운다
 // (renderSymbolPanes와 같은 계약). 이벤트는 이 칸을 뮤트해 다른 칸으로 번지지 않게 한다 —
 // renderSymbolPanes와 달리 스크롤 애니메이션이 없어 프레임 뮤트(mutePaneRange)로 충분하다.
@@ -804,9 +790,10 @@ function rebuildPaneCandles(pane, cache) {
   cache.seriesTimes = rows.map((r) => r.time);
   if (range && rows.length) {
     const times = cache.seriesTimes;
-    const from = timeLowerBound(times, Number(range.from));
-    const to = Math.max(from, timeUpperBound(times, Number(range.to)) - 1);
-    pane.chart.timeScale().setVisibleLogicalRange({ from, to });
+    const from = PaneSync.logicalAt(times, Number(range.from));
+    const to = PaneSync.logicalAt(times, Number(range.to));
+    // 역전(from > to) 같은 비정상 케이스만 가드한다 — 그 외에는 이전 시계 창 그대로
+    if (from <= to) pane.chart.timeScale().setVisibleLogicalRange({ from, to });
   }
 }
 
@@ -825,13 +812,29 @@ function renderSymbolPanes(shcode) {
   // setData에 넘길 같은 rows에서 만든다. 이후 라이브 꼬리는 noteBar가 함께 민다.
   cache.seriesTimes = rows.map((r) => r.time);
   const ctx = ctxFor(cache);
+  const times = cache.seriesTimes;
   for (const pane of panes) {
     if (pane.symbol !== shcode) continue;
     // 시딩 적용(setData + 초기 범위 지정)은 프로그램적 변경 — 그 칸이 자기 최신 범위로
     // 돌아가며 내는 범위 이벤트가 다른 칸의 탐색 위치를 빼앗지 않게 뮤트한다
     mutePaneRangeForSeeding(pane);
     pane.candleSeries.setData(rows);
-    if (rows.length) {
+    // 초기 범위: 다른 칸이 이미 보이는 시계 창을 갖고 있으면 그 창을 이 시리즈에 엄밀
+    // 적용한다 (엄밀 시각 정렬 — 이 종목에 데이터가 없는 구간은 빈 영역으로 남는다).
+    // ref가 같은 종목 재시딩 중인 칸이어도 시각 값은 유효하므로 그대로 쓴다.
+    // 아직 아무 칸도 창을 갖지 않았으면(첫 칸) 최근 380봉을 기본으로 한다.
+    let refRange = null;
+    for (const q of panes) {
+      if (q === pane || !q.symbol) continue;
+      const r = q.chart.timeScale().getVisibleRange(); // 한 번만 읽어 변수에 담는다
+      if (r) { refRange = r; break; }
+    }
+    if (refRange && times.length) {
+      pane.chart.timeScale().setVisibleLogicalRange({
+        from: PaneSync.logicalAt(times, Number(refRange.from)),
+        to: PaneSync.logicalAt(times, Number(refRange.to)),
+      });
+    } else if (rows.length) {
       pane.chart.timeScale().setVisibleLogicalRange({
         from: Math.max(0, rows.length - INITIAL_VISIBLE_BARS),
         to: rows.length - 1,

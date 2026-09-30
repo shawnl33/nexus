@@ -1,13 +1,24 @@
 // 칸 간 동기화 — 시간축(보이는 범위)과 크로스헤어를 모든 칸에 맞춘다.
-// 시간축은 '시각 도메인' 기준이다: 종목마다 봉 수·구멍(whitespace) 수가 달라 같은 논리
-// 인덱스 창은 칸마다 다른 시각을 가리키므로, 발생 칸의 논리 범위를 시각 창으로 환산한 뒤
-// 대상 칸에서 그 시각 창을 덮는 봉 범위로 되돌린다 (propagateRange 주석 참조).
+// 시간축은 '시각 도메인' 기준의 엄밀 시각 정렬이다: 종목마다 봉 수·구멍(whitespace) 수가
+// 달라 같은 논리 인덱스 창은 칸마다 다른 시각을 가리키므로, 발생 칸의 논리 범위를 시각
+// 창으로 환산한 뒤(timeAt) 대상 칸에서 그 시각 창의 논리 범위로 정확히 되돌린다
+// (logicalAt — 소수·음수·데이터 초과 인덱스도 클램프 없이 그대로 적용한다).
 //
 // 시간축 전파 계약:
-// - 사용자 제스처(휠 줌·드래그 스크롤)로 바뀐 범위는 과거 탐색 중인 칸을 포함한
-//   모든 칸에 전파된다 (예외 없음).
+// - 모든 칸은 항상 같은 시계 창을 보여야 한다 (엄밀 시각 정렬, 2026-09-30 확정) —
+//   꼬리(최신) 창이든 과거 탐색 창이든 예외 없다. 대상 칸에 데이터가 없는 구간
+//   (마감 종목의 미래 등)은 빈 영역으로 둔다: 없는 데이터를 없는 대로 보이는 것은
+//   구멍 whitespace 표시와 같은 데이터 정직성 원칙이다. 라이브러리 제약으로 딱 하나
+//   예외가 있다: 창이 대상 칸 데이터와 전혀 겹치지 않으면(무겹침 0) lightweight-charts가
+//   폭을 유지한 채 데이터에 닿는 위치로 강제 시프트하므로, 그 칸은 같은 규칙의 가장
+//   가까운 가장자리 창으로 먼저 클램프해 적용한다 — 겹치는 시각대로 돌아오면 엄밀
+//   정렬이 즉시 재개된다 (propagateRange 주석의 2026-09-30 계측 참조).
+// - 이 계약은 fixLeftEdge/fixRightEdge를 끈 상태에서만 성립한다 (app.js chartOptions
+//   주석의 실측 참조 — 켜져 있으면 프로그램적 적용도 클램프되어 expectEcho가 어긋난다).
 // - 전파는 정확히 1회다: 대상 칸에 적용한 범위가 에코 이벤트로 돌아와도 다시 전파하지
-//   않는다 (expectEcho — 실측상 에코 값은 적용 값과 정확히 같고 rAF에서 비동기로 온다).
+//   않는다 (expectEcho — 에코는 rAF에서 비동기로 온다. 무겹침 0 창의 강제 시프트는
+//   선클램프가 막고(propagateRange 주석의 계측 참조), 남은 1ulp 수준 재구성 노이즈는
+//   절대차 1e-6의 허용오차 비교가 2차 방어로 삼킨다).
 // - 프로그램적 변경(시딩의 setData/scrollToRealTime, 라이브 꼬리 이동의
 //   candleSeries.update)은 전파하지 않는다 — 호출 측(app.js)이 그 칸을 mute한다.
 //   뮤트된 칸의 범위 이벤트는 그냥 버린다.
@@ -23,14 +34,54 @@
 "use strict";
 
 const PaneSync = (() => {
+  // 에코 판정 허용오차(논리 인덱스 단위) — propagateRange 주석의 실측(극단 범위 에코에
+  // 붙는 1ulp 부동소수점 노이즈) 참조. 사용자 제스처의 최소 변화보다 수십만 배 작다.
+  const ECHO_TOLERANCE = 1e-6;
+
+  // t 이상인 첫 인덱스 — 시각→인덱스 변환(logicalAt)의 이진 탐색
+  function lowerBound(times, t) {
+    let lo = 0, hi = times.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (times[mid] < t) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
+  // 시각(초)을 시리즈의 논리 인덱스로 환산한다 — timeAt의 정확한 역함수.
+  // 항목과 정확히 겹치는 시각은 그 정수 인덱스, 사이 시각은 양옆 항목의 선형 보간(소수),
+  // 범위 밖 시각은 양끝 간격으로 외삽한 음수·초과 인덱스를 돌려준다 (클램프 없음) —
+  // 엄밀 시각 정렬이 대상 칸 데이터 밖의 창도 빈 영역으로 보이게 하는 데 쓴다.
+  // 불변식: 모든 실수 idx에 대해 logicalAt(times, timeAt(times, idx)) === idx
+  // (부동소수점 오차 허용 — 단위 테스트로 검증한다).
+  function logicalAt(times, t) {
+    const n = times.length;
+    if (n === 0) return undefined; // 호출 측에서 가드한다
+    if (n < 2) return 0; // 항목이 하나뿐이면 인덱스는 0뿐이다
+    const last = n - 1;
+    if (t <= times[0]) {
+      if (t === times[0]) return 0;
+      const step = times[1] - times[0];
+      return step > 0 ? (t - times[0]) / step : 0; // 처음보다 왼쪽: 첫 간격으로 외삽 (음수)
+    }
+    if (t >= times[last]) {
+      if (t === times[last]) return last;
+      const step = times[last] - times[last - 1];
+      return step > 0 ? last + (t - times[last]) / step : last; // 끝보다 오른쪽 외삽
+    }
+    const i = lowerBound(times, t); // times[i] >= t인 첫 인덱스
+    if (times[i] === t) return i;
+    return (i - 1) + (t - times[i - 1]) / (times[i] - times[i - 1]); // 사이 시각은 선형 보간
+  }
+
   // getPrice(timeSec): 그 시각 봉의 대표 가격(종가 등). 없으면 undefined를 돌려야 한다.
   // 칸마다 종목이 다르므로 add의 칸별 getPrice가 우선하고, 없으면 create의 공유 값을 쓴다.
   function create(getPrice) {
     const members = new Set(); // { chart, candleSeries, getPrice?, getLength?, getTimes?, muteCount, expectEcho?, unsubs: [fn] }
     let syncing = false;       // 적용이 다시 이벤트를 일으키는 재진입(무한 루프) 방지
 
-    // 창 [from,to]를 대상 칸의 데이터 길이 안으로 클램프한다.
-    // 데이터와 전혀 겹치지 않으면 가장 가까운 가장자리 창으로 이동한다.
+    // 창 [from,to]를 대상 칸의 데이터 길이 안으로 클램프한다 — 레거시 경로(시각 정보
+    // 미제공 칸)의 폴백 전용. 데이터와 전혀 겹치지 않으면 가장 가까운 가장자리 창으로 이동한다.
     function clampRange(range, len) {
       const last = len - 1;
       if (range.from <= last && range.to >= 0) return range; // 데이터와 겹치면 그대로
@@ -38,24 +89,6 @@ const PaneSync = (() => {
       return range.from > last
         ? { from: last - width, to: last } // 끝보다 오른쪽 → 최신 창
         : { from: 0, to: width };          // 처음보다 왼쪽 → 첫 창
-    }
-
-    // t 이상인 첫 인덱스 / t 이하인 마지막 인덱스의 다음 — 시각→인덱스 변환의 이진 탐색
-    function lowerBound(times, t) {
-      let lo = 0, hi = times.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (times[mid] < t) lo = mid + 1; else hi = mid;
-      }
-      return lo;
-    }
-    function upperBound(times, t) {
-      let lo = 0, hi = times.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (times[mid] <= t) lo = mid + 1; else hi = mid;
-      }
-      return lo;
     }
 
     // 논리 인덱스(소수 가능)를 시각으로 환산한다. 정수는 그 항목의 시각, 소수는 양옆 항목
@@ -75,69 +108,63 @@ const PaneSync = (() => {
       return times[i] + (idx - i) * (times[i + 1] - times[i]); // 소수 인덱스는 선형 보간
     }
 
-    // 시각 창 [tFrom,tTo]를 대상 칸의 논리 범위로 옮긴다:
-    // fromIdx = tFrom 이상인 첫 항목, toIdx = tTo 이하인 마지막 항목 — 두 칸이 같은
-    // '시계 창'을 보게 된다 (대상 칸의 구멍(whitespace)도 항목으로 세므로 인덱스가 맞다).
-    // 창이 대상 데이터와 전혀 겹치지 않으면(전부 과거/미래 밖) 종전 규칙으로 되돌린다 —
-    // 발생 칸의 논리 범위를 대상 칸 길이에 클램프하는 가장 가까운 가장자리 창. 시각이 아예
-    // 안 닿는 칸까지 같은 창으로 끌어가는 것보다 '같은 폭의 가장 가까운 창'이 덜 놀랍다.
-    function timeWindowToLogical(times, tFrom, tTo, srcRange, len) {
-      const last = times.length - 1;
-      if (tTo < times[0] || tFrom > times[last]) return clampRange(srcRange, len); // 무겹침 폴백
-      let fromIdx = lowerBound(times, tFrom);
-      let toIdx = upperBound(times, tTo) - 1;
-      if (fromIdx > toIdx) {
-        // 창이 봉과 봉 사이(구멍)에 들어갔다 — 창 중심에 가까운 쪽 봉 하나라도 보여준다
-        fromIdx = toIdx = (times[fromIdx] - (tFrom + tTo) / 2 < (tFrom + tTo) / 2 - times[toIdx])
-          ? fromIdx : toIdx;
-      }
-      return { from: fromIdx, to: toIdx };
-    }
-
-    // 꼬리 정렬: 대상 칸을 자기 최신 창으로내되 폭은 '시각 폭'으로 — 발생 칸과 같은
-    // 시계 길이를 보게 한다. 시각 창 시작이 대상 데이터보다 앞이면(그만큼의 과거가 없으면)
-    // 시각으로는 못 덮으므로 종전 인덱스 폭 창으로 되돌린다.
-    function tailWindowByTime(times, widthSec, srcRange) {
-      const last = times.length - 1;
-      const fromT = times[last] - widthSec;
-      if (fromT < times[0]) return { from: last - (srcRange.to - srcRange.from), to: last };
-      return { from: lowerBound(times, fromT), to: last };
-    }
-
     // 시간축 동기화: 한 칸의 보이는 범위가 바뀌면 나머지 칸에 '같은 시계 창'으로 맞춘다.
     // 종목마다 봉 수와 구멍(whitespace) 수가 달라(선물 2400봉 vs 주식 500봉) 같은 논리
     // 인덱스를 억지로 맞추면 칸마다 다른 시각을 보게 된다 — 그래서 발생 칸의 논리 범위를
     // 먼저 시각 창으로 환산하고(getTimes, 소수 인덱스는 보간 — timeAt), 대상 칸에서는
-    // 그 시각 창을 덮는 항목 범위를 이진 탐색으로 찾아 적용한다 (timeWindowToLogical).
-    // - 발생 칸이 최신(오른쪽 가장자리)에 붙어 있으면(논리 판정, srcAtTail) 대상 칸은
-    //   같은 시각 폭의 자기 최신 창으로 보낸다 (tailWindowByTime — 최대 축소의 꼬리 정렬이면
-    //   모든 칸이 전체를 보게 된다).
-    // - 시각 창이 대상 칸 데이터와 전혀 겹치지 않으면 종전대로 논리 범위의 가장 가까운
-    //   가장자리 창으로 클램프한다 (clampRange — 시각이 안 닿는 칸을 끌어가지 않는다).
-    // - getTimes를 제공하지 않는 칸(테스트·구 호출자)은 종전 논리 규칙을 그대로 따른다.
-    // 적용은 대상 칸에서 에코 이벤트를 낳는다 (실측: rAF에서 비동기로, 값은 적용 값과
-    // 정확히 같다). 이 에코가 다시 전파되면 예를 들어 발생 칸의 깊은 과거 탐색이 대상 칸
-    // 데이터 밖이라 꼬리 창으로 클램프됐을 때, 그 꼬리 에코가 발생 칸을 꼬리로 끌어간다 —
-    // 그래서 expectEcho와 정확히 일치하는 이벤트는 전파하지 않고 삼킨다 (다른 값이면
-    // 사용자 제스처 등 실제 변경이므로 그대로 전파한다).
+    // 그 시각 창의 논리 인덱스를 logicalAt으로 정확히 구해 적용한다 (timeAt의 역함수 —
+    // 창이 대상 데이터 밖으로 일부 벗어나도 소수·음수·초과 인덱스 그대로 적용해 빈
+    // 영역으로 보인다. 전혀 겹치지 않는 창만 라이브러리 제약으로 가장 가까운 가장자리에
+    // 고정한다 — 아래 계측 참조).
+    // - 사용자 제스처(휠 줌·드래그)든 꼬리(최신) 창이든 예외 없이 같은 시계 창이다 —
+    //   발생 칸이 최신에 붙어 있어도 대상 칸을 자기 꼬리로 보내지 않는다. 마감 종목의
+    //   미래 구간처럼 대상 칸에 데이터가 없는 구간은 빈 영역으로 두는 게 의도된 표시다
+    //   (구멍 whitespace와 같은 데이터 정직성 원칙).
+    // - getTimes를 제공하지 않는 칸(테스트·구 호출자)은 레거시 논리 규칙을 그대로 따른다
+    //   (꼬리면 대상 칸의 인덱스 폭 최신 창, 아니면 데이터와 겹치게 클램프 — clampRange).
+    // 적용은 대상 칸에서 에코 이벤트를 낳는다 (실측: rAF에서 비동기로). 데이터에 조금이라도
+    // 겹치는 창(데이터 밖 초과 포함)은 적용 값이 정확히 그대로 돌아온다 (2026-09-30 실측:
+    // {from:570.5,to:650.25}, {from:-40.5,to:30.25} 정확 왕복). 그러나 데이터와 전혀
+    // 겹치지 않는 창(무겹침 0)은 라이브러리가 폭을 유지한 채 데이터에 닿는 위치로 강제
+    // 시프트한다 — 2026-09-30 라이브 계측(적용 값과 이벤트 값을 동시 기록): pane-sync가
+    // {from:-2745,to:-1325}를 적용했는데 발생한 이벤트는 {from:-1418.9999999999998,to:1}
+    // (폭 1420을 유지한 채 오른쪽으로 1326 시프트). 이 시프트된 에코는 expectEcho와 대폭
+    // 어긋나 실제 변경으로 오인되어 재전파·진동을 일으켰다 (같은 날 로그: 에코가 되돌아와
+    // 발생 칸이 {from:806,to:2000}으로 점프). 그래서 무겹침 0은 아래 엄밀 경로에서 우리가
+    // 먼저 같은 규칙(폭 유지, 가장 가까운 가장자리)으로 클램프해 적용한다 — 주 방어로,
+    // 라이브러리가 받아들이는 값과 expectEcho가 일치해 에코가 정상적으로 삼켜진다.
+    // 시프트 과정의 1ulp 수준 재구성 노이즈(위 계측의 …9999999999999998)에는 expectEcho의
+    // 허용오차 비교(from/to 각각 절대차 1e-6, 논리 인덱스)가 2차 방어다 — 실제 사용자
+    // 제스처(드래그 팬 ≥ ~0.5봉, 휠 줌 수 %)는 이보다 수십만 배 커 오삼킴 위험이 없다.
+    // (fixLeftEdge/fixRightEdge가 켜져 있으면 라이브러리가 프로그램적 적용도 클램프해
+    // 에코가 크게 어긋난다 — 602개 항목에 {from:570,to:650} 적용 → 읽기 {from:521,to:601},
+    // 2026-09-30 실측. 두 옵션은 꺼 둔다.)
     // 뮤트된 칸(mute)의 이벤트는 전파하지 않는다 — 시딩·라이브 꼬리 이동 같은 프로그램적
     // 변경이 다른 칸의 탐색 위치를 빼앗지 않게 호출 측에서 뮤트한다.
     function propagateRange(src, range) {
       if (!range) return; // 데이터 없는 차트는 null 범위를 보낼 수 있다
-      // 우리가 이 칸에 적용한 범위가 그대로 돌아온 에코는 삼킨다
-      if (src.expectEcho && range.from === src.expectEcho.from && range.to === src.expectEcho.to) {
+      // 우리가 이 칸에 적용한 범위가 돌아온 에코는 삼킨다 — 무겹침 0 창의 강제 시프트는
+      // 아래 선클램프가 막고, 남은 1ulp 수준 재구성 노이즈는 이 허용오차 비교가 막는다
+      // (2차 방어, 위 계측 참조). 불일치면 그 이벤트는 에코가 아니라 실제 변경이라는
+      // 뜻이므로(에코는 적용 직후 프레임에 오는 게 계약) 예약을 지우고 전파를 진행한다 —
+      // 남겨 두면 먼 미래의 우연한 근사 일치를 삼킬 수 있다.
+      if (src.expectEcho) {
+        const echo = Math.abs(range.from - src.expectEcho.from) <= ECHO_TOLERANCE
+                  && Math.abs(range.to - src.expectEcho.to) <= ECHO_TOLERANCE;
         src.expectEcho = null;
-        return;
+        if (echo) return;
       }
       if (syncing) return;
       if (src.muteCount > 0) return; // 프로그램적 변경(뮤트된 칸)은 전파하지 않는다
-      const srcLen = src.getLength?.();
-      const srcAtTail = Number.isFinite(srcLen) && srcLen > 0 && range.to >= srcLen - 1;
       // 발생 칸의 논리 범위를 시각 창으로 환산한다 — 시각이 칸 간 공통 기준이다
       const srcTimes = src.getTimes?.();
       const tWin = Array.isArray(srcTimes) && srcTimes.length > 0
         ? { from: timeAt(srcTimes, range.from), to: timeAt(srcTimes, range.to) }
         : null;
+      // srcAtTail은 레거시 경로(시각 정보 미제공 칸)의 폴백에서만 쓴다 — 엄밀 시각
+      // 정렬에는 꼬리 분기가 없다
+      const srcLen = src.getLength?.();
+      const srcAtTail = Number.isFinite(srcLen) && srcLen > 0 && range.to >= srcLen - 1;
       syncing = true;
       try {
         for (const m of members) {
@@ -152,11 +179,18 @@ const PaneSync = (() => {
           const mTimes = m.getTimes?.();
           let next;
           if (tWin && Array.isArray(mTimes) && mTimes.length > 0) {
-            next = srcAtTail
-              ? tailWindowByTime(mTimes, tWin.to - tWin.from, range) // 같은 시각 폭의 자기 최신 창
-              : timeWindowToLogical(mTimes, tWin.from, tWin.to, range, len); // 같은 시계 창
+            // 엄밀 시각 정렬: 발생 칸과 같은 시계 창을 대상 칸의 논리 인덱스로 정확히
+            // 옮긴다 — 데이터에 조금이라도 겹치는 창(오른쪽/왼쪽 초과 포함)은 raw 그대로
+            // 적용해 빈 영역으로 보인다 (마감 종목의 미래 구간 등, 의도된 표시)
+            const raw = { from: logicalAt(mTimes, tWin.from), to: logicalAt(mTimes, tWin.to) };
+            // 무겹침 0 창은 라이브러리가 폭 유지로 강제 시프트하므로(위 계측 로그 참조)
+            // 우리가 먼저 같은 규칙의 가장 가까운 가장자리 창으로 클램프한다 — 라이브러리가
+            // 받아들이는 값과 expectEcho가 일치해 에코가 삼켜지고 재전파가 없다. 사용자가
+            // 창을 데이터가 전혀 없는 시각대로 옮기면 그 칸은 자기 데이터의 가장 가까운
+            // 가장자리에 고정되고, 겹치는 시각대로 돌아오면 엄밀 정렬이 즉시 재개된다
+            next = (raw.to < 0 || raw.from > mTimes.length - 1) ? clampRange(raw, mTimes.length) : raw;
           } else {
-            // 시각 정보가 없는 쪽이 끼어 있으면 종전 논리 규칙으로 폴백한다 (호환)
+            // 레거시 경로: 시각 정보가 없는 쪽이 끼어 있으면 종전 논리 규칙으로 폴백한다 (호환)
             next = srcAtTail
               ? { from: len - 1 - (range.to - range.from), to: len - 1 } // 대상 칸의 최신 창
               : clampRange(range, len);
@@ -194,10 +228,11 @@ const PaneSync = (() => {
 
     // 칸 등록: 두 구독을 붙이고 해제 핸들을 돌려준다 (칸 삭제 시 remove에 넘긴다).
     // options.getPrice: 크로스헤어 가로선 값을 그 칸의 종목 캐시에서 찾는다.
-    // options.getLength: 그 칸의 시리즈 길이 — 꼬리 판정(srcAtTail)과 시각 정보 없는
-    //   칸의 폴백(클램프·인덱스 폭 최신 창)에 쓴다.
+    // options.getLength: 그 칸의 시리즈 길이 — 데이터 없는 칸(len<=0) 스킵과 레거시
+    //   경로(시각 정보 미제공 칸)의 폴백(꼬리 판정·클램프)에만 쓴다. 시각 경로에서는 안 쓴다.
     // options.getTimes: 그 칸 시리즈(봉+whitespace)의 항목별 시각(초) 오름차순 배열 —
-    //   시간축 전파를 시각 도메인으로 환산하는 기준. 없으면 종전 논리 규칙으로 동작한다.
+    //   시간축 전파를 시각 도메인으로 환산하는 기준 (엄밀 시각 정렬). 없으면 레거시
+    //   논리 규칙으로 동작한다.
     function add(chart, candleSeries, options) {
       const member = { chart, candleSeries,
                        getPrice: options?.getPrice, getLength: options?.getLength,
@@ -238,7 +273,7 @@ const PaneSync = (() => {
     return { add, remove, mute, unmute, get size() { return members.size; } };
   }
 
-  return { create };
+  return { create, logicalAt };
 })();
 
 if (typeof globalThis !== "undefined") {

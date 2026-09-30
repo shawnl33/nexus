@@ -164,6 +164,41 @@ test("시간축(에코): 에코와 다른 값이 먼저 오면 실제 변경으�
   assert.deepEqual(ms[0].calls.setRange, [{ from: 150, to: 250 }]);
 });
 
+test("시간축(에코): 에코에 1ulp 수준 노이즈가 붙어 돌아와도 삼킨다 (허용오차 비교)", () => {
+  const { ms } = setupWithLengths([2400, 499], false); // 실제 라이브러리처럼 에코는 수동으로 흘린다
+  fireRange(ms[0], { from: 1000, to: 1100 });
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 398, to: 498 }]);
+  // 라이브러리가 범위를 내부 상태(barSpacing·스크롤 오프셋)에서 재구성하며 붙는 1ulp 수준
+  // 노이즈를 흉내 낸다 — 2026-09-30 라이브 계측: 강제 시프트된 창의 이벤트 값이
+  // {-1418.9999999999998, 1}처럼 1ulp 어긋나 있었다 (무겹침-0 강제 시프트 자체는 위
+  // 선클램프가 막고, 이 허용오차는 그 잔여 노이즈에 대한 2차 방어다)
+  fireRange(ms[1], { from: 398 - 1e-13, to: 498 + 1e-13 }); // 허용오차(1e-6) 안의 에코
+  assert.deepEqual(ms[0].calls.setRange, []); // 재전파 없음 — 발생 칸은 자리를 지킨다
+});
+
+test("시간축(에코): 허용오차(1e-6)를 넘는 차이는 실제 변경으로 전파한다", () => {
+  const { ms } = setupWithLengths([499, 499], false);
+  fireRange(ms[0], { from: 100, to: 200 });
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 100, to: 200 }]);
+  // 에코({100,200}) 대신 1e-3 어긋난 이벤트 — 노이즈가 아니라 사용자 제스처다
+  fireRange(ms[1], { from: 100.001, to: 200 });
+  assert.deepEqual(ms[0].calls.setRange, [{ from: 100.001, to: 200 }]);
+});
+
+test("시간축(에코): 불일치 이벤트가 오면 에코 예약을 지운다 — 다음 이벤트는 정상 전파된다", () => {
+  const { ms } = setupWithLengths([499, 499], false);
+  fireRange(ms[0], { from: 100, to: 200 });
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 100, to: 200 }]);
+  // 에코 대신 다른 값(사용자 제스처)이 먼저 온다 — 예약({100,200})은 여기서 지워진다
+  // (에코는 적용 직후 프레임에 오는 게 계약이라, 다른 값이 왔다는 것은 그 에코가 아니라는 뜻)
+  fireRange(ms[1], { from: 150, to: 250 });
+  assert.deepEqual(ms[0].calls.setRange, [{ from: 150, to: 250 }]);
+  // 예약이 남아 있었다면 옛 적용 값과 같은 이 이벤트를 에코로 삼켰을 것이다 —
+  // 지워졌으므로 실제 변경으로 정상 전파된다
+  fireRange(ms[1], { from: 100, to: 200 });
+  assert.deepEqual(ms[0].calls.setRange, [{ from: 150, to: 250 }, { from: 100, to: 200 }]);
+});
+
 test("시간축(가드): 적용이 조정된 값으로 동기 재발생해도 무한 루프 없이 정착한다", () => {
   // 적용 호출이 조정된 범위(클램프 등)로 리스너를 동기 재발생시키는 목 —
   // 에코 값이 달라 억제가 못 삼키는 경우 syncing 가드가 루프를 막는다.
@@ -299,8 +334,10 @@ test("시간축: 데이터와 겹치는 중간 창은 같은 논리 범위를 �
   assert.deepEqual(ms[1].calls.setRange, [{ from: 300, to: 400 }]);
 });
 
-// 시각 도메인 동기화: 칸마다 getTimes(시리즈 항목별 시각, 초 오름차순)를 제공한다.
-// 봉 수·구멍(whitespace) 수가 종목마다 달라도 같은 '시계 창'으로 맞추는지 검증한다.
+// 시각 도메인 동기화 (엄밀 시각 정렬): 칸마다 getTimes(시리즈 항목별 시각, 초 오름차순)를
+// 제공한다. 봉 수·구멍(whitespace) 수가 종목마다 달라도 모든 칸이 항상 같은 '시계 창'을
+// 보는지, 대상 칸 데이터 밖 구간(부분 초과)이 빈 영역으로 남는지, 그리고 유일한 예외인
+// 무겹침-0 창(라이브러리 강제 시프트 제약)이 폭 유지 가장자리 창으로 선클램프되는지 검증한다.
 function setupWithTimes(specs, autofire = true) {
   const sync = PaneSync.create();
   const ms = specs.map(() => mockChart(autofire));
@@ -336,22 +373,23 @@ test("시간축(시각): 시작 시각·길이가 다른 칸끼리도 같은 '�
   assert.deepEqual(ms[0].calls.setRange, [{ from: 200, to: 299 }]);
 });
 
-test("시간축(시각): 소수 인덱스는 양옆 항목 시각으로 보간해 환산한다", () => {
+test("시간축(시각): 소수 인덱스 창은 대상 칸에 같은 시계 창의 소수 인덱스로 정확히 적용된다", () => {
   const aT = uniformTimes(1000, 500);
   const bT = uniformTimes(1000, 500);
   const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
   fireRange(ms[0], { from: 100.5, to: 200.5 }); // 시각 창 [7030, 13030]
-  // 첫 >= 7030은 7060(인덱스 101), 마지막 <= 13030은 13000(인덱스 200)
-  assert.deepEqual(ms[1].calls.setRange, [{ from: 101, to: 200 }]);
+  // 정수 스냅/클램프 없이 소수 인덱스 그대로 적용된다 (엄밀 시각 정렬)
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 100.5, to: 200.5 }]);
 });
 
-test("시간축(시각): 데이터 밖 인덱스는 양끝 간격으로 외삽해 시각으로 환산한다", () => {
+test("시간축(시각): 창의 왼쪽이 대상 칸 데이터보다 앞이면 클램프 없이 음수 인덱스로 그대로 적용된다", () => {
   const aT = uniformTimes(1000, 500);
   const bT = uniformTimes(1000, 300);
   const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
   fireRange(ms[0], { from: -5, to: 100 }); // 왼쪽 초과 — tFrom = 1000 - 5*60 = 700으로 외삽
-  // B는 700 이상의 첫 항목(인덱스 0)부터 7000(인덱스 100)까지
-  assert.deepEqual(ms[1].calls.setRange, [{ from: 0, to: 100 }]);
+  // B 시작(1000)보다 앞 구간은 B에 데이터가 없다 — 클램프하지 않고 음수 인덱스 그대로
+  // 적용해 왼쪽이 빈 영역으로 보인다 (엄밀 시각 정렬의 의도된 표시)
+  assert.deepEqual(ms[1].calls.setRange, [{ from: -5, to: 100 }]);
 });
 
 test("시간축(시각): 19분 구멍(비균등 간격)을 건너는 창도 같은 시각 폭으로 맞춘다", () => {
@@ -364,50 +402,66 @@ test("시간축(시각): 19분 구멍(비균등 간격)을 건너는 창도 같�
   assert.deepEqual(ms[1].calls.setRange, [{ from: 95, to: 124 }]);
 });
 
-test("시간축(시각): 창이 대상 칸의 봉 사이(구멍)에 들어가면 가장 가까운 봉 하나를 보여준다", () => {
+test("시간축(시각): 창이 대상 칸의 구멍(봉 사이)에 걸치면 보간된 소수 인덱스로 그대로 적용된다", () => {
   const aT = uniformTimes(1000, 500);
   const bT = [1000, 1060, 2080, 2140]; // 1060과 2080 사이 큰 구멍
   const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
   fireRange(ms[0], { from: 2, to: 15 }); // A 시각 창 [1120, 1900] — B의 구멍 안에 떨어진다
-  // 구멍 양옆 봉(1060, 2080) 중 창 중심(1510)에 가까운 1060(인덱스 1)으로 모은다
-  assert.deepEqual(ms[1].calls.setRange, [{ from: 1, to: 1 }]);
+  // 가장 가까운 봉으로 모으지 않는다 — 구멍 양옆 봉(1060, 2080) 사이로 선형 보간한
+  // 소수 인덱스 그대로 적용해 창이 구멍 위에 걸쳐 보인다 (엄밀 시각 정렬)
+  const from = 1 + (1120 - 1060) / (2080 - 1060);
+  const to = 1 + (1900 - 1060) / (2080 - 1060);
+  assert.deepEqual(ms[1].calls.setRange, [{ from, to }]);
 });
 
-test("시간축(시각 꼬리): 꼬리 정렬은 대상 칸을 같은 '시각 폭'의 자기 최신 창으로 보낸다", () => {
+test("시간축(시각): 꼬리(최신) 창도 예외 없이 같은 시계 창으로 맞춘다 (자기 꼬리 분기 없음)", () => {
   const aT = uniformTimes(1000, 500); // 끝 30940
   const bT = uniformTimes(8200, 380); // 끝 30940 (같은 말단, 120분 늦게 시작)
   const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
-  fireRange(ms[0], { from: 450, to: 499 }); // A 꼬리 — 시각 폭 2940초(49분)
-  // B는 인덱스 폭(49)이 아니라 시각 폭(49분)으로 자기 꼬리: [28000, 30940] → 330~379
+  fireRange(ms[0], { from: 450, to: 499 }); // A 꼬리 — 시각 창 [28000, 30940]
+  // 같은 시계 창이 B의 인덱스로 정확히 옮겨진다 — 이 조합은 말단이 같아 결과가
+  // B의 자기 꼬리(330~379)와 일치할 뿐, 꼬리라고 따로 분기하지 않는다
   assert.deepEqual(ms[1].calls.setRange, [{ from: 330, to: 379 }]);
   const applied = ms[1].calls.setRange[0];
   assert.equal(bT[applied.from], aT[450]); // 시작 시각도 같다
   assert.equal(bT[applied.to], aT[499]);
 });
 
-test("시간축(시각 꼬리): 시각 폭이 대상 칸 데이터보다 길면 종전 인덱스 폭 창으로 되돌린다", () => {
+test("시간축(시각): 창의 과거 쪽이 대상 칸 데이터보다 앞이면 부족분을 빈 영역으로 둔다", () => {
   const aT = uniformTimes(1000, 500);
   const bT = uniformTimes(8200, 380); // B의 과거는 380분뿐
   const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
-  fireRange(ms[0], { from: 0, to: 499 }); // A 전체(499분) 꼬리 정렬 — B의 과거를 넘는 시각 폭
-  assert.deepEqual(ms[1].calls.setRange, [{ from: 379 - 499, to: 379 }]); // 종전 인덱스 폭 규칙
+  fireRange(ms[0], { from: 0, to: 499 }); // A 전체 — 시각 창 [1000, 30940], B 시작(8200) 이전부터
+  // 종전 인덱스 폭 창으로 되돌리지 않는다 — (1000-8200)/60 = -120부터 그대로 적용해
+  // B의 왼쪽(데이터 없는 과거)이 빈 영역으로 보인다
+  assert.deepEqual(ms[1].calls.setRange, [{ from: -120, to: 379 }]);
 });
 
-test("시간축(시각): 시각 창이 대상 칸 데이터보다 앞이면 그 칸의 첫 창으로 클램프한다", () => {
+test("시간축(시각): 창이 대상 칸 데이터와 전혀 겹치지 않으면(전부 앞) 폭 유지 첫 창에 고정한다", () => {
   const aT = uniformTimes(1000, 500);
   const bT = uniformTimes(100000, 300); // B는 A보다 훨씬 뒤 시간대 — 시각이 전혀 겹치지 않는다
   const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
   fireRange(ms[0], { from: 400, to: 490 }); // A 시각 창 [25000, 30400] — B 시작(100000) 이전
-  // 무겹침 폴백: 종전 규칙대로 논리 범위를 B 길이에 클램프 (오른쪽 초과 → 같은 폭의 최신 창)
-  assert.deepEqual(ms[1].calls.setRange, [{ from: 299 - 90, to: 299 }]);
+  // 무겹침 0(raw {-1250,-1160})은 라이브러리가 폭을 유지한 채 데이터에 닿는 위치로 강제
+  // 시프트한다 (2026-09-30 계측) — 우리가 먼저 같은 규칙으로 클램프해 B는 자기 데이터의
+  // 첫 창(폭 90 유지)에 고정된다
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 0, to: 90 }]);
+  // expectEcho도 이 클램프 값이므로, 라이브러리가 돌려주는 에코가 정상적으로 삼켜진다
+  fireRange(ms[1], { from: 0, to: 90 }); // 적용 값과 같은 에코
+  assert.deepEqual(ms[0].calls.setRange, []); // 재전파 없음 — 발생 칸은 자리를 지킨다
 });
 
-test("시간축(시각): 시각 창이 대상 칸 데이터보다 뒤면 그 칸의 최신 창으로 클램프한다", () => {
+test("시간축(시각): 창이 대상 칸 데이터를 완전히 지나쳤으면(무겹침 0) 폭 유지 최신 창에 고정한다", () => {
   const aT = uniformTimes(1000, 500);
-  const bT = uniformTimes(1000, 200); // B는 12940에서 끝난다
+  const bT = uniformTimes(1000, 200); // B는 12940에서 끝난다 (마감 종목)
   const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
-  fireRange(ms[0], { from: 400, to: 490 }); // A 시각 창 [25000, 30400] — B 끝(12940) 이후 (꼬리 아님)
-  assert.deepEqual(ms[1].calls.setRange, [{ from: 109, to: 199 }]); // 같은 폭의 최신 창
+  fireRange(ms[0], { from: 400, to: 490 }); // A 시각 창 [25000, 30400] — B 끝(12940) 이후, 무겹침 0
+  // raw {400,490}은 B 데이터(last=199)를 완전히 지나침 — 라이브러리 강제 시프트 전에
+  // 우리가 먼저 폭 유지 최신 창으로 클램프한다
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 109, to: 199 }]);
+  // expectEcho가 클램프 값이라 에코는 삼켜지고 재전파되지 않는다
+  fireRange(ms[1], { from: 109, to: 199 }); // 적용 값과 같은 에코
+  assert.deepEqual(ms[0].calls.setRange, []);
 });
 
 test("시간축(호환): getTimes 없는 칸은 종전 논리 규칙(인덱스 클램프·꼬리 폭)을 따른다", () => {
@@ -423,6 +477,71 @@ test("시간축(호환): getTimes 없는 칸은 종전 논리 규칙(인덱스 �
   // 발생 칸에 시각 정보가 없어도 대상 칸은 논리 규칙으로 받는다
   fireRange(b, { from: 100, to: 200 });
   assert.deepEqual(a.calls.setRange, [{ from: 100, to: 200 }]);
+});
+
+// logicalAt: 시각(초) → 논리 인덱스 환산 (timeAt의 역함수, 모듈 공개 함수).
+test("logicalAt: 시각→인덱스 환산 (정수 겹침·보간·외삽·퇴화 입력)", () => {
+  const times = [1000, 1060, 2080, 2140];
+  // 항목과 정확히 겹치는 시각은 그 정수 인덱스
+  assert.equal(PaneSync.logicalAt(times, 1000), 0);
+  assert.equal(PaneSync.logicalAt(times, 1060), 1);
+  assert.equal(PaneSync.logicalAt(times, 2080), 2);
+  assert.equal(PaneSync.logicalAt(times, 2140), 3);
+  // 사이 시각은 양옆 항목의 선형 보간 (소수)
+  assert.equal(PaneSync.logicalAt(times, 1030), 0.5);
+  assert.equal(PaneSync.logicalAt(times, 1570), 1.5); // 1060~2080의 정중앙
+  // 범위 밖 시각은 양끝 간격으로 외삽 — 음수·초과 인덱스 (클램프 없음)
+  assert.equal(PaneSync.logicalAt(times, 940), -1); // (940-1000)/60
+  assert.equal(PaneSync.logicalAt(times, 2200), 4); // 3 + (2200-2140)/60
+  // 퇴화 입력: 빈 배열은 undefined(호출 측에서 가드), 항목 1개면 0
+  assert.equal(PaneSync.logicalAt([], 1000), undefined);
+  assert.equal(PaneSync.logicalAt([1000], 1000), 0);
+  assert.equal(PaneSync.logicalAt([1000], 5000), 0);
+  // 간격이 0 이하(중복 시각)인 퇴화 시리즈는 외삽하지 않고 끝 인덱스에 고정한다
+  assert.equal(PaneSync.logicalAt([1000, 1000], 500), 0);
+  assert.equal(PaneSync.logicalAt([1000, 1000], 5000), 1);
+});
+
+test("logicalAt↔timeAt 왕복: 정수·소수·음수·범위 밖 인덱스가 정확히 왕복한다", () => {
+  // 같은 시각 목록을 쓰는 두 칸 사이의 전파는 timeAt(발생 칸) → logicalAt(대상 칸)
+  // 왕복이라, 불변식(logicalAt(times, timeAt(times, idx)) === idx)이 성립하면
+  // 발생 범위가 대상 칸에 bit-exact로 그대로 적용된다
+  const times = uniformTimes(1000, 500);
+  const { ms } = setupWithTimes([{ times }, { times }], false);
+  const ranges = [
+    { from: 5, to: 40 },          // 정수
+    { from: 100.5, to: 200.5 },   // 소수
+    { from: -40.5, to: 30.25 },   // 음수 포함 (데이터 왼쪽 밖과 부분 무겹침)
+    { from: 450.5, to: 520.25 },  // 데이터 오른쪽 밖과 부분 무겹침 (무겹침 0은 선클램프 대상이라 제외)
+  ];
+  for (const range of ranges) {
+    ms[1].calls.setRange.length = 0;
+    fireRange(ms[0], range);
+    assert.deepEqual(ms[1].calls.setRange, [range]); // 왕복 후에도 요청 값 그대로
+  }
+});
+
+test("시간축(시각): 봉 밀도가 다른 칸에도 같은 시계 창이 소수 인덱스로 정확히 적용된다", () => {
+  const aT = uniformTimes(1000, 500); // 60초 간격
+  const bT = Array.from({ length: 1000 }, (_, i) => 1000 + i * 30); // 30초 간격 (2배 밀도)
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 100.5, to: 200.25 }); // A 시각 창 [7030, 13015]
+  // A의 인덱스를 그대로 베끼는 게 아니라 B의 30초 간격 기준으로 정확히 환산된다:
+  // (7030-1000)/30 = 201, (13015-1000)/30 = 400.5
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 201, to: 400.5 }]);
+});
+
+test("시간축(시각): 라이브 칸의 최신 창은 마감 칸에 데이터 밖 빈 영역 포함 그대로 적용된다", () => {
+  // 실제 시나리오: 한 종목은 마감(마지막 봉 19:59), 다른 종목은 라이브(21:04) —
+  // 두 칸의 오른쪽 끝 시각이 항상 같아야 하고 마감 칸의 오른쪽은 비어 있어야 한다
+  const aT = uniformTimes(1000, 500); // 라이브 — 끝 30940
+  const bT = uniformTimes(1000, 480); // 마감 — 끝 29740 (창의 오른쪽 일부만 데이터 밖)
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 450.5, to: 499 }); // A의 최신 창 (소수 포함) — 시각 창 [28030, 30940]
+  // 부분 무겹침(28030 ≤ 29740)이므로 무겹침-0 선클램프 대상이 아니다 — 데이터 밖 초과분도
+  // 클램프 없이 그대로 적용해 마감 칸의 오른쪽이 빈 영역으로 보인다:
+  // (28030-1000)/60 = 450.5, 479 + (30940-29740)/60 = 499
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 450.5, to: 499 }]);
 });
 
 test("칸 삭제: remove 후에는 구독이 해제되어 더 이상 전파되지 않는다", () => {
