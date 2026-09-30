@@ -945,6 +945,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         if (need_catchup) {
             need_catchup = false;
             rt_catchup_missing_bars(&g_live_ctx, (tr_time_us_t)time(0) * TR_US_PER_SEC);
+            /* 캐치업은 블로킹이라 수백 초 걸릴 수 있다 — 경과 시간이 다음 이벤트의
+             * 공백으로 재감지되어 재트리거되는 루프를 막는다 */
+            last_rt_event_us = (int64_t)time(0) * TR_US_PER_SEC;
         }
         tr_ipc_poll(ipc, 0, 4, live_command_handler, 0);
         if (tr_ls_rt_state(rt) == LS_RT_FAILED) {
