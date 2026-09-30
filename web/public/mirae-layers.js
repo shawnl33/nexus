@@ -170,11 +170,12 @@ const MiraeLayers = (() => {
   // 잇지 않으므로 진행 중 세트는 경계 시각에서 끊긴다. 리셋 봉에 새 세트가 함께 저장된
   // 경우(valid=1)는 이 이벤트가 새 세트의 시작이다 — 라이브의 mem[0]=0 처리와 같은 결과.
   // 구형 엔진의 16원소 이벤트는 reset 없음(0 간주, 기존 동작 유지).
+  // 와이어의 reset 슬롯(e[16]) 자체는 읽지 않는다: 엔진은 리셋 봉에 항상 이벤트를 싣고
+  // 재저장 여부는 valid가 담당하므로(위 규칙), 끊기 판정은 valid만으로 문서대로 동작한다.
   function buildMemItems(dedup, events) {
     const sorted = events
       .map((e) => ({ time: Number(e[0]) / 1e6, valid: e[1] === 1, dir: e[2], price: e[3],
-                      t: e.slice(4, 7), u: e.slice(7, 10), l: e.slice(10, 13),
-                      reset: e[16] === 1 }))
+                      t: e.slice(4, 7), u: e.slice(7, 10), l: e.slice(10, 13) }))
       .filter((e) => Number.isFinite(e.time))
       .sort((a, b) => a.time - b.time);
     const items = [];

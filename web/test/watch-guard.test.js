@@ -40,3 +40,64 @@ test("staleWatchLeaks: 선택이 다른 종목으로 넘어갔으면 이전 종�
   const panes = [{ symbol: "005930", selTarget: "068270" }];
   assert.equal(WatchGuard.staleWatchLeaks("A016C000", panes), true);
 });
+
+test("staleWatchLeaks: 채택 실패로 selTarget이 지워지면 보류됐던 watch는 해지한다", () => {
+  // 같은 종목을 두 칸이 동시에 선택 → 한 칸의 stale 완료는 다른 칸의 selTarget 때문에
+  // 해지를 보류했다. 그 선택이 실패해 selTarget이 지워진 직후 상태에서는 해지 대상이다
+  const panes = [
+    { symbol: "005930", selTarget: "" },
+    { symbol: "", selTarget: "" }, // 000660 선택 실패 직후
+  ];
+  assert.equal(WatchGuard.staleWatchLeaks("000660", panes), true);
+});
+
+test("staleWatchLeaks: 실패한 선택 외에 아직 진행 중인 이어받기가 있으면 해지하지 않는다", () => {
+  const panes = [
+    { symbol: "005930", selTarget: "" },
+    { symbol: "", selTarget: "000660" }, // 이 칸의 선택은 아직 진행 중
+  ];
+  assert.equal(WatchGuard.staleWatchLeaks("000660", panes), false);
+});
+
+test("staleWatchLeaks: 실패 후에도 이미 그 종목을 보는 칸이 있으면 해지하지 않는다", () => {
+  const panes = [
+    { symbol: "000660", selTarget: "" },
+    { symbol: "", selTarget: "" },
+  ];
+  assert.equal(WatchGuard.staleWatchLeaks("000660", panes), false);
+});
+
+test("createOpQueue: 같은 종목의 요청은 enqueue 순서대로 실행된다", async () => {
+  const q = WatchGuard.createOpQueue();
+  const order = [];
+  const run = (ms, tag) => () =>
+    new Promise((r) => setTimeout(() => { order.push(tag); r(tag); }, ms));
+  // 앞 요청이 더 오래 걸려도 뒤 요청은 앞 요청이 끝난 뒤에 시작한다
+  const p1 = q.enqueue("005930", run(30, "unwatch"));
+  const p2 = q.enqueue("005930", run(0, "watch"));
+  const [r1, r2] = await Promise.all([p1, p2]);
+  assert.deepEqual(order, ["unwatch", "watch"]);
+  assert.equal(r1, "unwatch"); // enqueue는 op의 반환값을 그대로 돌려준다
+  assert.equal(r2, "watch");
+});
+
+test("createOpQueue: 다른 종목의 요청은 서로 기다리지 않는다", async () => {
+  const q = WatchGuard.createOpQueue();
+  const order = [];
+  const run = (ms, tag) => () =>
+    new Promise((r) => setTimeout(() => { order.push(tag); r(); }, ms));
+  const p1 = q.enqueue("005930", run(30, "A"));
+  const p2 = q.enqueue("000660", run(0, "B"));
+  await Promise.all([p1, p2]);
+  assert.deepEqual(order, ["B", "A"]); // 늦게 enqueue됐어도 빨리 끝나면 먼저 완료
+});
+
+test("createOpQueue: 앞 요청이 실패해도 뒤 요청은 실행된다", async () => {
+  const q = WatchGuard.createOpQueue();
+  const p1 = q.enqueue("005930", () => Promise.reject(new Error("boom")));
+  const ran = [];
+  const p2 = q.enqueue("005930", () => { ran.push("next"); });
+  await assert.rejects(p1, /boom/);
+  await p2;
+  assert.deepEqual(ran, ["next"]);
+});

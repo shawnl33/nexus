@@ -180,25 +180,32 @@ function removePane(pane, { release = true } = {}) {
 
 // 더 이상 어느 칸도 보지 않는 종목을 정리한다: 엔진 watch를 해지하고 로컬 캐시를 지운다.
 // (화면 구독 자원 정리 — 전략 거래 대상과는 무관하다, 계획서 §18)
+// 해지 요청은 종목별 큐에 넣어 이 종목의 watch와 순서를 맞춘다: 독립 fetch의 엔진 도착
+// 순서는 보장되지 않아, 먼저 낸 unwatch가 뒤에 낸 watch보다 늦게 도착하면 막 채택한
+// 종목을 끊는다 (칸 삭제·stale 폐기 경로 모두 같은 클래스). 큐에서 기다리는 동안 이
+// 종목을 채택하는 선택이 붙었으면(symbol/selTarget) 해지를 건너뛴다.
 async function releaseSymbol(shcode) {
   if (!shcode || panes.some((p) => p.symbol === shcode)) return;
   seedInflight.delete(shcode); // 진행 중 시딩은 고아 캐시를 채우고 렌더 없이 끝난다
   feed.drop(shcode);
-  const token = await apiToken();
-  if (!token) return;
-  try {
-    const res = await fetch("/api/symbols/unwatch", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-trader-token": token },
-      body: JSON.stringify({ shcode }),
-    });
-    if (res.ok) {
-      engineWatches = engineWatches.filter((s) => s !== shcode);
-    } else if (res.status === 403) {
-      resetToken();
-    }
-    // 그 외 거부(마지막 watch 해지 불가 등)는 화면 동작에 영향이 없으므로 조용히 넘긴다
-  } catch { /* 엔진 미응답이면 엔진 재시작 시 관측 목록이 초기화되며 정리된다 */ }
+  await symbolOpQueue.enqueue(shcode, async () => {
+    if (panes.some((p) => p.symbol === shcode || p.selTarget === shcode)) return;
+    const token = await apiToken();
+    if (!token) return;
+    try {
+      const res = await fetch("/api/symbols/unwatch", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trader-token": token },
+        body: JSON.stringify({ shcode }),
+      });
+      if (res.ok) {
+        engineWatches = engineWatches.filter((s) => s !== shcode);
+      } else if (res.status === 403) {
+        resetToken();
+      }
+      // 그 외 거부(마지막 watch 해지 불가 등)는 화면 동작에 영향이 없으므로 조용히 넘긴다
+    } catch { /* 엔진 미응답이면 엔진 재시작 시 관측 목록이 초기화되며 정리된다 */ }
+  });
 }
 
 // 인접 칸 경계의 리사이즈바를 현재 칸 목록에 맞춰 다시 단다
@@ -330,32 +337,39 @@ function onPaneSymbolInput(pane) {
   }, 200);
 }
 
-// watch 요청 공통부 (선택·화면틀 복원·스트림 리셋 재구독이 함께 쓴다)
-async function watchSymbol(shcode) {
-  const token = await apiToken();
-  if (!token) return { ok: false, error: "no_token" };
-  let res;
-  try {
-    res = await fetch("/api/symbols/watch", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-trader-token": token },
-      body: JSON.stringify({ shcode }),
-    });
-  } catch {
-    return { ok: false, error: "network" };
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    if (res.status === 403) resetToken();
-    return { ok: false, error: data.error_code ?? data.error ?? res.status };
-  }
-  return { ok: true, name: data.payload?.name ?? "", generation: data.payload?.generation };
+// watch 요청 공통부 (선택·화면틀 복원·스트림 리셋 재구독이 함께 쓴다).
+// 종목별 큐(WatchGuard.createOpQueue)로 직렬화한다: 같은 종목의 unwatch가
+// 뒤에 시작된 watch보다 엔진에 늦게 도착하는 경주를 막는다 (releaseSymbol 참조).
+const symbolOpQueue = WatchGuard.createOpQueue();
+function watchSymbol(shcode) {
+  return symbolOpQueue.enqueue(shcode, async () => {
+    const token = await apiToken();
+    if (!token) return { ok: false, error: "no_token" };
+    let res;
+    try {
+      res = await fetch("/api/symbols/watch", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trader-token": token },
+        body: JSON.stringify({ shcode }),
+      });
+    } catch {
+      return { ok: false, error: "network" };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 403) resetToken();
+      return { ok: false, error: data.error_code ?? data.error ?? res.status };
+    }
+    return { ok: true, name: data.payload?.name ?? "", generation: data.payload?.generation };
+  });
 }
 
 // 칸에 종목을 설정한다: watch → 캐시에 반영 → 시딩(완료 시 그 종목의 모든 칸을 다시 그림).
 // 실패하면 칸은 기존 종목과 화면을 그대로 유지한다 (입력창만 현재 종목으로 되돌린다).
 // selSeq는 빠른 연속 선택 시 늦은 완료를 폐기한다. 폐기되는 선택은 엔진이 이미 그 종목을
-// watch했을 수 있으므로, 아무도 이어받지 않은 watch이면 해지한다 (누수 방지).
+// watch했을 수 있으므로, 아무도 이어받지 않은 watch이면 해지한다 (누수 방지). 선택 실패
+// 시에도 같은 판정으로 정리한다 — 다른 선택의 stale 완료가 이 선택의 selTarget을 보고
+// 해지를 보류했던 watch가 실패와 함께 주인을 잃는 경우가 있다.
 async function selectPaneSymbol(pane, shcode, name) {
   shcode = String(shcode ?? "").trim();
   hidePaneResults(pane);
@@ -375,6 +389,9 @@ async function selectPaneSymbol(pane, shcode, name) {
   if (!w.ok) {
     pane.selTarget = "";
     syncPaneSymbolUi(pane);
+    // 채택 실패로 이 종목에 주인이 남지 않았으면 남은 watch를 해지한다
+    // (stale 폐기 경로와 같은 판정 — 인계받은 watch가 있으면 건드리지 않는다)
+    if (WatchGuard.staleWatchLeaks(shcode, panes)) releaseSymbol(shcode);
     return alert(`종목 관측 실패 (${shcode}): ${w.error}`);
   }
   const prev = pane.symbol;
