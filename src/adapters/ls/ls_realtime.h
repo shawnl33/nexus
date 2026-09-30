@@ -86,4 +86,13 @@ uint64_t tr_ls_rt_reconnect_count(tr_ls_rt_t *rt);
 bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id,
                             int64_t recv_time_us, ls_rt_event_t *out);
 
+/* 이 시간(ms) 이상 유지된 세션만 건강한 세션으로 본다. */
+#define LS_RT_HEALTHY_MS 10000
+
+/* 재접속 대기 시간 결정 (테스트 가능하도록 분리, 순수 함수).
+ * survived_ms: 수립된 세션의 유지 시간(ms), 수립 없이 실패했으면 -1.
+ * 건강한 세션(>= LS_RT_HEALTHY_MS)이면 min_ms로 리셋하고(빠른 복구),
+ * 아니면 current_retry_ms를 유지한다 — 호출자가 지수 백오프로 증가시킨다. */
+int ls_rt_next_retry_ms(int64_t survived_ms, int current_retry_ms, int min_ms, int max_ms);
+
 #endif

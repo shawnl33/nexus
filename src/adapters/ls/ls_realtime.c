@@ -36,6 +36,7 @@ struct tr_ls_rt {
     uint64_t reconnects;
     int64_t next_retry_us;
     int retry_ms;
+    int64_t established_at_us; /* 세션 수립 시각(µs). 0이면 미수립 */
     char rx_buf[LS_RT_RX_BUF];
     size_t rx_len;
     bool sub_sent;
@@ -205,6 +206,19 @@ static void queue_push(tr_ls_rt_t *rt, const ls_rt_event_t *ev) {
 
 /* ---------- lws 콜백 ---------- */
 
+int ls_rt_next_retry_ms(int64_t survived_ms, int current_retry_ms, int min_ms, int max_ms) {
+    if (survived_ms >= LS_RT_HEALTHY_MS) {
+        return min_ms; /* 건강한 세션 이후 단절: 빠른 복구를 위해 리셋 */
+    }
+    if (current_retry_ms < min_ms) {
+        return min_ms;
+    }
+    if (current_retry_ms > max_ms) {
+        return max_ms;
+    }
+    return current_retry_ms;
+}
+
 /* tr_key 비교: 통합 채널은 서버가 공백 패딩을 붙이므로 후행 공백을 무시한다 */
 static bool key_equal(const char *a, const char *b) {
     size_t la = strlen(a), lb = strlen(b);
@@ -261,7 +275,10 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
     switch (reason) {
     case LWS_CALLBACK_CLIENT_ESTABLISHED:
         rt->state = LS_RT_READY;
-        rt->retry_ms = rt->cfg.reconnect_min_ms;
+        /* 백오프는 여기서 리셋하지 않는다 — 수립 직후 단절(수십 ms)이 반복되면
+         * 리셋이 지수 백오프를 무력화한다. 리셋은 CLOSED/CONNECTION_ERROR에서
+         * 세션 유지 시간을 보고 결정한다 (ls_rt_next_retry_ms). */
+        rt->established_at_us = now_us(rt);
         /* 재연결: 모든 구독을 미전송으로 되돌리고 다시 본낸다 */
         for (int i = 0; i < rt->n_subs; i++) {
             rt->subs[i].sent = false;
@@ -323,6 +340,17 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
         if (rt->state != LS_RT_FAILED) {
             rt->state = LS_RT_RECONNECTING;
             rt->reconnects++;
+            int64_t survived_ms = -1; /* 수립 없이 실패 */
+            if (rt->established_at_us > 0) {
+                survived_ms = (now_us(rt) - rt->established_at_us) / 1000;
+                rt->established_at_us = 0;
+            }
+            if (survived_ms >= 0 && survived_ms < LS_RT_HEALTHY_MS) {
+                fprintf(stderr, "ls-rt: 짧은 세션 (%lldms 유지 후 단절) — 백오프 유지 %dms\n",
+                        (long long)survived_ms, rt->retry_ms);
+            }
+            rt->retry_ms = ls_rt_next_retry_ms(survived_ms, rt->retry_ms,
+                                               rt->cfg.reconnect_min_ms, rt->cfg.reconnect_max_ms);
             rt->next_retry_us = now_us(rt) + (int64_t)rt->retry_ms * 1000;
             if (rt->retry_ms < rt->cfg.reconnect_max_ms) {
                 rt->retry_ms *= 2;

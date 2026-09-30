@@ -122,6 +122,47 @@ static void test_parse_rejects(void) {
     TR_CHECK(!tr_ls_rt_parse_message(unknown, strlen(unknown), 1, 0, &ev));
 }
 
+static void test_retry_backoff(void) {
+    const int min_ms = 1000, max_ms = 15000;
+    /* 콜백(ls_realtime.c CLOSED/CONNECTION_ERROR)의 저장값 갱신과 동일한 규칙 */
+    const int expect[] = {1000, 2000, 4000, 8000, 15000, 15000};
+
+    /* 첫 실패(수립 전): min에서 시작 */
+    TR_CHECK(ls_rt_next_retry_ms(-1, min_ms, min_ms, max_ms) == min_ms);
+
+    /* 수립 없이 실패 반복(-1): cap까지 doubling */
+    int retry = min_ms;
+    for (int i = 0; i < 6; i++) {
+        int delay = ls_rt_next_retry_ms(-1, retry, min_ms, max_ms);
+        TR_CHECK(delay == expect[i]);
+        retry = delay;
+        if (retry < max_ms) {
+            retry *= 2;
+        }
+    }
+
+    /* 즉시 단절(수립 30ms 후 CLOSED) 반복: 리셋 없이 cap까지 doubling */
+    retry = min_ms;
+    for (int i = 0; i < 6; i++) {
+        int delay = ls_rt_next_retry_ms(30, retry, min_ms, max_ms);
+        TR_CHECK(delay == expect[i]);
+        retry = delay;
+        if (retry < max_ms) {
+            retry *= 2;
+        }
+    }
+
+    /* 건강 기준 미만(9999ms) 세션: 리셋 안 함 */
+    TR_CHECK(ls_rt_next_retry_ms(9999, 8000, min_ms, max_ms) == 8000);
+
+    /* 건강한 세션(>=10s) 이후 단절: min으로 리셋 (빠른 복구) */
+    TR_CHECK(ls_rt_next_retry_ms(10000, 15000, min_ms, max_ms) == min_ms);
+    TR_CHECK(ls_rt_next_retry_ms(60000, 8000, min_ms, max_ms) == min_ms);
+
+    /* cap 초과 저장값은 cap으로 클램프 */
+    TR_CHECK(ls_rt_next_retry_ms(-1, 30000, min_ms, max_ms) == max_ms);
+}
+
 int main(void) {
     test_parse_s3_tick();
     test_parse_fut_tick();
@@ -131,5 +172,6 @@ int main(void) {
     test_parse_uh1_orderbook();
     test_parse_dh0_night_fut_orderbook();
     test_parse_rejects();
+    test_retry_backoff();
     TR_TEST_SUMMARY();
 }
