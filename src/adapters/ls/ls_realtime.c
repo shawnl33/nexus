@@ -345,12 +345,13 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
                 survived_ms = (now_us(rt) - rt->established_at_us) / 1000;
                 rt->established_at_us = 0;
             }
+            int next_ms = ls_rt_next_retry_ms(survived_ms, rt->retry_ms,
+                                              rt->cfg.reconnect_min_ms, rt->cfg.reconnect_max_ms);
             if (survived_ms >= 0 && survived_ms < LS_RT_HEALTHY_MS) {
                 fprintf(stderr, "ls-rt: 짧은 세션 (%lldms 유지 후 단절) — 백오프 유지 %dms\n",
-                        (long long)survived_ms, rt->retry_ms);
+                        (long long)survived_ms, next_ms);
             }
-            rt->retry_ms = ls_rt_next_retry_ms(survived_ms, rt->retry_ms,
-                                               rt->cfg.reconnect_min_ms, rt->cfg.reconnect_max_ms);
+            rt->retry_ms = next_ms;
             rt->next_retry_us = now_us(rt) + (int64_t)rt->retry_ms * 1000;
             if (rt->retry_ms < rt->cfg.reconnect_max_ms) {
                 rt->retry_ms *= 2;
