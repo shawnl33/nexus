@@ -382,8 +382,10 @@ async function selectPaneSymbol(pane, shcode, name) {
   const w = await watchSymbol(shcode);
   if (seq !== pane.selSeq) {
     // 그 사이 다른 선택이 시작됐다. 늦게 붙은 watch는 어느 칸도 안 보고 다른 진행 중
-    // 선택도 노리지 않으면 그대로 새어 나간다 — 해지한다 (인계된 watch는 건드리지 않는다)
-    if (w.ok && WatchGuard.staleWatchLeaks(shcode, panes)) releaseSymbol(shcode);
+    // 선택도 노리지 않으면 그대로 새어 나간다 — 해지한다 (인계된 watch는 건드리지 않는다).
+    // w.ok가 false여도 엔진엔 적용되고 응답만 유실됐을 수 있으므로 같은 판정으로 정리한다
+    // (관측 중이 아닌 종목의 unwatch는 엔진이 거절해 무해하다)
+    if (WatchGuard.staleWatchLeaks(shcode, panes)) releaseSymbol(shcode);
     return;
   }
   if (!w.ok) {
