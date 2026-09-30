@@ -19,6 +19,8 @@ const Feed = (() => {
       seedToken: 0,      // 리셋 때마다 증가 — 진행 중 시딩의 늦은 응답 폐기에 쓴다
       gaps: [],          // 시딩 스냅샷의 구멍 구간 ([startSec, endSec]) — 시리즈 whitespace로 펼친다
       wsCount: 0,        // 시딩이 만든 whitespace 포인트 수 — pane-sync getLength가 봉 수에 더해 쓴다
+      seriesTimes: [],   // 차트 시리즈(봉+whitespace) 항목별 시각(초) 오름차순 — pane-sync getTimes의
+                         // 시각 변환 기준. renderSymbolPanes가 시딩 때 통째로 세우고 noteBar가 라이브를 민다
       ctx: null,         // 렌더러 컨텍스트 (app.js가 지연 생성해 붙인다)
     };
   }
@@ -53,6 +55,7 @@ const Feed = (() => {
       cache.tickRaw = 5;
       cache.gaps = [];   // ctx가 잡는 참조가 아니라 새 배열로 바꿔도 된다
       cache.wsCount = 0;
+      cache.seriesTimes.length = 0; // renderSymbolPanes가 시딩 끝에 다시 세운다
       cache.seedToken++;
     }
 
@@ -62,6 +65,22 @@ const Feed = (() => {
     function noteBar(cache, t, bar) {
       cache.bars.set(t, bar);
       if (cache.barPos.has(t)) return false;
+      // seriesTimes에도 같은 시각을 넣는다 — whitespace가 섞여 있으면 barSeq 인덱스와
+      // 어긋나므로(구멍 수만큼 왼쪽으로 당겨진다) 같은 인덱스가 아니라 별도 이진 탐색으로
+      // 오름차순 위치를 찾는다. 구멍(whitespace) 자리를 늦은 봉이 채우면 그 시각은 이미
+      // 있다 — 차트도 update가 그 자리를 캔들로 교체할 뿐 길이가 늘지 않으므로 중복 삽입
+      // 없이 wsCount만 내린다 (getLength = barSeq + wsCount 정합 유지).
+      const st = cache.seriesTimes;
+      let sLo = 0, sHi = st.length;
+      while (sLo < sHi) {
+        const sMid = (sLo + sHi) >> 1;
+        if (st[sMid] < t) sLo = sMid + 1; else sHi = sMid;
+      }
+      if (st[sLo] === t) {
+        if (cache.wsCount > 0) cache.wsCount--;
+      } else {
+        st.splice(sLo, 0, t);
+      }
       const seq = cache.barSeq;
       if (seq.length === 0 || t > seq[seq.length - 1]) {
         cache.barPos.set(t, seq.length);

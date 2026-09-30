@@ -299,6 +299,132 @@ test("시간축: 데이터와 겹치는 중간 창은 같은 논리 범위를 �
   assert.deepEqual(ms[1].calls.setRange, [{ from: 300, to: 400 }]);
 });
 
+// 시각 도메인 동기화: 칸마다 getTimes(시리즈 항목별 시각, 초 오름차순)를 제공한다.
+// 봉 수·구멍(whitespace) 수가 종목마다 달라도 같은 '시계 창'으로 맞추는지 검증한다.
+function setupWithTimes(specs, autofire = true) {
+  const sync = PaneSync.create();
+  const ms = specs.map(() => mockChart(autofire));
+  const handles = ms.map((m, i) => sync.add(m.chart, { id: `s${i}` }, {
+    getLength: () => specs[i].times.length,
+    getTimes: () => specs[i].times,
+  }));
+  return { sync, ms, handles };
+}
+
+// 60초 균등 시리즈 시각 목록
+function uniformTimes(start, n) {
+  return Array.from({ length: n }, (_, i) => start + i * 60);
+}
+
+test("시간축(시각): 시작 시각·길이가 다른 칸끼리도 같은 '시계 창'으로 맞춘다", () => {
+  // A: 1000초부터 500봉, B: 120분 늦게 시작하는 380봉 — 논리 인덱스 기준이면 어긋나는 조합
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(1000 + 120 * 60, 380);
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 200, to: 299 }); // A의 시각 창 [13000, 18940]
+  // B는 같은 인덱스 200~299(자기 시각으로는 엉뚱한 창)가 아니라 같은 시각 창의 80~179로 간다
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 80, to: 179 }]);
+  // 적용된 논리 범위가 가리키는 시각이 발생 칸과 정확히 같다
+  const applied = ms[1].calls.setRange[0];
+  assert.equal(bT[applied.from], aT[200]);
+  assert.equal(bT[applied.to], aT[299]);
+
+  // 실제 라이브러리라면 적용 값이 에코로 돌아와 삼켜진다 — 그 뒤 사용자가 되돌리면 전파한다
+  fireRange(ms[1], { from: 80, to: 179 }); // 적용 값과 정확히 일치 → 에코, 삼킨다
+  assert.deepEqual(ms[0].calls.setRange, []);
+  fireRange(ms[1], { from: 80, to: 179 }); // 같은 값의 사용자 제스처 — 반대 방향도 시각 왕복
+  assert.deepEqual(ms[0].calls.setRange, [{ from: 200, to: 299 }]);
+});
+
+test("시간축(시각): 소수 인덱스는 양옆 항목 시각으로 보간해 환산한다", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(1000, 500);
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 100.5, to: 200.5 }); // 시각 창 [7030, 13030]
+  // 첫 >= 7030은 7060(인덱스 101), 마지막 <= 13030은 13000(인덱스 200)
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 101, to: 200 }]);
+});
+
+test("시간축(시각): 데이터 밖 인덱스는 양끝 간격으로 외삽해 시각으로 환산한다", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(1000, 300);
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: -5, to: 100 }); // 왼쪽 초과 — tFrom = 1000 - 5*60 = 700으로 외삽
+  // B는 700 이상의 첫 항목(인덱스 0)부터 7000(인덱스 100)까지
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 0, to: 100 }]);
+});
+
+test("시간축(시각): 19분 구멍(비균등 간격)을 건너는 창도 같은 시각 폭으로 맞춘다", () => {
+  // A: 인덱스 99와 100 사이에 19분 구멍 — whitespace 없이 시각만 건너뜀 (라이브 꼬리 형태)
+  const aT = [...uniformTimes(1000, 100), ...uniformTimes(1000 + 119 * 60, 100)];
+  const bT = uniformTimes(1000, 300); // B는 구멍 없이 매분 있다
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 95, to: 105 }); // A 시각 창 [6700, 8440] — 11봉이 29분을 덮는다
+  // B는 같은 시각 창을 덮는 95~124(30봉) — 봉 수는 달라도 시계 창은 같다
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 95, to: 124 }]);
+});
+
+test("시간축(시각): 창이 대상 칸의 봉 사이(구멍)에 들어가면 가장 가까운 봉 하나를 보여준다", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = [1000, 1060, 2080, 2140]; // 1060과 2080 사이 큰 구멍
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 2, to: 15 }); // A 시각 창 [1120, 1900] — B의 구멍 안에 떨어진다
+  // 구멍 양옆 봉(1060, 2080) 중 창 중심(1510)에 가까운 1060(인덱스 1)으로 모은다
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 1, to: 1 }]);
+});
+
+test("시간축(시각 꼬리): 꼬리 정렬은 대상 칸을 같은 '시각 폭'의 자기 최신 창으로 보낸다", () => {
+  const aT = uniformTimes(1000, 500); // 끝 30940
+  const bT = uniformTimes(8200, 380); // 끝 30940 (같은 말단, 120분 늦게 시작)
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 450, to: 499 }); // A 꼬리 — 시각 폭 2940초(49분)
+  // B는 인덱스 폭(49)이 아니라 시각 폭(49분)으로 자기 꼬리: [28000, 30940] → 330~379
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 330, to: 379 }]);
+  const applied = ms[1].calls.setRange[0];
+  assert.equal(bT[applied.from], aT[450]); // 시작 시각도 같다
+  assert.equal(bT[applied.to], aT[499]);
+});
+
+test("시간축(시각 꼬리): 시각 폭이 대상 칸 데이터보다 길면 종전 인덱스 폭 창으로 되돌린다", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(8200, 380); // B의 과거는 380분뿐
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 0, to: 499 }); // A 전체(499분) 꼬리 정렬 — B의 과거를 넘는 시각 폭
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 379 - 499, to: 379 }]); // 종전 인덱스 폭 규칙
+});
+
+test("시간축(시각): 시각 창이 대상 칸 데이터보다 앞이면 그 칸의 첫 창으로 클램프한다", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(100000, 300); // B는 A보다 훨씬 뒤 시간대 — 시각이 전혀 겹치지 않는다
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 400, to: 490 }); // A 시각 창 [25000, 30400] — B 시작(100000) 이전
+  // 무겹침 폴백: 종전 규칙대로 논리 범위를 B 길이에 클램프 (오른쪽 초과 → 같은 폭의 최신 창)
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 299 - 90, to: 299 }]);
+});
+
+test("시간축(시각): 시각 창이 대상 칸 데이터보다 뒤면 그 칸의 최신 창으로 클램프한다", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(1000, 200); // B는 12940에서 끝난다
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT }], false);
+  fireRange(ms[0], { from: 400, to: 490 }); // A 시각 창 [25000, 30400] — B 끝(12940) 이후 (꼬리 아님)
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 109, to: 199 }]); // 같은 폭의 최신 창
+});
+
+test("시간축(호환): getTimes 없는 칸은 종전 논리 규칙(인덱스 클램프·꼬리 폭)을 따른다", () => {
+  const sync = PaneSync.create();
+  const a = mockChart(false), b = mockChart(false);
+  const aT = uniformTimes(1000, 500);
+  sync.add(a.chart, { id: "sa" }, { getLength: () => 500, getTimes: () => aT });
+  sync.add(b.chart, { id: "sb" }, { getLength: () => 499 }); // 시각 정보 없음
+  fireRange(a, { from: 200, to: 299 }); // 중간 창 — 종전대로 같은 인덱스 클램프
+  assert.deepEqual(b.calls.setRange, [{ from: 200, to: 299 }]);
+  fireRange(a, { from: 450, to: 499 }); // 꼬리 — 종전대로 인덱스 폭의 최신 창
+  assert.deepEqual(b.calls.setRange[1], { from: 498 - 49, to: 498 });
+  // 발생 칸에 시각 정보가 없어도 대상 칸은 논리 규칙으로 받는다
+  fireRange(b, { from: 100, to: 200 });
+  assert.deepEqual(a.calls.setRange, [{ from: 100, to: 200 }]);
+});
+
 test("칸 삭제: remove 후에는 구독이 해제되어 더 이상 전파되지 않는다", () => {
   const { sync, ms, handles } = setup(2);
   sync.remove(handles[1]);

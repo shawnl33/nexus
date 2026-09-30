@@ -161,7 +161,7 @@ function createPane(heightFrac = 1) {
     wickUpColor: "#ef5350", wickDownColor: "#2962ff",
   });
   pane.syncHandle = paneSync.add(pane.chart, pane.candleSeries, {
-    // 크로스헤어 가로선 값과 시간축 전파의 클램프/최신 창 계산은 이 칸 자기 종목의 캐시 기준이다.
+    // 크로스헤어 가로선 값과 시간축 전파의 꼬리 판정·변환은 이 칸 자기 종목의 캐시 기준이다.
     // getPrice는 캐시의 봉 맵만 본다 — whitespace(구멍) 시각에는 항목이 없어 undefined가 나오고,
     // pane-sync는 그 칸에 가로선을 그리지 않는다 (구멍 위 크로스헤어는 세로선만).
     getPrice: (t) => paneCache(pane)?.bars.get(t)?.close,
@@ -169,10 +169,15 @@ function createPane(heightFrac = 1) {
     // whitespace를 포함한 시리즈 기준이라 봉 수만 재면 구멍 수만큼 어긋난다.
     // wsCount는 renderSymbolPanes가 시딩 적용 때 같은 withWhitespace 결과로 갱신한다 (정합 고정).
     // 라이브 꼬리는 봉이 1개 붙을 때 barSeq와 시리즈가 함께 +1되므로 이 합계식이 그대로 맞는다.
+    // 시간축 전파에서 이 길이는 꼬리 판정(srcAtTail)에만 쓴다 — 창 변환은 getTimes 기준.
     getLength: () => {
       const c = feed.get(pane.symbol);
       return c ? c.barSeq.length + (c.wsCount ?? 0) : 0;
     },
+    // 시리즈(봉 + whitespace)의 항목별 시각(초) 오름차순 — pane-sync가 발생 칸의 논리 범위를
+    // 시각 창으로 환산하고 대상 칸에서 같은 시계 창의 인덱스를 찾는 기준이다. 종목마다 봉 수·
+    // 구멍 수가 달라 논리 인덱스로 맞추면 칸마다 다른 시각을 보게 되므로 시각이 공통 기준이다.
+    getTimes: () => feed.get(pane.symbol)?.seriesTimes,
   });
   buildPanePicker(pane); // 종목 입력은 칸 도구줄 맨 앞에 1회 만든다 (칩 재구성과 무관)
   const chips = document.createElement("span");
@@ -741,6 +746,9 @@ function renderSymbolPanes(shcode) {
   const rows = Gaps.withWhitespace(bars, cache.gaps ?? []);
   // pane-sync getLength의 시리즈 길이(봉 + whitespace)와 같은 기준 — 반드시 여기서 갱신한다
   cache.wsCount = rows.length - bars.length;
+  // pane-sync getTimes의 시각 기준 — 시리즈(봉 + whitespace)의 인덱스와 1:1로 맞닿아야 하므로
+  // setData에 넘길 같은 rows에서 만든다. 이후 라이브 꼬리는 noteBar가 함께 민다.
+  cache.seriesTimes = rows.map((r) => r.time);
   const ctx = ctxFor(cache);
   for (const pane of panes) {
     if (pane.symbol !== shcode) continue;

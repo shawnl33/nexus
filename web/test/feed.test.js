@@ -52,6 +52,30 @@ test("noteBar: 새 봉 추가 여부를 돌려준다 (범위 이벤트는 새 �
   assert.equal(feed.noteBar(c, 1030, { time: 1030 }), false); // 역행 봉의 재갱신은 갱신
 });
 
+test("noteBar: seriesTimes도 봉과 함께 시각 오름차순을 유지한다 (시간축 동기화의 시각 기준)", () => {
+  const feed = Feed.create();
+  const c = feed.forSymbol("005930");
+  feed.noteBar(c, 1000, { time: 1000 }); // 꼬리 추가
+  feed.noteBar(c, 1060, { time: 1060 }); // 꼬리 추가
+  feed.noteBar(c, 1030, { time: 1030 }); // 역행 이진 삽입
+  assert.deepEqual(c.seriesTimes, [1000, 1030, 1060]);
+
+  // 시딩이 만든 whitespace(구멍) 포인트가 섞인 상태 흉내 — 봉 인덱스와 어긋난다
+  c.seriesTimes.push(1090, 1120);
+  c.wsCount = 2;
+  feed.noteBar(c, 1080, { time: 1080 }); // 구멍 사이로 들어가는 늦은 봉 — 오름차순 위치를 찾는다
+  assert.deepEqual(c.seriesTimes, [1000, 1030, 1060, 1080, 1090, 1120]);
+  assert.equal(c.wsCount, 2); // 새 시각 추가는 wsCount를 건드리지 않는다
+
+  // 구멍 자리를 늦은 봉이 채우면: 차트도 그 자리를 캔들로 교체할 뿐 길이가 그대로이므로
+  // 시각을 중복 삽입하지 않고 whitespace 카운트만 내린다 (getLength 정합)
+  feed.noteBar(c, 1090, { time: 1090 });
+  assert.deepEqual(c.seriesTimes, [1000, 1030, 1060, 1080, 1090, 1120]);
+  assert.deepEqual(c.barSeq, [1000, 1030, 1060, 1080, 1090]);
+  assert.equal(c.wsCount, 1);
+  assert.equal(c.barSeq.length + c.wsCount, c.seriesTimes.length); // 시리즈 길이 정합
+});
+
 test("recentBars: pos까지 최근 n개를 오름차순으로 돌려준다", () => {
   const feed = Feed.create();
   const c = feed.forSymbol("s");
@@ -69,7 +93,7 @@ test("reset: 맵 참조를 유지한 채 비우고 seedToken을 올린다", () =
   c.tickRaw = 100;
   c.gaps = [[1060, 1120]]; // 시딩 구멍 구간
   c.wsCount = 2;
-  const barsRef = c.bars, seqRef = c.barSeq; // 렌더러 ctx가 잡는 참조
+  const barsRef = c.bars, seqRef = c.barSeq, stRef = c.seriesTimes; // 렌더러 ctx가 잡는 참조
   const tok = c.seedToken;
 
   feed.reset(c);
@@ -79,8 +103,10 @@ test("reset: 맵 참조를 유지한 채 비우고 seedToken을 올린다", () =
   assert.equal(c.tickRaw, 5);
   assert.deepEqual(c.gaps, []); // 구멍·whitespace 카운트도 리셋된다
   assert.equal(c.wsCount, 0);
+  assert.equal(c.seriesTimes.length, 0); // 시각 목록도 리셋 — 시딩 끝 renderSymbolPanes가 다시 세운다
   assert.equal(c.bars, barsRef); // 참조 유지 — 기존 ctx가 끊기지 않는다
   assert.equal(c.barSeq, seqRef);
+  assert.equal(c.seriesTimes, stRef);
   assert.equal(c.seedToken, tok + 1); // 늦은 시딩 응답 폐기 트리거
 });
 
