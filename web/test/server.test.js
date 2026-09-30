@@ -66,6 +66,10 @@ before(async () => {
           errorCode = "watch_limit";
           payload = { shcode: reqData.shcode };
         } else {
+          if (reqData.shcode === "SLOW01") {
+            // 백필이 붙은 실제 watch처럼 4초 뒤에 응답한다 (주식 백필 ≈ 3~5초 실측)
+            await new Promise((r) => setTimeout(r, 4000));
+          }
           payload = { shcode: reqData.shcode, name: "테스트종목", generation: 1, backfilled: 1 };
         }
       } else if (type === "market.unwatch") {
@@ -223,6 +227,24 @@ test("POST /api/symbols/watch proxies market.watch with token", async () => {
   assert.equal(rejected.error_code, "watch_limit");
 });
 
+test("POST /api/symbols/watch waits for a slow engine (backfill)", async (t) => {
+  // 엔진은 market.watch 처리 안에서 백필을 동기로 끝내고 나서야 응답한다
+  // (주식 ≈3~5초, 선물 ~10초 실측). 3초 타임아웃이면 502로 실패한다.
+  const started = Date.now();
+  const res = await fetch(`${base}/api/symbols/watch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ shcode: "SLOW01" }),
+    signal: AbortSignal.timeout(20000),
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.status, "applied");
+  assert.equal(data.payload.shcode, "SLOW01");
+  assert.ok(elapsed >= 3900, `stub delay should elapse (got ${elapsed}ms)`);
+});
+
 test("POST /api/symbols/unwatch proxies market.unwatch with token", async () => {
   // 토큰 없으면 403
   let res = await fetch(`${base}/api/symbols/unwatch`, {
@@ -260,6 +282,7 @@ test("engine down: watch/unwatch map connection_error to 502", async (t) => {
       ...process.env,
       ENGINE_CMD_ENDPOINT: "tcp://127.0.0.1:59876",
       ENGINE_PUB_ENDPOINT: "tcp://127.0.0.1:59877",
+      ENGINE_CMD_TIMEOUT_MS: "1000", // 죽은 엔진 시나리오는 짧은 타임아웃으로 빠르게 끝낸다
       DASHBOARD_PORT: String(port),
     },
     stdio: "ignore",

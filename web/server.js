@@ -24,6 +24,13 @@ const PUB_ENDPOINT = process.env.ENGINE_PUB_ENDPOINT ?? "tcp://127.0.0.1:5556";
 const PORT = Number(process.env.DASHBOARD_PORT ?? 8080);
 const HOST = "127.0.0.1";
 
+// 엔진 명령 응답 대기 상한. market.watch/select는 백필을 동기로 끝내고 나서야 응답한다
+// (주식 ≈3~5초, 선물 ~10초 실측 2026-09-30) — 3초면 정상 관측도 502로 오인된다.
+// LS API가 간헐적으로 응답을 멈추는 경우(2026-09-30 실측, 요청당 10초 엔진 타임아웃)까지
+// 흡수하려면 페이지 실패 1회 + 일봉 + 야간 단계를 합한 최악 ~40초보다 커야 한다.
+// 단일 스레드 엔진이라 백필 중 다른 명령도 뒤에 줄서므로 모든 명령에 같은 여유를 둔다.
+const CMD_TIMEOUT_MS = Number(process.env.ENGINE_CMD_TIMEOUT_MS) || 60000;
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -46,7 +53,7 @@ const AUTH_TOKEN = loadToken();
 // ---- 엔진 명령 채널 (ROUTER/DEALER) ----
 let reqSeq = 1;
 async function engineCommand(commandId, type, payloadJson) {
-  const dealer = new zmq.Dealer({ sendTimeout: 1000, receiveTimeout: 3000 });
+  const dealer = new zmq.Dealer({ sendTimeout: 1000, receiveTimeout: CMD_TIMEOUT_MS });
   try {
     dealer.connect(CMD_ENDPOINT);
     const payload =
