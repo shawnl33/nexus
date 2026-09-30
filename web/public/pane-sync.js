@@ -10,7 +10,7 @@ const PaneSync = (() => {
   // getPrice(timeSec): 그 시각 봉의 대표 가격(종가 등). 없으면 undefined를 돌려야 한다.
   // 칸마다 종목이 다르므로 add의 칸별 getPrice가 우선하고, 없으면 create의 공유 값을 쓴다.
   function create(getPrice) {
-    const members = new Set(); // { chart, candleSeries, getPrice?, getLength?, unsubs: [fn] }
+    const members = new Set(); // { chart, candleSeries, getPrice?, getLength?, lastRange?, unsubs: [fn] }
     let syncing = false;       // 적용이 다시 이벤트를 일으키는 재진입(무한 루프) 방지
 
     // 창 [from,to]를 대상 칸의 데이터 길이 안으로 클램프한다.
@@ -24,14 +24,26 @@ const PaneSync = (() => {
         : { from: 0, to: width };          // 처음보다 왼쪽 → 첫 창
     }
 
+    // 칸이 최신(오른쪽 가장자리)을 따라가는 중인가: 마지막으로 본 범위의 오른쪽 끝이
+    // 자기 데이터 꼬리 이상이면 따라가는 상태다. 범위를 한 번도 못 본 칸은 따라가는
+    // 상태로 본다 (라이브 시작 직후 등).
+    function atTail(m, len) {
+      return m.lastRange == null || m.lastRange.to >= len - 1;
+    }
+
     // 시간축 동기화: 한 칸의 보이는 범위가 바뀌면 나머지 칸에 맞춘다.
     // 종목마다 데이터 길이가 다르므로(선물 2400봉 vs 주식 500봉) 같은 논리 인덱스를
     // 억지로 맞추면 대상 칸이 자기 데이터 밖이나 엉뚱한 과거 구간으로 끌린다:
     // - 발생 칸이 최신(오른쪽 가장자리)에 붙어 있으면 대상 칸은 자기 최신 창으로 보낸다
-    //   (라이브 꼬리 따라가기·시딩 직후 초기화가 이 경우다).
+    //   (라이브 꼬리 따라가기·시딩 직후 초기화가 이 경우다). 단, 과거를 탐색 중인 칸
+    //   (사용자가 꼬리에서 뗀 칸, atTail 참조)은 끌어오지 않는다 — 한 칸의 시딩이나
+    //   라이브 갱신이 다른 칸의 탐색 위치를 빼앗지 않게.
     // - 그 외(중간 구간 탐색)는 같은 논리 범위를 대상 칸의 데이터 범위로 클램프해 적용한다.
     function propagateRange(src, range) {
-      if (syncing || !range) return; // 데이터 없는 차트는 null 범위를 보낼 수 있다
+      if (!range) return; // 데이터 없는 차트는 null 범위를 보낼 수 있다
+      // 마지막으로 본 범위를 기록한다 (사용자 탐색·라이브 꼬리 이동·우리가 적용한 범위 모두)
+      src.lastRange = range;
+      if (syncing) return;
       const srcLen = src.getLength?.();
       const srcAtTail = Number.isFinite(srcLen) && srcLen > 0 && range.to >= srcLen - 1;
       syncing = true;
@@ -44,10 +56,12 @@ const PaneSync = (() => {
             continue;
           }
           if (len <= 0) continue; // 데이터 없는 칸에는 적용하지 않는다
+          if (srcAtTail && !atTail(m, len)) continue; // 과거 탐색 중인 칸은 끌어오지 않는다
           const next = srcAtTail
             ? { from: len - 1 - (range.to - range.from), to: len - 1 } // 대상 칸의 최신 창
             : clampRange(range, len);
           m.chart.timeScale().setVisibleLogicalRange(next);
+          m.lastRange = next; // 라이브러리가 이벤트를 다시 보내지 않는 경우도 기록해 둔다
         }
       } finally {
         syncing = false;

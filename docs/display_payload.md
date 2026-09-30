@@ -169,5 +169,12 @@
 전체 대체로 유지한다: 모든 워치를 해지하고 요청 종목 하나만 watch한다.
 응답 형식은 `market.watch`와 같다.
 
+대시보드 참고: 다중 칸 프론트(app.js)는 이 명령을 쓰지 않고 칸별 `market.watch`/
+`market.unwatch`로 관측을 관리한다 (`/api/symbols/watch|unwatch` 프록시). 서버의
+`/api/symbols/select`는 구 프론트·CLI(`traderctl market select`) 호환용으로 남은
+경로다. 이 경로로 select하면 칸 상태와 무관하게 엔진 관측 목록이 요청 종목 하나로
+교체되어, 다른 종목을 보는 칸은 갱신이 멈추고 마지막 데이터에 고정된다 (프론트의
+`engineWatches`도 다음 `/api/status` 갱신까지 실제 엔진 상태와 어긋난다).
+
 해지된 채널의 지연 메시지는 `instrument_id` 라우팅에서 조용히 드롭된다
 (파이프라인 없음 = 폐기).

@@ -42,10 +42,12 @@ function sameSession(src, cur) {
 
 // ---- 패널 매니저 ----
 // Pane: { id, el, toolsEl, pickerEl, chipsEl, chart, candleSeries, heightFrac, syncHandle,
-//         symbol, symName, selSeq, searchSeq, searchTimer,
+//         symbol, symName, selSeq, selTarget, searchSeq, searchTimer,
 //         symInput, symNameEl, symResults,
 //         active: Map<indId, { renderer, handle, layers: {layerId: bool} }> }
 // symbol이 ""이면 미선택: 빈 차트에 종목 입력만 보인다 (지표 칩 없음).
+// selTarget은 진행 중인 선택의 목표 종목 — 늦은 선택 완료를 폐기할 때 그 종목의
+// watch를 해지해도 되는지(WatchGuard.staleWatchLeaks) 판정에 쓴다.
 
 const RENDERERS = { mirae_v16: MiraeLayers.MiraeRenderer, sma: SmaLayers.SmaRenderer };
 
@@ -128,7 +130,7 @@ function createPane(heightFrac = 1) {
   panesEl.append(div);
   const pane = {
     id: nextPaneId++, el: div, toolsEl: tools, heightFrac,
-    symbol: "", symName: "", selSeq: 0, searchSeq: 0, searchTimer: null,
+    symbol: "", symName: "", selSeq: 0, selTarget: "", searchSeq: 0, searchTimer: null,
     active: new Map(), chart: null, candleSeries: null, syncHandle: null,
     pickerEl: null, chipsEl: null, symInput: null, symNameEl: null, symResults: null,
   };
@@ -352,7 +354,8 @@ async function watchSymbol(shcode) {
 
 // 칸에 종목을 설정한다: watch → 캐시에 반영 → 시딩(완료 시 그 종목의 모든 칸을 다시 그림).
 // 실패하면 칸은 기존 종목과 화면을 그대로 유지한다 (입력창만 현재 종목으로 되돌린다).
-// selSeq는 빠른 연속 선택 시 늦은 완료를 폐기한다.
+// selSeq는 빠른 연속 선택 시 늦은 완료를 폐기한다. 폐기되는 선택은 엔진이 이미 그 종목을
+// watch했을 수 있으므로, 아무도 이어받지 않은 watch이면 해지한다 (누수 방지).
 async function selectPaneSymbol(pane, shcode, name) {
   shcode = String(shcode ?? "").trim();
   hidePaneResults(pane);
@@ -361,9 +364,16 @@ async function selectPaneSymbol(pane, shcode, name) {
     return;
   }
   const seq = ++pane.selSeq;
+  pane.selTarget = shcode; // 진행 중 선택 목표 — stale 폐기 시 watch 해지 판정에 쓴다
   const w = await watchSymbol(shcode);
-  if (seq !== pane.selSeq) return; // 그 사이 다른 선택이 시작됐다
+  if (seq !== pane.selSeq) {
+    // 그 사이 다른 선택이 시작됐다. 늦게 붙은 watch는 어느 칸도 안 보고 다른 진행 중
+    // 선택도 노리지 않으면 그대로 새어 나간다 — 해지한다 (인계된 watch는 건드리지 않는다)
+    if (w.ok && WatchGuard.staleWatchLeaks(shcode, panes)) releaseSymbol(shcode);
+    return;
+  }
   if (!w.ok) {
+    pane.selTarget = "";
     syncPaneSymbolUi(pane);
     return alert(`종목 관측 실패 (${shcode}): ${w.error}`);
   }
@@ -659,7 +669,8 @@ function renderSymbolPanes(shcode) {
     if (pane.symbol !== shcode) continue;
     pane.candleSeries.setData(rows);
     // 시딩 직후에는 그 칸이 자기 최신 범위로 돌아온다. 이 이벤트는 꼬리 기준 전파 규칙으로
-    // 다른 칸에도 자기 최신 창으로 전파된다 (pane-sync propagateRange 참조)
+    // 최신을 따라가는 다른 칸에만 자기 최신 창으로 전파된다 — 과거를 탐색 중인 칸은
+    // 자리를 지킨다 (pane-sync propagateRange 참조)
     if (rows.length) pane.chart.timeScale().scrollToRealTime();
     for (const { handle } of pane.active.values()) handle.applySeed(ctx);
   }

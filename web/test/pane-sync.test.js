@@ -145,6 +145,38 @@ test("시간축(꼬리): 발생 칸이 최신에 붙어 있으면 대상 칸은 
   assert.deepEqual(ms[0].calls.setRange, [{ from: 2399 - 49, to: 2399 }]);
 });
 
+test("시간축(꼬리): 과거를 탐색 중인 칸은 꼬리 전파에 끌려오지 않는다 (시딩 후 scrollToRealTime)", () => {
+  const { ms } = setupWithLengths([2400, 499]);
+  // 사용자가 두 칸을 함께 과거로 이동했다 (중간 창은 같은 범위로 전파된다)
+  fireRange(ms[0], { from: 100, to: 200 });
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 100, to: 200 }]);
+  // 주식 칸이 시딩을 마치고 자기 꼬리로 돌아간다 (renderSymbolPanes의 scrollToRealTime)
+  fireRange(ms[1], { from: 449, to: 498 });
+  // 과거 탐색 중인 선물 칸은 자리를 지킨다 — 시딩이 탐색 위치를 빼앗지 않는다
+  assert.deepEqual(ms[0].calls.setRange, []);
+});
+
+test("시간축(꼬리): 최신을 따라가는 칸은 꼬리 전파를 계속 받는다", () => {
+  const { ms } = setupWithLengths([2400, 499]);
+  fireRange(ms[1], { from: 449, to: 498 });
+  assert.deepEqual(ms[0].calls.setRange, [{ from: 2350, to: 2399 }]);
+  // 적용된 범위도 꼬리로 기록되므로, 다음 꼬리 이동에도 계속 따라간다
+  fireRange(ms[1], { from: 449, to: 498 });
+  assert.deepEqual(ms[0].calls.setRange, [{ from: 2350, to: 2399 }, { from: 2350, to: 2399 }]);
+});
+
+test("시간축(꼬리): 과거 탐색 칸이 최신으로 돌아오면 다시 꼬리 전파를 받는다", () => {
+  const { ms } = setupWithLengths([2400, 499]);
+  fireRange(ms[0], { from: 100, to: 200 });   // 두 칸 함께 과거로
+  fireRange(ms[1], { from: 449, to: 498 });   // 주식 칸만 꼬리로 — 선물 칸은 안 끌린다
+  assert.deepEqual(ms[0].calls.setRange, []);
+  // 사용자가 선물 칸을 최신으로 돌린다 (꼬리 범위가 기록된다)
+  fireRange(ms[0], { from: 2350, to: 2399 });
+  // 이후에는 다시 꼬리 전파를 받는다
+  fireRange(ms[1], { from: 449, to: 498 });
+  assert.deepEqual(ms[0].calls.setRange, [{ from: 2350, to: 2399 }]);
+});
+
 test("시간축(클램프): 중간 창이 대상 칸 데이터 밖이면 가장 가까운 유효 창으로 이동한다", () => {
   const { ms } = setupWithLengths([2400, 499]);
   fireRange(ms[0], { from: 1000, to: 1100 }); // 선물 칸의 중간 구간 탐색 (꼬리 아님)

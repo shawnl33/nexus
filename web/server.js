@@ -123,6 +123,11 @@ async function readBody(req) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+// 종목 코드 형식: select/watch/unwatch 본문과 chart 쿼리가 같은 규칙을 쓴다
+function isValidShcode(s) {
+  return typeof s === "string" && s.length >= 4 && s.length <= 12;
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${HOST}`);
@@ -152,6 +157,10 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && path === "/api/symbols/select") {
       // 화면의 선택 종목 변경은 화면 상태 변경이며, 전략 거래 대상 변경이 아니다 (계획서 §18)
+      // 구(단일 종목) 호환용으로 남은 경로 — 현재 프론트(app.js)는 호출하지 않고 칸별로
+      // /api/symbols/watch|unwatch를 쓴다. market.select는 칸 상태와 무관하게 엔진 관측
+      // 목록 전체를 요청 종목 하나로 교체하므로(docs/display_payload.md §3), 다른 종목을
+      // 보는 칸은 파이프라인이 사라져 갱신이 멈추고 마지막 데이터에 고정된다.
       if (!mutationAllowed(req)) return json(res, 403, { error: "forbidden" });
       const body = await readBody(req);
       let shcode;
@@ -160,7 +169,7 @@ const server = createServer(async (req, res) => {
       } catch {
         return json(res, 400, { error: "invalid_json" });
       }
-      if (typeof shcode !== "string" || shcode.length < 4 || shcode.length > 12) {
+      if (!isValidShcode(shcode)) {
         return json(res, 400, { error: "invalid_symbol" });
       }
       const reply = await engineCommand(`dash-select-${reqSeq}`, "market.select", JSON.stringify({ shcode }));
@@ -178,7 +187,7 @@ const server = createServer(async (req, res) => {
       } catch {
         return json(res, 400, { error: "invalid_json" });
       }
-      if (typeof shcode !== "string" || shcode.length < 4 || shcode.length > 12) {
+      if (!isValidShcode(shcode)) {
         return json(res, 400, { error: "invalid_symbol" });
       }
       const type = path.endsWith("/unwatch") ? "market.unwatch" : "market.watch";
@@ -192,7 +201,7 @@ const server = createServer(async (req, res) => {
       // shcode가 있으면 해당 종목 파이프라인의 봉을, 없으면 선택 종목(구 호환)을 가져온다
       const backIndex = Math.min(Math.max(Number(url.searchParams.get("back_index")) || 0, 0), 1e6);
       const shcode = url.searchParams.get("shcode");
-      if (shcode != null && (shcode.length < 4 || shcode.length > 12)) {
+      if (shcode != null && !isValidShcode(shcode)) {
         return json(res, 400, { error: "invalid_symbol" });
       }
       const payload = shcode != null ? { back_index: backIndex, shcode } : { back_index: backIndex };
