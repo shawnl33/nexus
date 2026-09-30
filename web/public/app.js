@@ -117,6 +117,11 @@ function chartOptions(pane) {
     },
     timeScale: {
       timeVisible: true, secondsVisible: true,
+      // 양쪽 가장자리 고정: 마지막/첫 봉 너머의 빈 공간으로 스크롤하지 못하게 한다.
+      // 없으면 사용자가 오른쪽 끝 너머로 드래그할 수 있는데(range.to가 데이터 밖으로
+      // 넘어감), 전파받은 다른 칸은 자기 꼬리에 클램프되어 같은 "끝"인데 화면이
+      // 어긋난다 (③ 광선은 캔버스에 오른쪽 끝까지 그리므로 이 옵션과 무관하게 보인다).
+      fixLeftEdge: true, fixRightEdge: true,
       tickMarkFormatter: (t, tickMarkType) => {
         const p = kstParts(t);
         if (tickMarkType <= 1) return `${p.y}-${pad2(p.mo)}`;
