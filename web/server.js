@@ -273,7 +273,12 @@ const server = createServer(async (req, res) => {
       for (const file of candidates) {
         try {
           const data = await readFile(file);
-          res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+          // 개발/라이브 대시보드: 정적 파일이 자주 바뀌므로 캐시를 끈다
+          // (구버전 JS/HTML을 캐시한 브라우저가 새 서버와 엇갈리는 사고 방지)
+          res.writeHead(200, {
+            "content-type": MIME[extname(file)] ?? "application/octet-stream",
+            "cache-control": "no-store",
+          });
           return res.end(data);
         } catch { /* try next */ }
       }

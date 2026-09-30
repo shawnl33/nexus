@@ -392,6 +392,8 @@ test("static index.html served", async () => {
   assert.equal(res.status, 200);
   const html = await res.text();
   assert.ok(html.includes("미래곡선"));
+  // 정적 파일은 캐시하지 않는다 — 구버전 JS/HTML과 새 서버의 엇갈림 방지
+  assert.equal(res.headers.get("cache-control"), "no-store");
 });
 
 test("websocket forwards engine status stream", async () => {
