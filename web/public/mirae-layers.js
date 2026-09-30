@@ -162,6 +162,39 @@ const MiraeLayers = (() => {
              showU: flags.showU, showL: flags.showL };
   }
 
+  // ⑥ 스냅샷 mem 이벤트로 봉별 수평 세그먼트 아이템을 복원한다 (시딩 경로 —
+  // app.js가 스냅샷 페이지에서 모은 이벤트와 dedup 봉 행을 넘긴다).
+  // 이벤트 레이아웃: [time, valid, dir, price, t1..3, u1..3, l1..3, showT, showU, showL, reset]
+  // (docs/display_payload.md §2). reset=1은 세션 경계 봉 표시: 엔진이 리셋 직후 상태를
+  // 싣기 때문에 재저장이 없으면 valid=0으로 온다. 지배 이벤트가 무효인 봉부터는 세트를
+  // 잇지 않으므로 진행 중 세트는 경계 시각에서 끊긴다. 리셋 봉에 새 세트가 함께 저장된
+  // 경우(valid=1)는 이 이벤트가 새 세트의 시작이다 — 라이브의 mem[0]=0 처리와 같은 결과.
+  // 구형 엔진의 16원소 이벤트는 reset 없음(0 간주, 기존 동작 유지).
+  function buildMemItems(dedup, events) {
+    const sorted = events
+      .map((e) => ({ time: Number(e[0]) / 1e6, valid: e[1] === 1, dir: e[2], price: e[3],
+                      t: e.slice(4, 7), u: e.slice(7, 10), l: e.slice(10, 13),
+                      reset: e[16] === 1 }))
+      .filter((e) => Number.isFinite(e.time))
+      .sort((a, b) => a.time - b.time);
+    const items = [];
+    let ei = -1;
+    for (let i = 0; i < dedup.length; i++) {
+      const t = dedup[i].time;
+      while (ei + 1 < sorted.length && sorted[ei + 1].time <= t) ei++;
+      if (ei < 0) continue;
+      const ev = sorted[ei];
+      // 리셋(경계) 봉을 포함해 무효 이벤트가 지배하는 봉은 진행 중 세트를 잇지 않는다
+      if (!ev.valid) continue;
+      const upd = ev.time === t; // 갱신(또는 리셋 봉 재저장)에는 범위선 숨김
+      const flags = upd ? { showU: false, showL: false }
+        : rangeFlags(dedup.slice(Math.max(0, i - 4), i + 1), ev.t[2]);
+      items.push({ time: t, value: ev.t[1], dir: ev.dir, price: ev.price,
+                   t: ev.t, u: ev.u, l: ev.l, showU: flags.showU, showL: flags.showL, upd });
+    }
+    return items;
+  }
+
   // ---- 커스텀 시리즈 공통부 ----
 
   // 유효 구간만 잇는다: 무효 봉(whitespace)은 originalData가 없고,
@@ -671,6 +704,7 @@ const MiraeLayers = (() => {
     SPANS, MIN_R2, HIGH_R2, bandOffset,
     scoreColor, regWidth, tradeStyle, bandColor, rangeFlags, mktStage, mktStageColor,
     parseInd, barIndFromInd, barIndFromPayload, memItemFromPayload, pstItemFromPayload,
+    buildMemItems,
     createRegLinePaneView, createScoreBarPaneView, createResultBandPaneView,
     createStepLinesPaneView, createMarketCenterPaneView, createFutureRaysPrimitive,
     MiraeRenderer,

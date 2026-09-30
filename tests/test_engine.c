@@ -525,6 +525,102 @@ static void test_ind_format(void) {
     }
 }
 
+/* ⑥ 세션 경계와 mem_reset: 경계 봉(새 세션 첫 봉)의 상태 링 슬롯에만 mem_reset=1이
+ * 남아야 한다. 봉마다 2틱을 넣어 같은 봉 재평가 덮어쓰기에서도 리셋 표시가
+ * 유지되는지(링 기록부 래치)까지 검증한다 */
+static void test_mem_reset_ring(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap);
+    static tr_bar_status_t ring[BB_CAP];
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+
+    /* 세션 0(1/2 화): 봉 0..7, 세션 1(1/3 수): 봉 0..3 */
+    uint64_t id = 1;
+    feed_session_bars(&e, 0, 0, 7, &id);
+    feed_session_bars(&e, 1, 0, 3, &id);
+    TR_CHECK(tr_engine_status_count(&e) == 12);
+
+    tr_bar_status_t st;
+    /* 경계 봉(세션 1 첫 봉, back=3): 리셋 표시가 남는다. 회귀가 세션마다 워밍업을
+     * 다시 하므로 이 봉에는 재저장이 없어 유효=0 — 스냅샷 이벤트는 valid=0/reset=1 */
+    TR_CHECK(tr_engine_status_at(&e, 3, &st));
+    TR_CHECK(st.mem_reset);
+    TR_CHECK(!st.mem_valid);
+    /* 이웃 봉(경계 전후)과 최신 봉은 리셋이 아니다 */
+    TR_CHECK(tr_engine_status_at(&e, 4, &st)); /* 세션 0 마지막 봉 */
+    TR_CHECK(!st.mem_reset);
+    TR_CHECK(st.mem_valid); /* 이전 세션의 세트는 유효한 채로 끝난다 */
+    TR_CHECK(tr_engine_status_at(&e, 2, &st));
+    TR_CHECK(!st.mem_reset);
+    TR_CHECK(tr_engine_status_at(&e, 0, &st));
+    TR_CHECK(!st.mem_reset);
+    /* 엔진 첫 봉(back=11)도 0→첫 세션 진입 리셋이다 (원본 회귀기억세션(-1) 초기값과 동일) */
+    TR_CHECK(tr_engine_status_at(&e, 11, &st));
+    TR_CHECK(st.mem_reset);
+}
+
+/* chart.snapshot mem[i] 이벤트 포맷 회귀: 17개 값과 끝의 reset 플래그
+ * (docs/display_payload.md §2)을 tr_bar_status_format_mem 출력으로 고정한다 */
+static void test_mem_event_format(void) {
+    tr_bar_status_t st;
+    memset(&st, 0, sizeof(st));
+    char buf[512];
+
+    /* updated도 reset도 아닌 봉은 이벤트가 아니다 (아무것도 쓰지 않고 0) */
+    TR_CHECK(tr_bar_status_format_mem(&st, true, buf, sizeof(buf)) == 0);
+
+    st.open_time_us = 1700000000000000LL;
+    st.mem_valid = true;
+    st.mem_updated = true;
+    st.mem_dir = -1;
+    st.mem_price = 34550;
+    st.mem_target[0] = 34600; st.mem_target[1] = 34620; st.mem_target[2] = 34640;
+    st.mem_upper[0] = 34700; st.mem_upper[1] = 34710; st.mem_upper[2] = 34720;
+    st.mem_lower[0] = 34400; st.mem_lower[1] = 34390; st.mem_lower[2] = 34380;
+    st.mem_show_targets = true;
+    st.mem_show_upper = true;
+    st.mem_show_lower = false;
+
+    int n = tr_bar_status_format_mem(&st, true, buf, sizeof(buf));
+    TR_CHECK(n > 0 && (size_t)n < sizeof(buf));
+    yyjson_doc *doc = yyjson_read(buf, (size_t)n, 0);
+    TR_CHECK(doc != 0);
+    if (doc != 0) {
+        yyjson_val *a = yyjson_doc_get_root(doc);
+        TR_CHECK(yyjson_is_arr(a));
+        TR_CHECK(yyjson_arr_size(a) == 17); /* [0..16] 고정 레이아웃 */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 1)) == 1);        /* valid */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 2)) == -1);       /* dir */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 3)) == 34550.0);  /* price */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 6)) == 34640.0);  /* t3 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 9)) == 34720.0);  /* u3 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 12)) == 34380.0); /* l3 */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 13)) == 1);       /* showT */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 14)) == 1);       /* showU */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 15)) == 0);       /* showL */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 16)) == 0);       /* reset 없음 */
+        yyjson_doc_free(doc);
+    }
+
+    /* 세션 리셋 봉: 끝 필드가 reset=1 (리셋만 있고 재저장이 없으면 valid=0으로 실린다) */
+    st.mem_updated = false;
+    st.mem_reset = true;
+    st.mem_valid = false;
+    st.mem_dir = 0;
+    n = tr_bar_status_format_mem(&st, false, buf, sizeof(buf));
+    TR_CHECK(n > 0 && buf[0] == ','); /* 배열 연결 */
+    doc = yyjson_read(buf + 1, (size_t)(n - 1), 0);
+    TR_CHECK(doc != 0);
+    if (doc != 0) {
+        yyjson_val *a = yyjson_doc_get_root(doc);
+        TR_CHECK(yyjson_arr_size(a) == 17);
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 1)) == 0);  /* valid */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 16)) == 1); /* reset */
+        yyjson_doc_free(doc);
+    }
+}
+
 /* 다중 파이프라인 슬롯 재사용: 중간 파이프라인을 제거한 뒤 추가해도 살아있는
  * 파이프라인의 저장소를 덮어쓰지 않아야 한다 (swap-remove 슬롯 별칭 회귀) */
 static void feed_pipe(tr_engine_t *e, uint64_t instrument_id, unsigned mi, unsigned s,
@@ -810,6 +906,8 @@ int main(void) {
     test_sma_payload();
     test_sma_late_correction();
     test_ind_format();
+    test_mem_reset_ring();
+    test_mem_event_format();
     test_pipe_slot_reuse();
     test_two_pipes_independent();
     test_mixed_market_sessions();

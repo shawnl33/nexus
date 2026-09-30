@@ -633,7 +633,9 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             SNAP_CLAMP(buf, off);
             first = false;
         }
-        /* ⑥ 방향 기억 갱신 이벤트 (updated 봉만, 창 안에서 오름차순) */
+        /* ⑥ 방향 기억 이벤트 (updated 또는 세션 리셋 봉, 창 안에서 오름차순).
+         * 포맷은 tr_bar_status_format_mem이 소유한다 — 이벤트 끝의 reset 플래그로
+         * 시딩 측이 세션 경계에서 진행 중 기억선 세트를 끊는다 */
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"mem\":[");
         SNAP_CLAMP(buf, off);
         first = true;
@@ -641,18 +643,11 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_pipe_status_at(eng, pipe_id, k, &st);
-            if (!st.mem_updated) {
+            int w = tr_bar_status_format_mem(&st, first, buf + off, sizeof(buf) - (size_t)off);
+            if (w <= 0) {
                 continue;
             }
-            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
-                            "%s[%lld,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d]",
-                            first ? "" : ",", (long long)st.open_time_us,
-                            st.mem_valid ? 1 : 0, st.mem_dir, st.mem_price,
-                            st.mem_target[0], st.mem_target[1], st.mem_target[2],
-                            st.mem_upper[0], st.mem_upper[1], st.mem_upper[2],
-                            st.mem_lower[0], st.mem_lower[1], st.mem_lower[2],
-                            st.mem_show_targets ? 1 : 0, st.mem_show_upper ? 1 : 0,
-                            st.mem_show_lower ? 1 : 0);
+            off += w;
             SNAP_CLAMP(buf, off);
             first = false;
         }

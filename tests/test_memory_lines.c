@@ -88,12 +88,23 @@ static void test_regmem_session_reset(void) {
     tr_regmem_input_t in = make_rm_in();
     tr_regmem_on_bar(&s, &in);
     TR_CHECK(s.mem_valid);
+    /* 첫 봉도 세션 0 → 1 진입이므로 리셋 분기를 탄다 (원본 회귀기억세션(-1) 초기값과 동일) */
+    TR_CHECK(s.session_reset);
 
-    /* 세션 변경: 기억 리셋 */
+    /* 같은 세션 다음 봉: 리셋 아님 */
+    tr_regmem_on_bar(&s, &in);
+    TR_CHECK(!s.session_reset);
+
+    /* 세션 변경: 기억 리셋 — 리셋 봉 표시가 저장과 무관하게 선다 */
     in.session_no = 2;
     tr_regmem_on_bar(&s, &in);
     /* 리셋 후 같은 봉에서 재저장 조건이 성립하면 다시 저장된다 */
     TR_CHECK(s.mem_session == 2);
+    TR_CHECK(s.session_reset);
+
+    /* 새 세션의 다음 봉: 다시 내려간다 */
+    tr_regmem_on_bar(&s, &in);
+    TR_CHECK(!s.session_reset);
 }
 
 static void test_regmem_hide_bands(void) {

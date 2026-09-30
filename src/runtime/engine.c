@@ -409,6 +409,25 @@ int tr_bar_status_format_ind(const tr_bar_status_t *st, double ps_flat, bool fir
                     st->sma_valid, st->sma[0], st->sma[1], st->sma[2]);
 }
 
+int tr_bar_status_format_mem(const tr_bar_status_t *st, bool first, char *buf, size_t cap) {
+    if (st == 0 || buf == 0 || cap == 0) {
+        return 0;
+    }
+    /* 이벤트가 아닌 봉(updated도 세션 리셋도 아님)은 쓰지 않고 0을 돌려준다 */
+    if (!st->mem_updated && !st->mem_reset) {
+        return 0;
+    }
+    return snprintf(buf, cap,
+                    "%s[%lld,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d]",
+                    first ? "" : ",", (long long)st->open_time_us,
+                    st->mem_valid ? 1 : 0, st->mem_dir, st->mem_price,
+                    st->mem_target[0], st->mem_target[1], st->mem_target[2],
+                    st->mem_upper[0], st->mem_upper[1], st->mem_upper[2],
+                    st->mem_lower[0], st->mem_lower[1], st->mem_lower[2],
+                    st->mem_show_targets ? 1 : 0, st->mem_show_upper ? 1 : 0,
+                    st->mem_show_lower ? 1 : 0, st->mem_reset ? 1 : 0);
+}
+
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar) {
     tr_pipeline_t *p = (tr_pipeline_t *)ctx;
     tr_engine_t *e = p->engine;
@@ -623,6 +642,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         st.mkt_l2 = p->mkt.lower2;
         st.mem_valid = p->regmem.mem_valid;
         st.mem_updated = p->regmem.updated;
+        st.mem_reset = p->regmem.session_reset;
         st.mem_dir = p->regmem.mem_dir;
         st.mem_price = p->regmem.mem_price;
         memcpy(st.mem_target, p->regmem.mem_target, sizeof(st.mem_target));
@@ -652,6 +672,11 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
             (tr_ring_at(&p->status_ring, 0, &newest) && bar->open_time_us > newest.open_time_us)) {
             tr_ring_push(&p->status_ring, &st);
         } else if (bar->open_time_us == newest.open_time_us) {
+            /* 같은 봉 재평가 덮어쓰기: 세션 리셋은 그 봉의 첫 평가에서만 서고 이후
+             * 평가에서는 내려가므로(세션 번호가 이미 갱신됨), 봉 안에서 한 번 선
+             * mem_reset은 그 봉의 슬롯이 다음 봉으로 넘어갈 때까지 유지한다.
+             * 그래야 스냅샷 mem 이벤트가 세션 경계 봉을 놓치지 않는다 */
+            st.mem_reset = st.mem_reset || newest.mem_reset;
             tr_ring_update_newest(&p->status_ring, &st);
         } else {
             for (size_t i = 1; i < tr_ring_count(&p->status_ring); i++) {

@@ -623,29 +623,6 @@ function applyStatus(msg) {
   }
 }
 
-// ⑥ 이벤트([time, valid, dir, price, t1..3, u1..3, l1..3, ...])로 봉별 수평 세그먼트 복원
-function buildMemItems(dedup, events) {
-  const sorted = events
-    .map((e) => ({ time: Number(e[0]) / 1e6, valid: e[1] === 1, dir: e[2], price: e[3],
-                    t: e.slice(4, 7), u: e.slice(7, 10), l: e.slice(10, 13) }))
-    .filter((e) => Number.isFinite(e.time))
-    .sort((a, b) => a.time - b.time);
-  const items = [];
-  let ei = -1;
-  for (let i = 0; i < dedup.length; i++) {
-    const t = dedup[i].time;
-    while (ei + 1 < sorted.length && sorted[ei + 1].time <= t) ei++;
-    if (ei < 0 || !sorted[ei].valid) continue;
-    const ev = sorted[ei];
-    const upd = ev.time === t; // 갱신 봉에는 범위선 숨김
-    const flags = upd ? { showU: false, showL: false }
-      : MiraeLayers.rangeFlags(recentFromRows(dedup, i, 5), ev.t[2]);
-    items.push({ time: t, value: ev.t[1], dir: ev.dir, price: ev.price,
-                 t: ev.t, u: ev.u, l: ev.l, showU: flags.showU, showL: flags.showL, upd });
-  }
-  return items;
-}
-
 // ⑦ 이벤트([time, valid, dir, t1..3, u1..3, l1..3])로 봉별 수평 세그먼트 복원
 function buildPstItems(dedup, events) {
   const sorted = events
@@ -754,7 +731,7 @@ async function seedSymbolNow(shcode) {
         cache.barInd.set(b.time, ind);
       }
       // ⑥⑦ 이벤트 → 봉별 아이템으로 변환해 캐시에 심는다 (렌더러가 applySeed에서 복원)
-      for (const item of buildMemItems(dedup, memEvents)) {
+      for (const item of MiraeLayers.buildMemItems(dedup, memEvents)) {
         const ind = cache.barInd.get(item.time);
         if (ind) ind.memItem = item;
       }

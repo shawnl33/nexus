@@ -57,6 +57,7 @@ typedef struct {
     uint64_t mem_session;       /* 회귀기억세션 */
     int confirm_accum;          /* 호가확인누적 */
     bool updated;               /* 회귀기억갱신 (저장된 그 봉만 true) */
+    bool session_reset;         /* 세션 리셋 봉 표시 (리셋 분기에서 set, 저장과 무관) */
     /* 출력 */
     bool show_targets;          /* Plot32~35 표시 여부 */
     bool show_upper, show_lower;/* Plot36~41 표시 여부 */

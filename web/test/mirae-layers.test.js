@@ -462,3 +462,69 @@ test("memItemFromPayload/pstItemFromPayload: 라이브 mem/pst → 봉별 아이
   assert.equal(M.pstItemFromPayload(100, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], []), null);
   assert.equal(M.pstItemFromPayload(100, undefined, []), undefined);
 });
+
+// 스냅샷 ⑥ 이벤트 → 봉별 아이템 복원. 이벤트 레이아웃:
+// [time(µs), valid, dir, price, t1..3, u1..3, l1..3, showT, showU, showL, reset]
+function memEv(sec, valid, dir, price, reset = 0) {
+  return [sec * 1e6, valid, dir, price,
+          price + 100, price + 200, price + 300,   // t1..3
+          price + 400, price + 500, price + 600,   // u1..3
+          price - 100, price - 200, price - 300,   // l1..3
+          1, 1, 1, reset];
+}
+function memRows(n, from = 1000, step = 60) {
+  // 고/저가 목표3 사이에 끼워 범위선이 기본 표시되게 한다
+  const rows = [];
+  for (let i = 0; i < n; i++) rows.push({ time: from + i * step, high: 5350, low: 5150 });
+  return rows;
+}
+
+test("buildMemItems: reset=1 이벤트가 세션 경계에서 진행 중 세트를 끊는다", () => {
+  const dedup = memRows(10); // 1000..1540 (60초 간격)
+  const events = [
+    memEv(1060, 1, 1, 5000, 0),   // 구 세션 세트 A (두 번째 봉에 저장)
+    memEv(1300, 0, 0, 0, 1),      // 세션 경계: 리셋만 (재저장 없음 → valid=0)
+    memEv(1420, 1, -1, 6000, 0),  // 새 세션 세트 B
+  ];
+  const items = M.buildMemItems(dedup, events);
+  // 세트 A: 1060..1240 (경계 1300 직전까지), 경계·직후 1300/1360은 공백, 세트 B: 1420..1540
+  assert.deepEqual(items.map((it) => it.time),
+                   [1060, 1120, 1180, 1240, 1420, 1480, 1540]);
+  assert.equal(items[0].value, 5200);   // A 목표2
+  assert.equal(items[0].upd, true);     // 갱신 봉
+  assert.equal(items[0].showU, false);  // 갱신 봉은 범위선 숨김
+  assert.equal(items[1].upd, false);
+  assert.equal(items[1].showU, true);   // 유지 봉은 5봉 이탈 규칙 (여기선 표시)
+  assert.equal(items[3].price, 5000);   // 경계 직전까지 구 세트 값
+  assert.equal(items[4].value, 6200);   // 새 세트는 B 값으로만 시작
+  assert.equal(items[4].dir, -1);
+  // 리셋 이벤트가 없던 자리(1300, 1360)로 구 세트가 새어나가지 않는다
+  assert.ok(!items.some((it) => it.time === 1300 || it.time === 1360));
+});
+
+test("buildMemItems: 리셋 봉에 새 세트가 재저장되면(valid=1) 같은 자리에서 새 세트 시작", () => {
+  const dedup = memRows(10);
+  const events = [
+    memEv(1060, 1, 1, 5000, 0),
+    memEv(1300, 1, -1, 6000, 1),  // 경계 봉에 새 세트 저장 (reset=1, valid=1)
+  ];
+  const items = M.buildMemItems(dedup, events);
+  // 구 세트는 1240까지, 1300부터는 새 세트 — 이어지지만 값은 경계에서 교체된다
+  assert.deepEqual(items.map((it) => it.time),
+                   [1060, 1120, 1180, 1240, 1300, 1360, 1420, 1480, 1540]);
+  const at = (t) => items.find((it) => it.time === t);
+  assert.equal(at(1240).price, 5000); // 구 세션 마지막 봉은 구 세트
+  assert.equal(at(1300).price, 6000); // 경계 봉은 새 세트
+  assert.equal(at(1300).dir, -1);
+  assert.equal(at(1300).upd, true);   // 재저장 봉은 범위선 숨김
+  assert.equal(at(1360).upd, false);
+});
+
+test("buildMemItems: 구형 엔진의 16원소 이벤트(reset 없음)는 기존처럼 잇는다", () => {
+  const dedup = memRows(5); // 1000..1240
+  const ev = memEv(1060, 1, 1, 5000, 0).slice(0, 16); // reset 필드 없음
+  const items = M.buildMemItems(dedup, [ev]);
+  assert.deepEqual(items.map((it) => it.time), [1060, 1120, 1180, 1240]);
+  // 첫 이벤트 이전 봉(1000)과 유효하지 않은 이벤트만 있으면 아이템 없음
+  assert.deepEqual(M.buildMemItems(dedup, [memEv(1060, 0, 0, 0, 0)]), []);
+});

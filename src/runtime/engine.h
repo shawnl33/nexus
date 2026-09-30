@@ -70,8 +70,10 @@ typedef struct {
     /* ⑧ 마켓 밴드 */
     bool mkt_valid;
     double mkt_center, mkt_u1, mkt_l1, mkt_u2, mkt_l2;
-    /* ⑥ 방향 기억 (updated 봉에만 신규 세트. 나머지 봉은 이전 세트 유지 의미) */
+    /* ⑥ 방향 기억 (updated 봉에만 신규 세트. 나머지 봉은 이전 세트 유지 의미.
+     * mem_reset은 세션 리셋 봉 표시 — 스냅샷 mem 이벤트가 경계에서 세트를 끊는 데 쓴다) */
     bool mem_valid, mem_updated;
+    bool mem_reset;
     int mem_dir;
     double mem_price, mem_target[3], mem_upper[3], mem_lower[3];
     bool mem_show_targets, mem_show_upper, mem_show_lower;
@@ -266,6 +268,13 @@ bool tr_engine_pipe_status_at(const tr_engine_t *e, uint64_t instrument_id,
  * 반환은 snprintf 규약: cap을 넘으면 잘리고 썼어야 할 길이를 돌려준다. */
 int tr_bar_status_format_ind(const tr_bar_status_t *st, double ps_flat, bool first,
                              char *buf, size_t cap);
+
+/* chart.snapshot의 mem[i] 한 이벤트를 포맷한다 — 17개 값, 레이아웃은
+ * docs/display_payload.md §2: [time, valid, dir, price, t1..3, u1..3, l1..3,
+ * showT, showU, showL, reset]. 이벤트가 아닌 봉(updated도 reset도 아님)이면
+ * 아무것도 쓰지 않고 0을 돌려준다. first=false이면 앞에 쉼표를 붙인다 (배열 연결).
+ * 반환은 snprintf 규약: cap을 넘으면 잘리고 썼어야 할 길이를 돌려준다. */
+int tr_bar_status_format_mem(const tr_bar_status_t *st, bool first, char *buf, size_t cap);
 
 /* ⑧ 마켓 밴드 평가 부착 (호출자 소유 캔들 저장소, 마켓계산기간×2 권장).
  * 재부착 시 마켓 상태가 초기화된다 (종목 전환 후 재사용).

@@ -85,7 +85,9 @@ void tr_regmem_on_bar(tr_regmem_t *s, const tr_regmem_input_t *in) {
         s->confirm_accum = 0;
     }
 
-    /* 세션 리셋 (원본 609~626) */
+    /* 세션 리셋 (원본 609~626). 리셋 봉은 session_reset을 세워 링/스냅샷이 세션 경계를
+     * 알 수 있게 한다 (저장 여부와 무관) */
+    s->session_reset = false;
     if (in->compress_min_le30 && in->session_no != s->mem_session) {
         s->mem_dir = 0;
         s->mem_valid = false;
@@ -95,6 +97,7 @@ void tr_regmem_on_bar(tr_regmem_t *s, const tr_regmem_input_t *in) {
         memset(s->mem_lower, 0, sizeof(s->mem_lower));
         s->confirm_accum = 0;
         s->mem_session = in->session_no;
+        s->session_reset = true;
     }
 
     /* 저장 (원본 628~647) */
