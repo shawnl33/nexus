@@ -88,6 +88,21 @@ function ctxFor(cache) {
 // 크로스헤어 가로선 값은 칸별 getPrice로 자기 종목 캐시에서 찾는다.
 const paneSync = PaneSync.create();
 
+// 프로그램적 시간축 변경이 다른 칸으로 번지지 않게 그 칸의 범위 이벤트를 뮤트한다
+// (전파 계약은 pane-sync.js 헤더 참조). 범위 이벤트는 동기 호출 안과 뒤따르는 rAF
+// 프레임에 걸쳐 나오므로(실측), 뮤트는 프레임이 지난 뒤에 푼다 — 라이브 1봉 적용용.
+function mutePaneRange(pane) {
+  paneSync.mute(pane.syncHandle);
+  requestAnimationFrame(() => requestAnimationFrame(() => paneSync.unmute(pane.syncHandle)));
+}
+
+// 시딩 적용용 뮤트: scrollToRealTime은 400ms 스크롤 애니메이션이라 프레임마다 범위
+// 이벤트를 흘리므로(실측), 애니메이션이 끝날 때까지 뮤트를 유지한다.
+function mutePaneRangeForSeeding(pane) {
+  paneSync.mute(pane.syncHandle);
+  setTimeout(() => paneSync.unmute(pane.syncHandle), 450); // 400ms 애니메이션 + 여유
+}
+
 function chartOptions(pane) {
   return {
     layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
@@ -599,7 +614,11 @@ function applyStatus(msg) {
   if (o != null) {
     feed.noteBar(cache, t, { time: t, open: o, high: h, low: l, close: c });
     for (const pane of panes) {
-      if (pane.symbol === sh) pane.candleSeries.update(cache.bars.get(t));
+      if (pane.symbol !== sh) continue;
+      // 라이브 봉 적용(꼬리에 붙은 칸은 범위가 오른쪽으로 밀림)은 프로그램적 변경 —
+      // 다른 칸의 탐색 위치를 빼앗지 않게 이 칸의 범위 이벤트를 뮤트한다
+      mutePaneRange(pane);
+      pane.candleSeries.update(cache.bars.get(t));
     }
   }
   const ind = MiraeLayers.barIndFromPayload(p);
@@ -686,10 +705,11 @@ function renderSymbolPanes(shcode) {
   const ctx = ctxFor(cache);
   for (const pane of panes) {
     if (pane.symbol !== shcode) continue;
+    // 시딩 적용(setData + scrollToRealTime)은 프로그램적 변경 — 그 칸이 자기 최신
+    // 범위로 돌아가며 내는 범위 이벤트가 다른 칸의 탐색 위치를 빼앗지 않게 뮤트한다
+    // (scrollToRealTime의 스크롤 애니메이션이 끝난 뒤 해제)
+    mutePaneRangeForSeeding(pane);
     pane.candleSeries.setData(rows);
-    // 시딩 직후에는 그 칸이 자기 최신 범위로 돌아온다. 이 이벤트는 꼬리 기준 전파 규칙으로
-    // 최신을 따라가는 다른 칸에만 자기 최신 창으로 전파된다 — 과거를 탐색 중인 칸은
-    // 자리를 지킨다 (pane-sync propagateRange 참조)
     if (rows.length) pane.chart.timeScale().scrollToRealTime();
     for (const { handle } of pane.active.values()) handle.applySeed(ctx);
   }
