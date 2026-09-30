@@ -260,6 +260,13 @@ size_t tr_engine_pipe_status_count(const tr_engine_t *e, uint64_t instrument_id)
 bool tr_engine_pipe_status_at(const tr_engine_t *e, uint64_t instrument_id,
                               size_t back_index, tr_bar_status_t *out);
 
+/* chart.snapshot의 ind[i] 한 행을 포맷한다 — 32개 값, 인덱스 레이아웃은
+ * docs/display_payload.md §2. first=false이면 앞에 쉼표를 붙인다 (배열 연결).
+ * ps_flat은 reg_flat 재계산·틱 크기의 raw 단위 (선물 5, 주식 100).
+ * 반환은 snprintf 규약: cap을 넘으면 잘리고 썼어야 할 길이를 돌려준다. */
+int tr_bar_status_format_ind(const tr_bar_status_t *st, double ps_flat, bool first,
+                             char *buf, size_t cap);
+
 /* ⑧ 마켓 밴드 평가 부착 (호출자 소유 캔들 저장소, 마켓계산기간×2 권장).
  * 재부착 시 마켓 상태가 초기화된다 (종목 전환 후 재사용).
  * pipe_* 변형은 instrument_id로 대상 파이프라인을 골라 부착한다. */

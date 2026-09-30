@@ -317,6 +317,38 @@ static int watch_pool_of(const tr_pipeline_t *p) {
 }
 #define MKT_POOL_CAP (sizeof(g_mkt_pool[0]) / sizeof(g_mkt_pool[0][0]))
 
+/* 지표 매니페스트 본문: 대시보드 지표 선택 패널의 표시 목록 (레이어 defaultOn 포함).
+ * 고정 길이 문자열이므로 sizeof로 스냅샷 버퍼의 헤드룸을 정확히 잡는다 */
+static const char SNAP_IND_MANIFEST[] =
+    "\"indicators\":["
+    "{\"id\":\"mirae_v16\",\"name\":\"미래곡선 V16\",\"layers\":["
+    "{\"id\":\"score\",\"name\":\"① 통합 점수\",\"defaultOn\":true},"
+    "{\"id\":\"reg\",\"name\":\"② 회귀선\",\"defaultOn\":true},"
+    "{\"id\":\"rays\",\"name\":\"③ 미래 목표선\",\"defaultOn\":true},"
+    "{\"id\":\"band\",\"name\":\"④ 결과 띠\",\"defaultOn\":true},"
+    "{\"id\":\"state\",\"name\":\"⑤ 매매 상태\",\"defaultOn\":true},"
+    "{\"id\":\"memory\",\"name\":\"⑥ 방향 기억\",\"defaultOn\":true},"
+    "{\"id\":\"snap\",\"name\":\"⑦ 지속 사진\",\"defaultOn\":true},"
+    "{\"id\":\"mktband\",\"name\":\"⑧ 마켓 밴드\",\"defaultOn\":false}]},"
+    "{\"id\":\"sma\",\"name\":\"이평선 5/20/60\",\"layers\":["
+    "{\"id\":\"sma5\",\"name\":\"SMA 5\",\"defaultOn\":true},"
+    "{\"id\":\"sma20\",\"name\":\"SMA 20\",\"defaultOn\":true},"
+    "{\"id\":\"sma60\",\"name\":\"SMA 60\",\"defaultOn\":true}]}]}";
+
+/* chart.snapshot 꼬리 고정 바이트: 섹션 구분자 3개(\"],\"ind|mem|pst\":[", 각 10자) +
+ * 매니페스트 본문. 각 루프 가드는 항목 최악 크기에 이 고정 꼬리를 더한 만큼을 남긴다 —
+ * 이론적 최악에도 매니페스트가 잘려 malformed JSON이 되지 않게 한다 */
+#define SNAP_TAIL_FIXED (30 + (int)sizeof(SNAP_IND_MANIFEST) - 1)
+
+/* snprintf는 잘리면 "썼어야 할 길이"를 돌려주므로 off가 buf 끝을 넘어설 수 있다.
+ * 누적할 때마다 클램프해 뒤따르는 쓰기(섹션 구분자·매니페스트)가 buf 안에서 이어지게 한다 */
+#define SNAP_CLAMP(buf, off)                                                  \
+    do {                                                                      \
+        if ((off) < 0 || (size_t)(off) >= sizeof(buf)) {                      \
+            (off) = (int)sizeof(buf) - 1;                                     \
+        }                                                                     \
+    } while (0)
+
 static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     (void)ctx;
     static char payload[512];
@@ -571,50 +603,41 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
                            "{\"shcode\":\"%s\",\"generation\":%u,\"timeframe_sec\":%u,\"total\":%zu,"
                            "\"next_back_index\":%zu,\"bars\":[",
                            pipe->shcode, pipe->generation, (unsigned)eng->cfg.timeframe_sec, n, next);
+        SNAP_CLAMP(buf, off);
         bool first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 160;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 160 - SNAP_TAIL_FIXED;) {
             tr_candle_t c;
             tr_ring_at(&pipe->bb.bars, k, &c);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%lld,%lld,%lld,%lld,%lld,%lld]",
                             first ? "" : ",", (long long)c.open_time_us,
                             (long long)c.open, (long long)c.high, (long long)c.low,
                             (long long)c.close, (long long)c.volume);
+            SNAP_CLAMP(buf, off);
             first = false;
         }
         /* 봉별 지표(회귀·예측·점수·호가) — bars와 같은 순서. 스냅샷으로 과거 구간의
-         * 미래곡선 보조지표도 복원하기 위한 값이다.
+         * 미래곡선 보조지표도 복원하기 위한 값이다. 포맷은 tr_bar_status_format_ind가 소유한다.
          * [21..25]는 ⑤ 매매 상태와 reg_flat(회귀선 틱 반올림, 엔진 페이로드와 동일 규칙:
          * 선물 0.05pt×100=5 raw, 주식 1원×100=100 raw).
          * [26]=틱 크기(raw, ④ 결과 띠 오프셋·⑧ 거리 기준에 사용), [27]=거래일(④ 세션 가드),
          * [28]=SMA 유효(5/20/60 모두 창 완성), [29..31]=SMA 5/20/60 (종가 기준) */
         double ps_flat = pipe->is_futures ? 5.0 : 100.0;
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ind\":[");
+        SNAP_CLAMP(buf, off);
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 448;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 448 - SNAP_TAIL_FIXED;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_pipe_status_at(eng, pipe_id, k, &st);
-            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
-                            "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d,"
-                            "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%d,%lld,%d,%.10g,%.10g,%.10g]",
-                            first ? "" : ",",
-                            st.closed ? 1 : 0, st.reg_valid ? 1 : 0, st.reg_line, st.reg_r2,
-                            st.pred[0], st.pred[1], st.pred[2],
-                            st.score, st.ob_valid ? 1 : 0, st.ob_score,
-                            st.residual, st.pvol,
-                            st.pred_dir[0], st.pred_dir[1], st.pred_dir[2],
-                            st.mkt_valid ? 1 : 0, st.mkt_center, st.mkt_u1, st.mkt_l1,
-                            st.mkt_u2, st.mkt_l2,
-                            st.final_valid, st.final_dir, st.final_state, st.final_strength,
-                            floor(st.reg_line / ps_flat + 0.5) * ps_flat,
-                            (int)ps_flat, (long long)st.trading_day,
-                            st.sma_valid, st.sma[0], st.sma[1], st.sma[2]);
+            off += tr_bar_status_format_ind(&st, ps_flat, first, buf + off, sizeof(buf) - (size_t)off);
+            SNAP_CLAMP(buf, off);
             first = false;
         }
         /* ⑥ 방향 기억 갱신 이벤트 (updated 봉만, 창 안에서 오름차순) */
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"mem\":[");
+        SNAP_CLAMP(buf, off);
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 320;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 320 - SNAP_TAIL_FIXED;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_pipe_status_at(eng, pipe_id, k, &st);
@@ -630,12 +653,14 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
                             st.mem_lower[0], st.mem_lower[1], st.mem_lower[2],
                             st.mem_show_targets ? 1 : 0, st.mem_show_upper ? 1 : 0,
                             st.mem_show_lower ? 1 : 0);
+            SNAP_CLAMP(buf, off);
             first = false;
         }
         /* ⑦ 지속 사진 저장 이벤트 (saved 봉만) */
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"pst\":[");
+        SNAP_CLAMP(buf, off);
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 260;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 260 - SNAP_TAIL_FIXED;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_pipe_status_at(eng, pipe_id, k, &st);
@@ -649,24 +674,12 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
                             st.pst_target[0], st.pst_target[1], st.pst_target[2],
                             st.pst_upper[0], st.pst_upper[1], st.pst_upper[2],
                             st.pst_lower[0], st.pst_lower[1], st.pst_lower[2]);
+            SNAP_CLAMP(buf, off);
             first = false;
         }
-        /* 지표 매니페스트: 대시보드 지표 선택 패널의 표시 목록 (레이어 defaultOn 포함) */
-        snprintf(buf + off, sizeof(buf) - (size_t)off,
-                 "],\"indicators\":["
-                 "{\"id\":\"mirae_v16\",\"name\":\"미래곡선 V16\",\"layers\":["
-                 "{\"id\":\"score\",\"name\":\"① 통합 점수\",\"defaultOn\":true},"
-                 "{\"id\":\"reg\",\"name\":\"② 회귀선\",\"defaultOn\":true},"
-                 "{\"id\":\"rays\",\"name\":\"③ 미래 목표선\",\"defaultOn\":true},"
-                 "{\"id\":\"band\",\"name\":\"④ 결과 띠\",\"defaultOn\":true},"
-                 "{\"id\":\"state\",\"name\":\"⑤ 매매 상태\",\"defaultOn\":true},"
-                 "{\"id\":\"memory\",\"name\":\"⑥ 방향 기억\",\"defaultOn\":true},"
-                 "{\"id\":\"snap\",\"name\":\"⑦ 지속 사진\",\"defaultOn\":true},"
-                 "{\"id\":\"mktband\",\"name\":\"⑧ 마켓 밴드\",\"defaultOn\":false}]},"
-                 "{\"id\":\"sma\",\"name\":\"이평선 5/20/60\",\"layers\":["
-                 "{\"id\":\"sma5\",\"name\":\"SMA 5\",\"defaultOn\":true},"
-                 "{\"id\":\"sma20\",\"name\":\"SMA 20\",\"defaultOn\":true},"
-                 "{\"id\":\"sma60\",\"name\":\"SMA 60\",\"defaultOn\":true}]}]}");
+        /* 매니페스트는 고정 길이 — 위 루프 가드들이 SNAP_TAIL_FIXED만큼 남겨 두어 잘리지 않는다 */
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],%s", SNAP_IND_MANIFEST);
+        SNAP_CLAMP(buf, off);
         cmd->status = "applied";
         cmd->error_code = "none";
         cmd->payload_json = buf;

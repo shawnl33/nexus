@@ -2,10 +2,12 @@
 
 #include "test_util.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "runtime/engine.h"
 #include "core/model/civil_time.h"
+#include "yyjson.h"
 
 #define BB_CAP 64
 static tr_candle_t g_bb_storage[BB_CAP];
@@ -363,6 +365,166 @@ static void test_sma_payload(void) {
     TR_CHECK(strstr(cap.last, "\"sma\":[1,159,151.5,131.5]") != 0);
 }
 
+/* 늦은 틱 정정 회귀: 과거 봉 정정 이벤트가 이평선 창을 오염시키지 않아야 한다.
+ * 정정 봉의 open_time은 prev_bar_open보다 과거이므로 is_new_bar=true로 보이지만,
+ * SMA 갱신 게이트(⑤ 체인과 동일)가 창 push를 막는다 */
+static void test_sma_late_correction(void) {
+    tr_engine_t e;
+    capture_t dummy;
+    last_capture_t cap;
+    memset(&cap, 0, sizeof(cap));
+    init_engine(&e, &dummy);
+    tr_engine_attach_status_cb(&e, last_capture_cb, &cap);
+
+    /* 봉 i(9시+i분) 종가 = 100+i, 6봉 → SMA5 창 완성 (최근 5봉 102..106, 평균 104) */
+    uint64_t id = 1;
+    for (int i = 1; i <= 6; i++) {
+        feed_min1(&e, i, 100 + i, id++);
+    }
+    TR_CHECK(e.sma5.valid && e.sma5.count == 5);
+    TR_CHECK(fabs(e.sma5.value - 104.0) < 1e-9);
+    TR_CHECK(e.sma20.count == 6 && e.sma60.count == 6);
+
+    /* 늦은 틱: 확정된 봉 3(9:03)을 999로 정정한다. exec_id는 단조 증가를 유지해야
+     * 중복 필터를 지나 정정 경로(TR_BB_LATE_CORRECTED)에 도달한다 */
+    {
+        tr_event_envelope_t env;
+        memset(&env, 0, sizeof(env));
+        env.kind = TR_EVENT_TICK;
+        tr_civil_t c = {2024, 1, 2, 9, 3, 30};
+        tr_time_us_from_civil(&c, KST, &env.event_time_us);
+        env.received_time_us = env.event_time_us;
+        tr_tick_t tk;
+        memset(&tk, 0, sizeof(tk));
+        tk.instrument_id = e.cfg.instrument_id;
+        tk.price = 999;
+        tk.qty = 10;
+        tk.source_exec_id = id++;
+        tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+        TR_CHECK(tr_engine_on_tick(&e, &env, &tk) == TR_BB_LATE_CORRECTED);
+    }
+
+    /* 창이 오염하지 않는다: 개수·값 모두 정정 전 그대로 (오염 시 999가 push되어
+     * SMA5 = (103+104+105+106+999)/5 = 283.4) */
+    TR_CHECK(e.sma5.count == 5);
+    TR_CHECK(fabs(e.sma5.value - 104.0) < 1e-9);
+    TR_CHECK(e.sma20.count == 6 && e.sma60.count == 6);
+    TR_CHECK(strstr(cap.last, "\"sma\":[0,104,0,0]") != 0); /* 정정 이벤트 발행에도 현재 창 유지 */
+
+    /* 다음 새 봉은 정상 push: 창은 103..107로 밀려 평균 105 (999가 남아 있으면 실패) */
+    feed_min1(&e, 7, 107, id++);
+    TR_CHECK(e.sma5.count == 5);
+    TR_CHECK(fabs(e.sma5.value - 105.0) < 1e-9);
+    TR_CHECK(strstr(cap.last, "\"sma\":[0,105,0,0]") != 0);
+}
+
+/* chart.snapshot ind[i] 포맷 회귀: 32개 값과 문서화된 인덱스 매핑
+ * (docs/display_payload.md §2)을 tr_bar_status_format_ind 출력으로 고정한다 */
+static void test_ind_format(void) {
+    tr_bar_status_t st;
+    memset(&st, 0, sizeof(st));
+    st.closed = true;
+    st.reg_valid = true;
+    st.reg_line = 1234.5;
+    st.reg_r2 = 0.75;
+    st.pred[0] = 1.0;
+    st.pred[1] = 2.0;
+    st.pred[2] = 3.0;
+    st.score = -42;
+    st.ob_valid = true;
+    st.ob_score = 0.5;
+    st.residual = 7.5;
+    st.pvol = 2.5;
+    st.pred_dir[0] = 1;
+    st.pred_dir[1] = 0;
+    st.pred_dir[2] = -1;
+    st.mkt_valid = true;
+    st.mkt_center = 100;
+    st.mkt_u1 = 101;
+    st.mkt_l1 = 99;
+    st.mkt_u2 = 102;
+    st.mkt_l2 = 98;
+    st.final_valid = 1;
+    st.final_dir = -1;
+    st.final_state = 2;
+    st.final_strength = 88;
+    st.trading_day = 20000;
+    st.sma_valid = 1;
+    st.sma[0] = 10.5;
+    st.sma[1] = 20.5;
+    st.sma[2] = 60.5;
+
+    char buf[1024];
+    int n = tr_bar_status_format_ind(&st, 5.0, true, buf, sizeof(buf));
+    TR_CHECK(n > 0 && (size_t)n < sizeof(buf));
+
+    yyjson_doc *doc = yyjson_read(buf, (size_t)n, 0);
+    TR_CHECK(doc != 0);
+    if (doc != 0) {
+        yyjson_val *a = yyjson_doc_get_root(doc);
+        TR_CHECK(yyjson_is_arr(a));
+        TR_CHECK(yyjson_arr_size(a) == 32); /* [0..31] 고정 레이아웃 */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 0)) == 1);        /* closed */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 1)) == 1);        /* reg_valid */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 2)) == 1234.5);   /* reg_line */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 3)) == 0.75);     /* reg_r2 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 4)) == 1.0);      /* pred[0] */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 6)) == 3.0);      /* pred[2] */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 7)) == -42);      /* score */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 8)) == 1);        /* ob_valid */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 9)) == 0.5);      /* ob_score */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 10)) == 7.5);     /* resid */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 11)) == 2.5);     /* pvol */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 12)) == 1);       /* pred_dir[0] */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 14)) == -1);      /* pred_dir[2] */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 15)) == 1);       /* mkt 유효 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 16)) == 100.0);   /* mkt 중심 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 20)) == 98.0);    /* mkt 하단2 */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 21)) == 1);       /* final_valid */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 22)) == -1);      /* final_dir */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 23)) == 2);       /* final_state */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 24)) == 88);      /* final_strength */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 25)) == 1235.0);  /* reg_flat 틱(5) 반올림 */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 26)) == 5);       /* tick 크기 */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 27)) == 20000);   /* 거래일 */
+        TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 28)) == 1);       /* SMA 유효 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 29)) == 10.5);    /* SMA 5 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 30)) == 20.5);    /* SMA 20 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 31)) == 60.5);    /* SMA 60 */
+        yyjson_doc_free(doc);
+    }
+
+    /* first=false는 앞에 쉼표를 붙인다 (배열 내 연결) */
+    n = tr_bar_status_format_ind(&st, 5.0, false, buf, sizeof(buf));
+    TR_CHECK(n > 0 && buf[0] == ',');
+
+    /* 엔진 상태 링 → ind 매핑: 6봉(종가 101..106)에서 최신 봉의 SMA5=104가 [29]에 온다 */
+    {
+        tr_engine_t e;
+        capture_t dummy;
+        init_engine(&e, &dummy);
+        static tr_bar_status_t ring[BB_CAP];
+        TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+        uint64_t id = 1;
+        for (int i = 1; i <= 6; i++) {
+            feed_min1(&e, i, 100 + i, id++);
+        }
+        tr_bar_status_t cur;
+        TR_CHECK(tr_engine_status_at(&e, 0, &cur));
+        n = tr_bar_status_format_ind(&cur, 5.0, true, buf, sizeof(buf));
+        TR_CHECK(n > 0 && (size_t)n < sizeof(buf));
+        doc = yyjson_read(buf, (size_t)n, 0);
+        TR_CHECK(doc != 0);
+        if (doc != 0) {
+            yyjson_val *a = yyjson_doc_get_root(doc);
+            TR_CHECK(yyjson_arr_size(a) == 32);
+            TR_CHECK(yyjson_get_int(yyjson_arr_get(a, 28)) == 0);     /* 5일선만 완성 → 종합 0 */
+            TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 29)) == 104.0); /* 최근 5봉 종가 평균 */
+            yyjson_doc_free(doc);
+        }
+    }
+}
+
 /* 다중 파이프라인 슬롯 재사용: 중간 파이프라인을 제거한 뒤 추가해도 살아있는
  * 파이프라인의 저장소를 덮어쓰지 않아야 한다 (swap-remove 슬롯 별칭 회귀) */
 static void feed_pipe(tr_engine_t *e, uint64_t instrument_id, unsigned mi, unsigned s,
@@ -646,6 +808,8 @@ int main(void) {
     test_status_ring_alignment();
     test_daily_chain();
     test_sma_payload();
+    test_sma_late_correction();
+    test_ind_format();
     test_pipe_slot_reuse();
     test_two_pipes_independent();
     test_mixed_market_sessions();

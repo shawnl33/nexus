@@ -50,7 +50,10 @@ typedef struct {
 
 void tr_gap1_init(tr_gap1_t *s, const tr_gap1_config_t *cfg);
 
-/* 매 봉 1회. bar_time_min은 봉의 현지 시각(자정 기준 분). is_session_first는 DayIndex==0 대응. */
+/* 봉 이벤트마다 호출한다 (진행 봉 재호출 포함). 재호출은 현재 세션 집계(H/L/C)·
+ * 장시작경과분만 갱신해 안전하고, 완성 세션 저장은 bar_index 게이트(is_session_first &&
+ * bar_index != last_start_bar)로 세션당 1회만 일어난다.
+ * bar_time_min은 봉의 현지 시각(자정 기준 분). is_session_first는 DayIndex==0 대응. */
 void tr_gap1_on_bar(tr_gap1_t *s, double o, double h, double l, double c,
                     int32_t bar_time_min, bool is_session_first, int64_t bar_index, bool is_min_1);
 

@@ -44,7 +44,9 @@ typedef struct {
 
 void tr_dtl1_init(tr_dtl1_t *s, const tr_dtl1_config_t *cfg);
 
-/* 매 봉 1회. is_session_first는 DayIndex==0 대응. */
+/* 봉 이벤트마다 호출한다 (진행 봉 재호출 포함). 재호출은 현재 세션의 H/L 집계와 회귀
+ * 재계산만 갱신해 안전하고, 완성 일봉 저장은 bar_index 게이트(is_session_first &&
+ * bar_index != last_start_bar)로 세션당 1회만 일어난다. is_session_first는 DayIndex==0 대응. */
 void tr_dtl1_on_bar(tr_dtl1_t *s, double h, double l, double c,
                     bool is_session_first, int64_t bar_index, bool is_min_1);
 

@@ -387,6 +387,28 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
     e->status_seq++;
 }
 
+int tr_bar_status_format_ind(const tr_bar_status_t *st, double ps_flat, bool first,
+                             char *buf, size_t cap) {
+    if (st == 0 || buf == 0 || cap == 0) {
+        return 0;
+    }
+    return snprintf(buf, cap,
+                    "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d,"
+                    "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%d,%lld,%d,%.10g,%.10g,%.10g]",
+                    first ? "" : ",",
+                    st->closed ? 1 : 0, st->reg_valid ? 1 : 0, st->reg_line, st->reg_r2,
+                    st->pred[0], st->pred[1], st->pred[2],
+                    st->score, st->ob_valid ? 1 : 0, st->ob_score,
+                    st->residual, st->pvol,
+                    st->pred_dir[0], st->pred_dir[1], st->pred_dir[2],
+                    st->mkt_valid ? 1 : 0, st->mkt_center, st->mkt_u1, st->mkt_l1,
+                    st->mkt_u2, st->mkt_l2,
+                    st->final_valid, st->final_dir, st->final_state, st->final_strength,
+                    floor(st->reg_line / ps_flat + 0.5) * ps_flat,
+                    (int)ps_flat, (long long)st->trading_day,
+                    st->sma_valid, st->sma[0], st->sma[1], st->sma[2]);
+}
+
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar) {
     tr_pipeline_t *p = (tr_pipeline_t *)ctx;
     tr_engine_t *e = p->engine;
@@ -400,6 +422,9 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     tr_session_trading_day(&p->session, bar->open_time_us, &day);
     bool session_first = !p->has_prev_day || day != p->prev_trading_day;
     bool is_new_bar = !p->has_prev_bar || bar->open_time_us != p->prev_bar_open;
+    /* 과거 봉 정정(늦은 틱): open_time이 스트림 위치보다 과거인 이벤트. 정정은 누적
+     * 상태(이평선 창·⑤ 체인·위치 마커)를 전진시키지 않는다 (⑤ 체인 게이트와 동일) */
+    bool is_correction = p->has_prev_bar && bar->open_time_us < p->prev_bar_open;
     bool closed = env->kind == TR_EVENT_CANDLE_CLOSED;
 
     tr_ind_eval_t ev;
@@ -419,10 +444,14 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     }
     tr_htf_curve_eval(&p->htf, (double)bar->high, (double)bar->low);
 
-    /* 이평선 5/20/60: 진행 봉 재호출은 현재 슬롯 덮어쓰기 (tr_sma_on_bar 계약) */
-    tr_sma_on_bar(&p->sma5, (double)bar->close, is_new_bar);
-    tr_sma_on_bar(&p->sma20, (double)bar->close, is_new_bar);
-    tr_sma_on_bar(&p->sma60, (double)bar->close, is_new_bar);
+    /* 이평선 5/20/60: 진행 봉 재호출은 현재 슬롯 덮어쓰기 (tr_sma_on_bar 계약).
+     * 과거 봉 정정 이벤트는 창에서 제외한다 — 정정 봉은 is_new_bar=true로 보여
+     * 게이트 없이 갱신하면 과거 종가가 새 슬롯으로 push되어 창이 오염된다 */
+    if (!is_correction) {
+        tr_sma_on_bar(&p->sma5, (double)bar->close, is_new_bar);
+        tr_sma_on_bar(&p->sma20, (double)bar->close, is_new_bar);
+        tr_sma_on_bar(&p->sma60, (double)bar->close, is_new_bar);
+    }
 
     tr_score1m_input_t sin;
     memset(&sin, 0, sizeof(sin));
@@ -443,8 +472,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
      * 봉당 1회 상태 진행: bar_index는 새 봉에서만 증가하고, 모듈은 세션 경계를
      * bar_index 게이트로 1회만 저장한다 (진행 봉 재호출은 현재 봉 H/L/C 집계만 갱신).
      * 과거 봉 정정(늦은 틱) 이벤트는 체인에서 제외한다 — 마지막 확정 final_* 값이 유지된다. */
-    if (e->cfg.timeframe_sec == 60 &&
-        (!p->has_prev_bar || bar->open_time_us >= p->prev_bar_open)) {
+    if (e->cfg.timeframe_sec == 60 && !is_correction) {
         if (is_new_bar) {
             p->bar_index++;
         }
@@ -648,7 +676,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     /* 스트림 위치 마커는 현재 봉 이벤트에서만 전진한다. 과거 봉 정정(늦은 틱)이
      * trading day·봉 위치를 되돌리면 다음 현재 봉이 세션 첫 봉/새 봉으로 오인되어
      * ⑤ 일봉 체인이 중간 집계를 완성 일봉으로 오저장할 수 있다 */
-    if (!p->has_prev_bar || bar->open_time_us >= p->prev_bar_open) {
+    if (!is_correction) {
         p->prev_trading_day = day;
         p->has_prev_day = true;
         p->prev_bar_open = bar->open_time_us;
