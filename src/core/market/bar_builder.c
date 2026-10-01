@@ -196,11 +196,21 @@ tr_bb_status_t tr_bar_builder_on_tick(tr_bar_builder_t *bb, const tr_event_envel
     } else if (bb->bars.count > 0) {
         /* 마지막 확정 봉 이후 타이머 없이 건어뛴 구간도 채운다 */
         tr_candle_t last;
-        if (tr_ring_at(&bb->bars, 0, &last) && last.state == TR_CANDLE_CLOSED &&
-            last.close_time_us < open) {
-            tr_time_us_t session_close;
-            if (tr_session_span(&bb->cfg.session, last.open_time_us, 0, &session_close)) {
-                fill_empty_bars(bb, last.close_time_us, open, session_close, t);
+        if (tr_ring_at(&bb->bars, 0, &last) && last.state == TR_CANDLE_CLOSED) {
+            if (open < last.close_time_us) {
+                /* 늦은 틱: 틱 구간이 마지막 확정 봉과 같거나 더 과거다.
+                 * has_open=false일 때 아무 검사 없이 새 OPEN 봉을 push해 같은 분의
+                 * 중복·역순 봉이 링에 추가되던 결함을 고친다
+                 * (라이브 실측: 백필이 09:12 봉까지 주입한 뒤 체결 시각 09:11인 늦은 틱이
+                 * has_open=false에서 2회 도착해 09:11 봉이 2개 추가로 생성됨).
+                 * 링에서 정확한 구간을 찾아 제자리 정정하고, 못 찾으면 drop한다. */
+                return handle_late_tick(bb, env, tick, open, close);
+            }
+            if (last.close_time_us < open) {
+                tr_time_us_t session_close;
+                if (tr_session_span(&bb->cfg.session, last.open_time_us, 0, &session_close)) {
+                    fill_empty_bars(bb, last.close_time_us, open, session_close, t);
+                }
             }
         }
     }

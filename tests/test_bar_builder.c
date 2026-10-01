@@ -262,11 +262,102 @@ static void test_inject_bar(void) {
     TR_CHECK(!tr_bar_builder_inject_bar(&bb, b1.close_time_us, &b1));
 }
 
+/* 타이머 확정(has_open=false) 직후, 방금 확정된 봉과 같은 분의 늦은 틱이 도착하는 경우.
+ * 라이브 실측 결함: 백필이 09:12 봉까지 주입한 뒤 체결 시각 09:11인 늦은 틱이 has_open=false에서
+ * 새 OPEN 봉을 만들어 같은 분의 중복·역순 봉이 링에 추가됐다. */
+static void test_late_tick_no_open_same_minute(void) {
+    tr_bar_builder_t bb;
+    collect_t c;
+    init_builder(&bb, &c, TR_NO_TRADE_SKIP);
+
+    feed(&bb, kst(9, 11, 10), 100, 10, 1, TR_BB_ACCEPTED);
+    tr_bar_builder_on_timer(&bb, kst(9, 12, 0)); /* 09:11 봉 확정 → has_open=false */
+    TR_CHECK(c.n_closed == 1);
+    TR_CHECK(!bb.has_open);
+    TR_CHECK(tr_ring_count(&bb.bars) == 1);
+
+    /* 같은 분(09:11)의 늦은 체결: 새 봉이 아니라 제자리 정정이어야 한다 */
+    feed(&bb, kst(9, 11, 40), 80, 4, 2, TR_BB_LATE_CORRECTED);
+    TR_CHECK(tr_ring_count(&bb.bars) == 1); /* 중복 봉이 생기지 않음 */
+    TR_CHECK(!bb.has_open);
+    tr_candle_t prev;
+    TR_CHECK(tr_bar_builder_at(&bb, 0, &prev));
+    TR_CHECK(prev.open_time_us == kst(9, 11, 0) && prev.close_time_us == kst(9, 12, 0));
+    TR_CHECK(prev.state == TR_CANDLE_CLOSED);
+    TR_CHECK(prev.low == 80 && prev.close == 80 && prev.volume == 14);
+    TR_CHECK(prev.revision == 1);
+    TR_CHECK((prev.quality & TR_QUALITY_CORRECTED) != 0);
+    TR_CHECK((prev.quality & TR_QUALITY_LATE) != 0);
+    TR_CHECK(bb.n_late_corrected == 1);
+}
+
+static void test_late_tick_no_open_two_minutes_back(void) {
+    tr_bar_builder_t bb;
+    collect_t c;
+    init_builder(&bb, &c, TR_NO_TRADE_SKIP);
+
+    feed(&bb, kst(9, 10, 10), 100, 10, 1, TR_BB_ACCEPTED);
+    feed(&bb, kst(9, 11, 10), 110, 5, 2, TR_BB_ACCEPTED_NEW_BAR); /* 09:10 확정, 09:11 OPEN */
+    tr_bar_builder_on_timer(&bb, kst(9, 12, 0));                 /* 09:11 확정 → has_open=false */
+    TR_CHECK(tr_ring_count(&bb.bars) == 2);
+
+    /* 두 분 전(09:10) 늦은 체결: 09:10 봉을 제자리 정정, 새 봉 없음 */
+    feed(&bb, kst(9, 10, 50), 90, 2, 3, TR_BB_LATE_CORRECTED);
+    TR_CHECK(tr_ring_count(&bb.bars) == 2);
+    tr_candle_t newest, older;
+    TR_CHECK(tr_bar_builder_at(&bb, 0, &newest));
+    TR_CHECK(tr_bar_builder_at(&bb, 1, &older));
+    TR_CHECK(newest.open_time_us == kst(9, 11, 0) && newest.revision == 0); /* 09:11 봉 물변이 없어야 함 */
+    TR_CHECK(older.open_time_us == kst(9, 10, 0));
+    TR_CHECK(older.low == 90 && older.close == 90 && older.volume == 12);
+    TR_CHECK(older.revision == 1);
+    TR_CHECK((older.quality & TR_QUALITY_CORRECTED) != 0);
+    TR_CHECK((older.quality & TR_QUALITY_LATE) != 0);
+    TR_CHECK(bb.n_late_corrected == 1);
+}
+
+/* 정상 회귀: 확정 봉 직후(has_open=false) 새 분의 틱은 새 봉을 만든다 */
+static void test_new_minute_after_timer_close_opens_bar(void) {
+    tr_bar_builder_t bb;
+    collect_t c;
+    init_builder(&bb, &c, TR_NO_TRADE_SKIP);
+
+    feed(&bb, kst(9, 10, 10), 100, 10, 1, TR_BB_ACCEPTED);
+    tr_bar_builder_on_timer(&bb, kst(9, 11, 0)); /* 09:10 봉 확정 → has_open=false */
+    TR_CHECK(!bb.has_open);
+
+    feed(&bb, kst(9, 11, 5), 105, 3, 2, TR_BB_ACCEPTED);
+    TR_CHECK(tr_ring_count(&bb.bars) == 2);
+    TR_CHECK(bb.n_late_corrected == 0 && bb.n_late_dropped == 0);
+    const tr_candle_t *cur = tr_bar_builder_current(&bb);
+    TR_CHECK(cur != 0 && cur->state == TR_CANDLE_OPEN);
+    TR_CHECK(cur->open_time_us == kst(9, 11, 0) && cur->open == 105);
+}
+
+/* 링에 없는 아주 오래된 구간의 틱은 버린다 */
+static void test_late_tick_no_open_dropped(void) {
+    tr_bar_builder_t bb;
+    collect_t c;
+    init_builder(&bb, &c, TR_NO_TRADE_SKIP);
+
+    feed(&bb, kst(9, 10, 10), 100, 10, 1, TR_BB_ACCEPTED);
+    tr_bar_builder_on_timer(&bb, kst(9, 11, 0)); /* 09:10 봉 확정 → has_open=false */
+
+    feed(&bb, kst(9, 0, 30), 90, 1, 2, TR_BB_LATE_DROPPED);
+    TR_CHECK(bb.n_late_dropped == 1);
+    TR_CHECK(tr_ring_count(&bb.bars) == 1); /* 새 봉이 생기지 않음 */
+    TR_CHECK(!bb.has_open);
+}
+
 int main(void) {
     test_basic_ohlcv_and_close();
     test_duplicate_ticks();
     test_late_correction();
     test_late_dropped_when_out_of_buffer();
+    test_late_tick_no_open_same_minute();
+    test_late_tick_no_open_two_minutes_back();
+    test_new_minute_after_timer_close_opens_bar();
+    test_late_tick_no_open_dropped();
     test_fill_empty_bars();
     test_session_force_close();
     test_inject_bar();
