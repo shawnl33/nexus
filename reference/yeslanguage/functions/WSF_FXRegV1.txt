@@ -1,0 +1,158 @@
+// 해외선물 전용 사본. 공용 원본을 덮어쓰지 말 것.
+Input : 세션초기화(Numeric), 세션봉수(Numeric), 회귀가격입력(Numeric),
+        회귀선(NumericRef),
+        회귀기울기(NumericRef),
+        회귀선_구분(NumericRef),
+        회귀유효(NumericRef),
+        회귀신뢰도(NumericRef),
+        회귀잔차(NumericRef);
+
+//======================================================================
+// WSF_FXRegV1
+// - 틱/초/분/일/주/월봉 공용 자동 선형회귀 함수
+// - 차트의 봉 종류와 관계없이 새 봉마다 자료를 한 번 저장
+// - 오래된 가격 x=0, 최신 가격 x=n-1로 계산
+// - 1/5/15/30분봉: 장 시작 첫 봉에서 자동 초기화
+// - 30분 초과 분봉과 일/주/월봉: 이전 봉과 연속 계산
+// - 차트 주기에 따라 회귀기간을 자동 선택
+//======================================================================
+
+Var : n(20), 최소회귀봉수(5), 계산개수(0), i(0), 새봉(0),
+      최근날짜(-1), 최근시간(-1), 유효개수(0), 자동장초기화(0),
+      sumX(0), sumY(0), sumXY(0), sumX2(0), sumY2(0), 분모(0),
+      R2분자(0), R2분모(0), SST(0), SSE(0),
+      LRS(0), B(0), 현재회귀값(0);
+
+Array : 회귀가격[100](0);
+
+// 차트 주기에 따른 자동 회귀기간
+// DataCompress: 분봉=2, 일봉=3, 주봉=4, 월봉=5
+n = 20;
+
+// 틱봉과 초봉
+If DataCompress == 0 Then n = 30;
+If DataCompress == 1 Then n = 30;
+
+// 분봉: 넓은 구간부터 설정한 뒤 짧은 구간으로 덮어씀
+If DataCompress == 2 Then
+{
+    n = 12;
+    If BarInterval <= 30 Then n = 6;
+    If BarInterval <= 15 Then n = 10;
+    If BarInterval <= 5 Then n = 18;
+    If BarInterval <= 1 Then n = 30;
+}
+
+// 일봉 약 1거래월, 주봉 약 1분기, 월봉 약 1년
+If DataCompress == 3 Then n = 20;
+If DataCompress == 4 Then n = 13;
+If DataCompress == 5 Then n = 12;
+
+// DataCompress: 분봉=2, BarInterval: 분봉의 시간 간격
+자동장초기화 = 0;
+If DataCompress == 2 && BarInterval <= 30 Then
+    자동장초기화 = 1;
+
+// 차트 주기와 관계없이 날짜와 시간으로 새 봉 판정
+// 분봉은 시간이 달라지고, 일봉은 날짜가 달라짐
+새봉 = 0;
+If sDate != 최근날짜 Then 새봉 = 1;
+If sTime != 최근시간 Then 새봉 = 1;
+
+If 새봉 == 1 Then
+{
+    최근날짜 = sDate;
+    최근시간 = sTime;
+}
+
+// 배열 이동은 각 차트의 새 봉에서 한 번만 실행
+If 새봉 == 1 Then
+{
+    // 30분 이하 분봉은 장 시작 첫 봉에서 전일 자료 제거
+    If 세션초기화 == 1 Then
+    {
+        For i = 0 To 99
+        {
+            회귀가격[i] = 0;
+        }
+
+        유효개수 = 0;
+    }
+
+    For i = 98 DownTo 0
+    {
+        회귀가격[i+1] = 회귀가격[i];
+    }
+
+    If 유효개수 < n Then
+        유효개수 = 유효개수 + 1;
+}
+
+// 진행 중인 현재 봉은 배열 이동 없이 최신 가격만 갱신
+회귀가격[0] = 회귀가격입력;
+
+// 장 첫 봉에는 안전한 기본값 반환
+회귀선 = 회귀가격입력;
+회귀기울기 = 0;
+회귀선_구분 = 0;
+회귀유효 = 0;
+회귀신뢰도 = 0;
+회귀잔차 = 0;
+
+// 장 시작 후 표본을 늘리되 최소 5봉부터 방향을 인정
+계산개수 = Min(유효개수, n);
+
+If 계산개수 >= 최소회귀봉수 Then
+{
+    sumX = 0;
+    sumY = 0;
+    sumXY = 0;
+    sumX2 = 0;
+    sumY2 = 0;
+
+    // 유효 구간의 끝이 가장 오래된 값, 회귀가격[0]이 최신값
+    For i = 0 To 계산개수-1
+    {
+        sumX  = sumX  + i;
+        sumY  = sumY  + 회귀가격[계산개수-1-i];
+        sumXY = sumXY + i * 회귀가격[계산개수-1-i];
+        sumX2 = sumX2 + i * i;
+        sumY2 = sumY2 + 회귀가격[계산개수-1-i]
+                        * 회귀가격[계산개수-1-i];
+    }
+
+    분모 = 계산개수 * sumX2 - sumX * sumX;
+
+    If 분모 != 0 Then
+    {
+        LRS = (계산개수 * sumXY - sumX * sumY) / 분모;
+        B   = (sumY * sumX2 - sumX * sumXY) / 분모;
+
+        // 최신 봉은 x=계산개수-1
+        현재회귀값 = LRS * (계산개수-1) + B;
+
+        회귀선 = 현재회귀값;
+        회귀기울기 = LRS;
+        회귀선_구분 = IFF(LRS > 0, 1,
+                         IFF(LRS < 0, -1, 0));
+        회귀유효 = 1;
+
+        // 결정계수 R²: 0=설명력 낮음, 1=직선 적합도 높음
+        R2분자 = (계산개수 * sumXY - sumX * sumY)^2;
+        R2분모 = (계산개수 * sumX2 - sumX * sumX)
+               * (계산개수 * sumY2 - sumY * sumY);
+
+        If R2분모 > 0 Then
+            회귀신뢰도 = Min(1, Max(0, R2분자 / R2분모));
+
+        // 회귀선 주변의 잔차 표준편차
+        SST = sumY2 - (sumY * sumY / 계산개수);
+        SSE = Max(0, SST * (1 - 회귀신뢰도));
+
+        If 계산개수 > 2 Then
+            회귀잔차 = SquareRoot(SSE / (계산개수 - 2));
+    }
+}
+
+Value1 = 1;
+WSF_FXRegV1 = Value1;

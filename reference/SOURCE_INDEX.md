@@ -56,3 +56,61 @@
 | `reference/yeslanguage/functions/WSF_DailyMarketProfileV1.txt` | `a0127e49e016db69120cb64117a0ebfae8f45e99f9201ed172a6a0707369368b` |
 | `reference/yeslanguage/functions/WSF_Daily_LinRegTrendV1.txt` | `666a01c472146b725eed70d9a8103fb68b098fdb1641578e214875d9a44ddfdd` |
 | `reference/yeslanguage/YLHelp.pdf` | `192e5253fd09e041b18f6456ce21a198ceca995db7a4d2a0edc74cf86c938424` |
+
+2026-10-01 추가 제공 (해외선물 계열: OSF 15 + WSF_FX 13 = 함수 28, 지표 22 — 전수 타입 검증으로 폴드와 일치 확인. zip 2개는 같은 파일들의 배포 묶음):
+
+| 묶음 내 파일 | SHA-256 |
+|---|---|
+| `reference/yeslanguage/functions/OSF_1m_DailyAlignV2.txt` | `4150b417cc78e14216d54eea5fd3d06a5271d44599266ccc95de1cb4bdc10fc3` |
+| `reference/yeslanguage/functions/OSF_1m_DailyTrendLinkV1.txt` | `f7c604f4bb2d0b3f3e8fdc48eed510984ffde18bf1bee443c732caef422dd1b2` |
+| `reference/yeslanguage/functions/OSF_AutoSessionADXV1.txt` | `06d0c66ca3c934857b431186b450fb490800a3983d9d22d5513d5d4539601506` |
+| `reference/yeslanguage/functions/OSF_ClvPressureV1.txt` | `ed6b47eec832eea72d61b04721ccca99a14ee11e40eb17e8e8c0b8d6e3271ebe` |
+| `reference/yeslanguage/functions/OSF_ClvVolFlowV1.txt` | `2718144360b3d4aaf9a9010af7fa07ee2138d270ef638154b976920a75b4dd18` |
+| `reference/yeslanguage/functions/OSF_Daily_LinRegTrendV1.txt` | `1b07fa02ef23b85b5ddbdbc4d0d246927f8c6c5b44ebb1edbc7ef4263ba279a0` |
+| `reference/yeslanguage/functions/OSF_DailyMarketProfileV1.txt` | `1b9ceed2520dcbc8b352d7974a91ec681b40d7b72af34958110e442d6f4d7af3` |
+| `reference/yeslanguage/functions/OSF_GapRegimeV1.txt` | `c70b101485bc300c0fd71093f4418b63b62381dbc274503819b6b0b9e5e4266d` |
+| `reference/yeslanguage/functions/OSF_Htf_CurvePredict.txt` | `443d9b18fd49cf7ec5082659e0a401e5e4a8e519c13d2a8e4d8f275ad2270baf` |
+| `reference/yeslanguage/functions/OSF_Mtf_LinRegPredictV4.txt` | `c3296c195276ae9c1d6a3762fc6a17dfade13b87f6fba6b1bd1db9f5e5d4a8e6` |
+| `reference/yeslanguage/functions/OSF_Mtf_LinRegV3.txt` | `594941207b28779748789a65b334509f6339b7e82fae7235dd7cc1407f837b06` |
+| `reference/yeslanguage/functions/OSF_OrderBookDirectionV1.txt` | `e94435f2ebf75bbf68dd8bac47022db0593e1d79a7e619fe23c13afca0cd2912` |
+| `reference/yeslanguage/functions/OSF_OrderBookDirectionV2.txt` | `bba3a548a4f3705fb1a40c99d011c9a80d74d12316467e343475f13caa702380` |
+| `reference/yeslanguage/functions/OSF_SwingFibMemoryV4.txt` | `57e4a1907193c863c9abb8f1c7830d53901eeac2a48b884de84df133c55ff4c7` |
+| `reference/yeslanguage/functions/OSF_VolFlowV1.txt` | `3be37a1c495568674b9fae2c6f6f786c0be8af8ebd7d7844eab75242771bb2aa` |
+| `reference/yeslanguage/functions/WSF_FXADXV1.txt` | `649cb1c8d59cd82cbc0bfd9dfbb82e5f980a765190d187840f437125b7dc42dd` |
+| `reference/yeslanguage/functions/WSF_FXAlignV1.txt` | `8c74cfc81607ecc9c559040d004e5e80cd8baffabf6cd36f5782076b62f8c013` |
+| `reference/yeslanguage/functions/WSF_FXCurveV1.txt` | `ecab4516d20a722c3fa475cac06e8dd0a96dcc253e4ea057d81a6b9e4df18470` |
+| `reference/yeslanguage/functions/WSF_FXFutureValuesV1.txt` | `75ead13cbdbc67db0153cf7bada6a095a01a44d0f9c54247dd6bb102a7350c66` |
+| `reference/yeslanguage/functions/WSF_FXGapV1.txt` | `ac22118c6bff120db140ea91674563f05d20b8b8cdf606aa5f134abe31ba3611` |
+| `reference/yeslanguage/functions/WSF_FXMarketV1.txt` | `f815f4202e48a72f7dc2e3cdfb456eb864d209a785aa57a60a1bde3d89faf251` |
+| `reference/yeslanguage/functions/WSF_FXPredictV2.txt` | `0ac8dcaa31277cf2f51fcd49f9d4b305330db239648aef31ae87d2c307d233ef` |
+| `reference/yeslanguage/functions/WSF_FXRegV1.txt` | `fff4c0dae31d1cb1f78eeaf5cb4008af7684d5bd2b2220c204d27c180d3fbd82` |
+| `reference/yeslanguage/functions/WSF_FXSessionKeyV1.txt` | `96b7f495cd4be1e5851e08378918d74cb0249fe9eb228d880e9e32916927c1be` |
+| `reference/yeslanguage/functions/WSF_FXSwingV1.txt` | `120626fd573307d98aac3fc307d1a36d2487003b103748d0ab2b8ab48f5b9eb4` |
+| `reference/yeslanguage/functions/WSF_FXSyntheticLinesV1.txt` | `0e6ba93274633c6ce1a1a41d8c72bad0737e8b0b557cb057a747edc06633af7e` |
+| `reference/yeslanguage/functions/WSF_FXTrendStateV1.txt` | `c7edc984aea38a20b59bda755e21f14618d01853d3d5a3178790e75f14227fdb` |
+| `reference/yeslanguage/functions/WSF_FXTrendV1.txt` | `542fa04827b891f89fa1a74c0f6d70ac2408c45386315b60591a8f922b1157e6` |
+| `reference/yeslanguage/indicators/#우드스탁_스나이퍼스코프_해외선물_Data2.txt` | `6e1626dad21c086e49fcacc4075670e884b55a36423ff4532de50ebdf66e00eb` |
+| `reference/yeslanguage/indicators/#우드스탁_가격거래량압축_해외선물V1.txt` | `001457a723dc5f8bd62e8b42e79cb0ba097b3e3fe5a003772089616bc055ebf2` |
+| `reference/yeslanguage/indicators/#우드스탁_스나이퍼스코프_해외선물V1.txt` | `2c7e463369350520ab6ab3ecf3f5a1c3d79b28e864f28fbc5d322472bbbfc39c` |
+| `reference/yeslanguage/indicators/#우드스탁_삼선비율점수_해외선물V1.txt` | `79063dfb5b2ffdceca694cde60eff786cfbdaaa6059dac2ff37badef589a4a62` |
+| `reference/yeslanguage/indicators/#우드스탁_스나이퍼점수_해외선물V1.txt` | `c23589b11f509aea2b9e35ba73670316d406900578fe46fa2ddd8da7e7f2dc69` |
+| `reference/yeslanguage/indicators/#우드스탁_점수통합_해외선물V1.txt` | `6f0a1d26ee13f6a20bd7fa88389cd87c1c3d41891ffc223db3abb72ba5788052` |
+| `reference/yeslanguage/indicators/#우드스탁_스나이퍼스코프_해외선물V2.txt` | `2e056bbd77ca8aabd00ae3a2abaf6836666e02be953083d3c622575b41ccd9d5` |
+| `reference/yeslanguage/indicators/#우드스탁_스나이퍼스코프_해외선물V3.txt` | `18be12f146da297777de7204cd902dc89c5ffd6392fb7b392909f3cf575141c1` |
+| `reference/yeslanguage/indicators/woodstock_mirae_curve_1m_v16.txt` | `92a1a2c300e1d2566614ba068e2fd67cd7a3f982b69e2557dba7df8f9744da1d` |
+| `reference/yeslanguage/indicators/#WSF_해외선물지속목표차삼선V1.txt` | `885962e86179528b11c2eaa2dca3466b931e5f65c4b0c7165c4b44583771819c` |
+| `reference/yeslanguage/indicators/#WSF_해외선물지속목표차오선V1.txt` | `8e53371015e6dd6deae4a16268419678722e23a9a4f186fe68f21cd0c41399dc` |
+| `reference/yeslanguage/indicators/#WSF_해외선물지속목표차통합V1.txt` | `6feeee644ceb6696be9673fc1d2515bf72394152140d78a073a187e2246a75b1` |
+| `reference/yeslanguage/indicators/#WSF_해외선물삼선구간이탈V1.txt` | `b35292f8a2ec5c05e4b0d152d65c11ed4eac488e112fe8721220679bb13bc6ed` |
+| `reference/yeslanguage/indicators/#WSF_해외선물압축첫이탈V1.txt` | `9f94f1fd00bd8d2efb9ddeb9e7d387b4f98506105398b74b20fe5e91f00e8575` |
+| `reference/yeslanguage/indicators/#WSF_해외선물양매수가설V1.txt` | `e2181dcb97bcf290b521928f25a1a4d3b4370d13a0dc13ea3f87f5cd47bcf6db` |
+| `reference/yeslanguage/indicators/#WSF_해외선물양매수통합V1.txt` | `46e4127cf5049fa45c6fd6303459d05b3666b08b056778b8ed4cc95f6d3d366e` |
+| `reference/yeslanguage/indicators/#WSF_해외선물평탄회귀차V1.txt` | `7fc7e413913ed7c8585cef3b2c3baf66e7ef901e5eddffda493e97a267ba0e71` |
+| `reference/yeslanguage/indicators/#WSF_해외선물미래곡선V1.txt` | `1760ec82b6d641d231f2a3abe9f885cc503475b1ab44105d98e6e3f5724aa01d` |
+| `reference/yeslanguage/indicators/#WSF_해외선물삼선구간이탈V2.txt` | `42c3e10551941172a92384edba967eb445db7aefbf92230bf3bb27f443933e57` |
+| `reference/yeslanguage/indicators/#WSF_해외선물양매수가설V2.txt` | `de8e67757fab1e09af049577d252d9f5a68a279cfeabb7edc4fb2adddd9f850d` |
+| `reference/yeslanguage/indicators/#WSF_해외선물양매수통합V2.txt` | `3ae2c471ff3b1a8ba3ae389f78711f865d2199c5028b8c58ea91102ac61305b9` |
+| `reference/yeslanguage/indicators/#WSF_해외선물미래곡선V2.txt` | `1760ec82b6d641d231f2a3abe9f885cc503475b1ab44105d98e6e3f5724aa01d` |
+| `reference/yeslanguage/indicators/#WSF_해외선물미래곡선V3.txt` | `a1ab49bec9570705e49fb66ac8ca0915643722560d6fb6f2f292f33e6394b6c6` |
+| `reference/yeslanguage/OSF_1m_DailyAlignV2.zip` | `efa26be046d9764f11e77f76c680fd33167b68bb375f5aa1f7e0921a4c56677e` |
+| `reference/yeslanguage/#WSF_해외선물미래곡선V2.zip` | `fc9f63f922e9c85ab47e7e64c58d358737c83b54909920b06571248cf31b61e9` |
