@@ -7,6 +7,9 @@
  * - 구독: S3_/K3_(체결), H1_/HA_(호가잔량), FC9/FH9(코스피200선물 체결/호가).
  * - 재연결 시 재인증(토큰 갱신)·재구독한다. 단, 구독 복원만으로 데이터 연속성이 회복됐다고
  *   선언하지 않는다 — 공백 감지는 순번·시각과 별도 보충 조회(과거 데이터)로 처리한다.
+ * - 연속 단기 세션(LS_RT_REAUTH_THRESHOLD회)은 서버 측 토큰 무효화로 보고 토큰을
+ *   강제 재발급한다 (ls_auth_ensure는 명목 유효기간만 보기 때문). 발급 API 해머 방지로
+ *   쿨다운(LS_RT_REAUTH_COOLDOWN_US)을 둔다.
  * - 입력 큐에는 상한이 있고 포화 횟수를 노출한다 (계획서 §5). 조용히 버리지 않는다.
  */
 
@@ -94,5 +97,27 @@ bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id
  * 건강한 세션(>= LS_RT_HEALTHY_MS)이면 min_ms로 리셋하고(빠른 복구),
  * 아니면 current_retry_ms를 유지한다 — 호출자가 지수 백오프로 증가시킨다. */
 int ls_rt_next_retry_ms(int64_t survived_ms, int current_retry_ms, int min_ms, int max_ms);
+
+/* 연속 단기 세션이 이 횟수에 도달하면 토큰 무효화 가능성으로 보고 강제 재발급을 시도한다.
+ * (2026-10-01 사건: 서버 측 토큰 무효화 후 명목 유효기간이 남은 캐시 토큰으로
+ *  28분간 1600회 이상 단기 세션이 반복됐다.) */
+#define LS_RT_REAUTH_THRESHOLD 3
+
+/* 강제 재발급 쿨다운(µs): 마지막 시도 후 이 시간이 지나기 전에는 다시 시도하지 않는다.
+ * 서버 거절 원인이 토큰이 아닐 때 토큰 발급 API를 두드리는 루프를 막기 위함이다. */
+#define LS_RT_REAUTH_COOLDOWN_US (60LL * 1000000LL)
+
+/* 세션 종료 시 연속 단기 세션 카운터 갱신 (테스트 가능하도록 분리, 순수 로직).
+ * healthy(건강한 세션 이후 단절)면 0으로 리셋, 아니면(단기 세션·수립 실패) +1. */
+void ls_rt_note_session_end(bool healthy, int *consec_short);
+
+/* 강제 재발급 시도 여부 판정 (테스트 가능하도록 분리, 순수 함수).
+ * 카운터가 LS_RT_REAUTH_THRESHOLD에 도달했고 마지막 시도 이후 쿨다운이 지났으면 true.
+ * last_reauth_us가 0이면 아직 시도한 적 없음(즉시 허용). */
+bool ls_rt_should_reauth(int consec_short, int64_t last_reauth_us, int64_t now_us);
+
+/* 구독 ACK의 거절 판정 (테스트 가능하도록 분리, 순수 함수).
+ * header.rsp_cd가 문자열로 존재하고 "00000"이 아니면 true (정상 ACK는 false). */
+bool ls_rt_sub_ack_rejected(const char *body, size_t len);
 
 #endif

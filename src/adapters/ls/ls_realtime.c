@@ -37,6 +37,8 @@ struct tr_ls_rt {
     int64_t next_retry_us;
     int retry_ms;
     int64_t established_at_us; /* 세션 수립 시각(µs). 0이면 미수립 */
+    int consec_short;          /* 연속 단기 세션 수 (건강한 세션 이후 단절 시 리셋) */
+    int64_t last_reauth_us;    /* 마지막 토큰 강제 재발급 시도 시각(µs). 0이면 미시도 */
     char rx_buf[LS_RT_RX_BUF];
     size_t rx_len;
     bool sub_sent;
@@ -219,6 +221,52 @@ int ls_rt_next_retry_ms(int64_t survived_ms, int current_retry_ms, int min_ms, i
     return current_retry_ms;
 }
 
+void ls_rt_note_session_end(bool healthy, int *consec_short) {
+    if (healthy) {
+        *consec_short = 0;
+    } else {
+        (*consec_short)++;
+    }
+}
+
+bool ls_rt_should_reauth(int consec_short, int64_t last_reauth_us, int64_t now_us) {
+    if (consec_short < LS_RT_REAUTH_THRESHOLD) {
+        return false;
+    }
+    /* 미시도(0)이면 즉시 허용. 시계 역행(음수 차)은 쿨다운 유지로 처리한다 */
+    return last_reauth_us <= 0 || now_us - last_reauth_us >= LS_RT_REAUTH_COOLDOWN_US;
+}
+
+bool ls_rt_sub_ack_rejected(const char *body, size_t len) {
+    yyjson_doc *doc = yyjson_read((char *)body, len, 0);
+    if (doc == 0) {
+        return false;
+    }
+    yyjson_val *header = yyjson_obj_get(yyjson_doc_get_root(doc), "header");
+    yyjson_val *rsp_cd = yyjson_obj_get(header, "rsp_cd");
+    bool rejected = yyjson_is_str(rsp_cd) && strcmp(yyjson_get_str(rsp_cd), "00000") != 0;
+    yyjson_doc_free(doc);
+    return rejected;
+}
+
+/* 구독 ACK 거절 로그. 토큰 무효 등 서버 거절 원인(rsp_cd/rsp_msg)이 로그에 바로 보이게 한다.
+ * (2026-10-01 사건: 구독 거절이 28분간 반복됐지만 파싱하지 않아 원인이 보이지 않았다.) */
+static void log_sub_ack_reject(const char *body, size_t len) {
+    yyjson_doc *doc = yyjson_read((char *)body, len, 0);
+    if (doc == 0) {
+        return;
+    }
+    yyjson_val *header = yyjson_obj_get(yyjson_doc_get_root(doc), "header");
+    const char *tr_cd = yyjson_get_str(yyjson_obj_get(header, "tr_cd"));
+    const char *rsp_cd = yyjson_get_str(yyjson_obj_get(header, "rsp_cd"));
+    const char *rsp_msg = yyjson_get_str(yyjson_obj_get(header, "rsp_msg"));
+    if (rsp_cd != 0) {
+        fprintf(stderr, "ls-rt: 구독 거절 tr_cd=%s rsp_cd=%s rsp_msg=%s\n",
+                tr_cd != 0 ? tr_cd : "?", rsp_cd, rsp_msg != 0 ? rsp_msg : "");
+    }
+    yyjson_doc_free(doc);
+}
+
 /* tr_key 비교: 통합 채널은 서버가 공백 패딩을 붙이므로 후행 공백을 무시한다 */
 static bool key_equal(const char *a, const char *b) {
     size_t la = strlen(a), lb = strlen(b);
@@ -296,7 +344,11 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
             }
         }
         if (rt->sub_sent_idx < rt->n_subs) {
-            /* 구독 ACK — 남은 구독을 본낸다 */
+            /* 구독 ACK — 거절(rsp_cd != "00000")이면 원인을 로그에 남기고,
+             * 정상이면 조용히 남은 구독을 본낸다 */
+            if (ls_rt_sub_ack_rejected((const char *)in, len)) {
+                log_sub_ack_reject((const char *)in, len);
+            }
             send_next_sub(rt);
             break;
         }
@@ -340,9 +392,10 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
         if (rt->state != LS_RT_FAILED) {
             rt->state = LS_RT_RECONNECTING;
             rt->reconnects++;
+            int64_t now = now_us(rt);
             int64_t survived_ms = -1; /* 수립 없이 실패 */
             if (rt->established_at_us > 0) {
-                survived_ms = (now_us(rt) - rt->established_at_us) / 1000;
+                survived_ms = (now - rt->established_at_us) / 1000;
                 rt->established_at_us = 0;
             }
             int next_ms = ls_rt_next_retry_ms(survived_ms, rt->retry_ms,
@@ -351,8 +404,23 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
                 fprintf(stderr, "ls-rt: 짧은 세션 (%lldms 유지 후 단절) — 백오프 유지 %dms\n",
                         (long long)survived_ms, next_ms);
             }
+            /* 연속 단기 세션은 서버 측 토큰 무효화 가능성 — 강제 재발급 후 재접속한다.
+             * ls_auth_ensure는 명목 유효기간만 보기 때문에 여기서 갱신해야 자가치유된다.
+             * 쿨다운으로 발급 API 해머를 막는다 (거절 원인이 토큰이 아닐 수 있으므로). */
+            ls_rt_note_session_end(survived_ms >= LS_RT_HEALTHY_MS, &rt->consec_short);
+            if (ls_rt_should_reauth(rt->consec_short, rt->last_reauth_us, now)) {
+                rt->last_reauth_us = now;
+                if (ls_auth_refresh(rt->cfg.auth)) {
+                    fprintf(stderr, "ls-rt: 연속 단기 세션 %d회 — 토큰 강제 갱신 후 재시도\n",
+                            rt->consec_short);
+                    rt->consec_short = 0;
+                } else {
+                    fprintf(stderr, "ls-rt: 연속 단기 세션 %d회 — 토큰 강제 갱신 실패, 카운터 유지\n",
+                            rt->consec_short);
+                }
+            }
             rt->retry_ms = next_ms;
-            rt->next_retry_us = now_us(rt) + (int64_t)rt->retry_ms * 1000;
+            rt->next_retry_us = now + (int64_t)rt->retry_ms * 1000;
             if (rt->retry_ms < rt->cfg.reconnect_max_ms) {
                 rt->retry_ms *= 2;
             }

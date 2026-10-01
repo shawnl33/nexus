@@ -163,6 +163,59 @@ static void test_retry_backoff(void) {
     TR_CHECK(ls_rt_next_retry_ms(-1, 30000, min_ms, max_ms) == max_ms);
 }
 
+static void test_consec_short_counter(void) {
+    int consec = 0;
+    /* 건강한 세션 이후 단절: 카운터 리셋 */
+    ls_rt_note_session_end(true, &consec);
+    TR_CHECK(consec == 0);
+    /* 단기 세션(수립 실패 포함): +1씩 누적 */
+    ls_rt_note_session_end(false, &consec);
+    TR_CHECK(consec == 1);
+    ls_rt_note_session_end(false, &consec);
+    TR_CHECK(consec == 2);
+    /* 3회째에 재발급 트리거 조건 도달 (아직 시도한 적 없음: last=0) */
+    ls_rt_note_session_end(false, &consec);
+    TR_CHECK(consec == LS_RT_REAUTH_THRESHOLD);
+    TR_CHECK(ls_rt_should_reauth(consec, 0, 1000000000LL));
+    /* 임계값 초과 후에도 계속 누적 (재발급 실패 시 카운터 유지 경로) */
+    ls_rt_note_session_end(false, &consec);
+    TR_CHECK(consec == LS_RT_REAUTH_THRESHOLD + 1);
+    /* 건강한 세션 하나가 끼면 리셋 → 트리거 해제 */
+    ls_rt_note_session_end(true, &consec);
+    TR_CHECK(consec == 0);
+    TR_CHECK(!ls_rt_should_reauth(consec, 0, 1000000000LL));
+}
+
+static void test_reauth_cooldown(void) {
+    const int64_t t0 = 1790800000000000LL; /* 임의 기준 시각 */
+    /* 임계값 미만이면 시각과 무관하게 트리거 안 됨 */
+    TR_CHECK(!ls_rt_should_reauth(0, 0, t0));
+    TR_CHECK(!ls_rt_should_reauth(LS_RT_REAUTH_THRESHOLD - 1, 0, t0));
+    /* 첫 시도(last=0)는 즉시 허용 */
+    TR_CHECK(ls_rt_should_reauth(LS_RT_REAUTH_THRESHOLD, 0, t0));
+    /* 직전 시도 후 쿨다운 내에는 재시도 안 함 (재발급 실패·카운터 유지 케이스) */
+    TR_CHECK(!ls_rt_should_reauth(LS_RT_REAUTH_THRESHOLD, t0, t0));
+    TR_CHECK(!ls_rt_should_reauth(LS_RT_REAUTH_THRESHOLD, t0, t0 + LS_RT_REAUTH_COOLDOWN_US - 1));
+    /* 쿨다운 경과 후에는 다시 시도 */
+    TR_CHECK(ls_rt_should_reauth(LS_RT_REAUTH_THRESHOLD, t0, t0 + LS_RT_REAUTH_COOLDOWN_US));
+    TR_CHECK(ls_rt_should_reauth(LS_RT_REAUTH_THRESHOLD + 2, t0, t0 + LS_RT_REAUTH_COOLDOWN_US));
+}
+
+static void test_sub_ack_rejected(void) {
+    /* 정상 ACK: rsp_cd "00000" → 조용히 통과 */
+    const char *ok =
+        "{\"header\":{\"tr_cd\":\"S3_\",\"tr_key\":\"005930\",\"rsp_cd\":\"00000\",\"rsp_msg\":\"정상처리\"}}";
+    TR_CHECK(!ls_rt_sub_ack_rejected(ok, strlen(ok)));
+    /* 거절 ACK(토큰 무효 등): rsp_cd가 "00000"이 아니면 감지 */
+    const char *rej =
+        "{\"header\":{\"tr_cd\":\"S3_\",\"tr_key\":\"005930\",\"rsp_cd\":\"IGW00121\",\"rsp_msg\":\"유효하지 않은 token 입니다\"}}";
+    TR_CHECK(ls_rt_sub_ack_rejected(rej, strlen(rej)));
+    /* rsp_cd가 없거나 JSON이 아니면 판정 보류 → 거절 아님 */
+    const char *nocd = "{\"header\":{\"tr_cd\":\"S3_\",\"tr_key\":\"005930\"}}";
+    TR_CHECK(!ls_rt_sub_ack_rejected(nocd, strlen(nocd)));
+    TR_CHECK(!ls_rt_sub_ack_rejected("{broken", 7));
+}
+
 int main(void) {
     test_parse_s3_tick();
     test_parse_fut_tick();
@@ -173,5 +226,8 @@ int main(void) {
     test_parse_dh0_night_fut_orderbook();
     test_parse_rejects();
     test_retry_backoff();
+    test_consec_short_counter();
+    test_reauth_cooldown();
+    test_sub_ack_rejected();
     TR_TEST_SUMMARY();
 }
