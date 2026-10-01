@@ -4,8 +4,8 @@
 
 #include <math.h>
 
-#include "core/indicators/atr.h"
-#include "core/indicators/linreg.h"
+#include "core/functions/atr.h"
+#include "core/functions/linreg.h"
 
 static void test_perfect_line(void) {
     double y[10];

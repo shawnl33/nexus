@@ -1,4 +1,4 @@
-#include "core/indicators/atr.h"
+#include "core/functions/atr.h"
 
 #include <math.h>
 #include <string.h>

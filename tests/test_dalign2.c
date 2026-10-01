@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "core/indicators/daily_align_v2.h"
+#include "core/functions/daily_align_v2.h"
 
 static tr_dalign2_input_t make_in(void) {
     tr_dalign2_input_t in;

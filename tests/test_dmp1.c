@@ -5,7 +5,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "core/indicators/daily_market_profile_v1.h"
+#include "core/functions/daily_market_profile_v1.h"
 
 #define CAP 4
 static tr_candle_t storage[CAP];

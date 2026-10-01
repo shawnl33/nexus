@@ -14,7 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "core/indicators/daily_linreg_trend_v1.h"
+#include "core/functions/daily_linreg_trend_v1.h"
 
 typedef struct {
     int32_t reg_period;     /* 일봉회귀기간입력 (5~100 클램프) */

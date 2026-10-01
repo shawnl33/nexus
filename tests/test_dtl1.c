@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "core/indicators/daily_trend_link_v1.h"
+#include "core/functions/daily_trend_link_v1.h"
 
 static tr_dtl1_config_t CFG = {5, 0.40, 1.0};
 

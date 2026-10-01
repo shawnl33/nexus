@@ -1,4 +1,4 @@
-#include "core/indicators/sma.h"
+#include "core/functions/sma.h"
 
 #include <string.h>
 

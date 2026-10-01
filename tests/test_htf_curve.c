@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "core/indicators/htf_curve_predict.h"
+#include "core/functions/htf_curve_predict.h"
 
 /* 완전 직선: i번째 평가(1부터)의 중간값 = 98 + 2i → LRS=2, B=98 */
 static void test_perfect_line(void) {

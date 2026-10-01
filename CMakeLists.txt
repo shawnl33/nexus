@@ -21,23 +21,23 @@ add_library(core STATIC
     src/core/market/candle.c
     src/core/market/ring.c
     src/core/market/session.c
-    src/core/indicators/atr.c
-    src/core/indicators/auto_session_adx_v1.c
-    src/core/indicators/daily_align_v2.c
-    src/core/indicators/daily_linreg_trend_v1.c
-    src/core/indicators/daily_market_profile_v1.c
-    src/core/indicators/daily_trend_link_v1.c
-    src/core/indicators/gap_regime_v1.c
-    src/core/indicators/htf_curve_predict.c
-    src/core/indicators/linreg.c
-    src/core/indicators/linreg_predict_v4.c
-    src/core/indicators/linreg_v3.c
+    src/core/functions/atr.c
+    src/core/functions/auto_session_adx_v1.c
+    src/core/functions/daily_align_v2.c
+    src/core/functions/daily_linreg_trend_v1.c
+    src/core/functions/daily_market_profile_v1.c
+    src/core/functions/daily_trend_link_v1.c
+    src/core/functions/gap_regime_v1.c
+    src/core/functions/htf_curve_predict.c
+    src/core/functions/linreg.c
+    src/core/functions/linreg_predict_v4.c
+    src/core/functions/linreg_v3.c
+    src/core/functions/orderbook_dir_v2.c
+    src/core/functions/sma.c
     src/core/indicators/market_profile.c
     src/core/indicators/memory_lines.c
-    src/core/indicators/orderbook_dir_v2.c
     src/core/indicators/past_prediction.c
     src/core/indicators/score_1m.c
-    src/core/indicators/sma.c
     src/core/model/civil_time.c
     src/core/model/instrument.c
     src/core/model/time_us.c

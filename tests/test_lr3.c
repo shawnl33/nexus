@@ -5,7 +5,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "core/indicators/linreg_v3.h"
+#include "core/functions/linreg_v3.h"
 
 static void make_eval(tr_ind_eval_t *ev, tr_candle_t *bar, int64_t open_us,
                       double high, double low, double close, bool session_first) {

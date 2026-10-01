@@ -16,16 +16,16 @@
 #include <stdint.h>
 
 #include "adapters/ipc/ipc.h"
-#include "core/indicators/daily_align_v2.h"
-#include "core/indicators/daily_trend_link_v1.h"
-#include "core/indicators/gap_regime_v1.h"
-#include "core/indicators/htf_curve_predict.h"
-#include "core/indicators/linreg_v3.h"
+#include "core/functions/daily_align_v2.h"
+#include "core/functions/daily_trend_link_v1.h"
+#include "core/functions/gap_regime_v1.h"
+#include "core/functions/htf_curve_predict.h"
+#include "core/functions/linreg_v3.h"
 #include "core/indicators/market_profile.h"
 #include "core/indicators/memory_lines.h"
-#include "core/indicators/orderbook_dir_v2.h"
+#include "core/functions/orderbook_dir_v2.h"
 #include "core/indicators/score_1m.h"
-#include "core/indicators/sma.h"
+#include "core/functions/sma.h"
 #include "core/market/bar_builder.h"
 
 typedef struct {

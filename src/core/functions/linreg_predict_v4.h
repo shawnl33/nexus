@@ -22,7 +22,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "core/indicators/atr.h"
+#include "core/functions/atr.h"
 #include "core/model/units.h"
 
 typedef struct {

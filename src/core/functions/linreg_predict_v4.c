@@ -1,4 +1,4 @@
-#include "core/indicators/linreg_predict_v4.h"
+#include "core/functions/linreg_predict_v4.h"
 
 #include <math.h>
 #include <string.h>

@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "core/indicators/daily_linreg_trend_v1.h"
+#include "core/functions/daily_linreg_trend_v1.h"
 
 static tr_dlrt1_input_t make_in(void) {
     tr_dlrt1_input_t in;

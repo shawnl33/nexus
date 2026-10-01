@@ -1,4 +1,4 @@
-#include "core/indicators/daily_align_v2.h"
+#include "core/functions/daily_align_v2.h"
 
 #include <math.h>
 #include <string.h>

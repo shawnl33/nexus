@@ -102,8 +102,9 @@ flowchart TB
 | `src/runtime/` | 이벤트 순서, 시계, 명령 적용, 구독, 워밍업, 수명·복구 | 브로커별 파싱·지표 수식 |
 | `src/core/model/` | 식별자, 단위, 시간, 유효성, 공통 값 | 외부 SDK 형식 |
 | `src/core/market/` | Tick·호가·봉·최근 데이터·집계 | 차트 픽셀 렌더링 |
+| `src/core/functions/` | 예스랭귀지 함수 포팅·수학 부품 | 주문 전송 |
 | `src/core/indicators/` | 지표 계산·내부 상태·출력 이력 | 주문 전송 |
-| `src/core/strategy/` | 전략 인스턴스와 거래 의도 | REST·DB 직접 호출 |
+| `src/core/strategies/` | 전략 인스턴스와 거래 의도 | REST·DB 직접 호출 |
 | `src/core/portfolio/` | 포지션·현금·평가·PnL | 체결되지 않은 주문을 보유수량으로 반영 |
 | `src/core/risk/` | 제한 검사·위험 예약 | UI 명령을 무조건 신뢰 |
 | `src/core/order/` | 주문 상태·체결 중복 처리·실행 요청 | 네트워크 구현 |

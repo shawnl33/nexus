@@ -1,4 +1,4 @@
-#include "core/indicators/gap_regime_v1.h"
+#include "core/functions/gap_regime_v1.h"
 
 #include <math.h>
 #include <string.h>

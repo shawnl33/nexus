@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "core/indicators/linreg_predict_v4.h"
+#include "core/functions/linreg_predict_v4.h"
 
 #define LINE 1000.0
 

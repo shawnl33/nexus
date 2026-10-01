@@ -1,4 +1,4 @@
-#include "core/indicators/auto_session_adx_v1.h"
+#include "core/functions/auto_session_adx_v1.h"
 
 #include <math.h>
 #include <string.h>

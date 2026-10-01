@@ -1,9 +1,9 @@
-#include "core/indicators/htf_curve_predict.h"
+#include "core/functions/htf_curve_predict.h"
 
 #include <math.h>
 #include <string.h>
 
-#include "core/indicators/linreg.h"
+#include "core/functions/linreg.h"
 
 bool tr_htf_curve_init(tr_htf_curve_t *s, int32_t predict_ticks) {
     if (s == 0 || predict_ticks < 0) {

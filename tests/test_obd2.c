@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "core/indicators/orderbook_dir_v2.h"
+#include "core/functions/orderbook_dir_v2.h"
 
 static void test_futures_scores_and_state(void) {
     tr_obd2_t s;

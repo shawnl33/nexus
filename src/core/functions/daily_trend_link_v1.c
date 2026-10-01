@@ -1,8 +1,8 @@
-#include "core/indicators/daily_trend_link_v1.h"
+#include "core/functions/daily_trend_link_v1.h"
 
 #include <string.h>
 
-#include "core/indicators/linreg.h"
+#include "core/functions/linreg.h"
 
 void tr_dtl1_init(tr_dtl1_t *s, const tr_dtl1_config_t *cfg) {
     memset(s, 0, sizeof(*s));

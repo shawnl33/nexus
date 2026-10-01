@@ -1,4 +1,4 @@
-#include "core/indicators/linreg.h"
+#include "core/functions/linreg.h"
 
 #include <math.h>
 #include <string.h>

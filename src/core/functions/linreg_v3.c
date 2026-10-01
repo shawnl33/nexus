@@ -1,8 +1,8 @@
-#include "core/indicators/linreg_v3.h"
+#include "core/functions/linreg_v3.h"
 
 #include <string.h>
 
-#include "core/indicators/linreg.h"
+#include "core/functions/linreg.h"
 
 #define TR_LR3_MIN_SAMPLES 5
 

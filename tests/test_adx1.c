@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "core/indicators/auto_session_adx_v1.h"
+#include "core/functions/auto_session_adx_v1.h"
 
 static void test_wilder_hand_computed(void) {
     tr_adx1_t s;

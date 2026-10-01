@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "core/indicators/gap_regime_v1.h"
+#include "core/functions/gap_regime_v1.h"
 
 /* n=10개 완성 세션을 만든다: 전부 H−L=10, 종가 100 → 평균TR=10, 직전 종가 100 */
 static void feed_11_sessions(tr_gap1_t *s, double day11_open) {

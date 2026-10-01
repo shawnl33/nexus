@@ -1,4 +1,4 @@
-#include "core/indicators/daily_linreg_trend_v1.h"
+#include "core/functions/daily_linreg_trend_v1.h"
 
 #include <math.h>
 #include <string.h>

@@ -1,5 +1,5 @@
 // 이평선(SMA 5/20/60) 렌더러 — 패널 매니저(app.js)의 렌더러 계약 구현체.
-// 계산은 엔진(src/core/indicators/sma.c)이 하고, 이 파일은 상태 스트림의
+// 계산은 엔진(src/core/functions/sma.c)이 하고, 이 파일은 상태 스트림의
 // sma 키와 스냅샷 ind[28..31] 값의 표시만 담당한다 (app.js가 barInd 캐시에 심는다).
 // 브라우저에서는 전역 SmaLayers, node:test에서는 globalThis.SmaLayers로 쓴다.
 "use strict";

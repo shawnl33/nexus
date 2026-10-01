@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "core/indicators/sma.h"
+#include "core/functions/sma.h"
 
 static void test_warmup(void) {
     tr_sma_t s;
