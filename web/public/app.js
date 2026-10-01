@@ -509,7 +509,7 @@ function clearSymbolPanes(shcode) {
   }
 }
 
-// 칸 지표 패널 트리: [없음] 버튼 + 카테고리 ▸ 지표 체크박스 ▸ 그 지표의 레이어 체크박스들.
+// 칸 지표 패널 트리: 카테고리 ▸ 지표 체크박스 ▸ 그 지표의 레이어 체크박스들.
 // 종목 미선택 칸은 안내 문구만 보인다 (빈 차트 원칙 — 지표는 종목이 있어야 동작한다).
 // 트리 구조(카테고리 분류)는 indicator-tree.js가 매니페스트에서 만들고,
 // 체크 상태는 항상 이 칸의 pane.active·layers를 그대로 반영한다 — 상태를 바꾸는 모든 경로
@@ -526,17 +526,6 @@ function buildPaneTools(pane) {
     panel.append(hint);
     return;
   }
-
-  const noneBtn = document.createElement("button");
-  noneBtn.className = `chip ind-none${pane.active.size === 0 ? " on" : ""}`;
-  noneBtn.textContent = "없음";
-  noneBtn.title = "이 칸의 지표를 모두 끈다";
-  noneBtn.onclick = () => {
-    for (const id of [...pane.active.keys()]) deactivateIndicator(pane, id);
-    buildPaneTools(pane);
-    updateBadgeVisibility();
-  };
-  panel.append(noneBtn);
 
   for (const cat of IndicatorTree.buildTree(indicatorManifest, (id) => id in RENDERERS)) {
     panel.append(buildCatNode(pane, cat));
