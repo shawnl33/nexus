@@ -114,6 +114,16 @@ static tr_bar_status_t g_merge_status[BB_CAP];
 #define BACKFILL_DAILY_BARS 15   /* ⑤ 체인 워밍업용 일봉 수 (dtl1/gap1 각 10세션 필요) */
 #define RT_CATCHUP_GAP_US (120 * TR_US_PER_SEC) /* 이 이상 RT 이벤트가 끊기면 공백-재개로 본다 */
 
+/* 미래 스텁 봉 필터: LS t8412(주식 분봉)는 프리마켓(08:00~09:00) 중 응답 마지막에
+ * 미래 시각의 스텁 봉(당일 09:01, 거래량 0)을 싣는다 (2026-10-01 08:12/08:24 실측).
+ * 백필이 이를 진짜 CLOSED 봉으로 주입하면 시리즈 꼬리가 한 칸 많아져 차트 시간축이
+ * 어긋나므로 주입 전에 걸러낸다. 현재 진행 중 분의 봉(open ≤ now)은 정상 흐름이므로
+ * 절대 걸리지 않게 1봉(timeframe)의 여유를 둔다 — 다음 분 이후 봉만 버린다.
+ * 순수 판정이라 tests/test_backfill.c에서 extern으로 링크해 경계를 고정한다. */
+bool tr_backfill_keep_bar(tr_time_us_t open_us, tr_time_us_t now_us, uint32_t timeframe_sec) {
+    return open_us <= now_us + (tr_time_us_t)timeframe_sec * TR_US_PER_SEC;
+}
+
 /* 워밍업 백필: 1분봉(실제 OHLC)을 2일치 조회해 봉 자체로 주입한다.
  * 주간은 t8465/t8412, 선물 야간은 t8461 — 두 계열을 시각으로 병합해 오름차순 주입한다.
  * (봉 낶부 틱 경로는 알 수 없지만 OHLC·거래량은 실측값이다.
@@ -214,8 +224,11 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
         }
     }
 
-    /* 3) 두 오름차순 계열을 시각으로 병합 주입 (같은 시각은 주간 우선) */
+    /* 3) 두 오름차순 계열을 시각으로 병합 주입 (같은 시각은 주간 우선).
+     * 미래 스텁 봉(t8412 프리마켓 응답 꼬리)은 두 계열 공통으로 여기서 걸러낸다 */
     int injected = 0;
+    int future_dropped = 0;
+    tr_time_us_t now_us = (tr_time_us_t)time(0) * TR_US_PER_SEC;
     size_t i = 0, j = 0;
     while (i < nday || j < nnight) {
         const tr_candle_t *c;
@@ -227,9 +240,16 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
         } else {
             c = &g_night[j++];
         }
+        if (!tr_backfill_keep_bar(c->open_time_us, now_us, pipe->bb.cfg.timeframe_sec)) {
+            future_dropped++;
+            continue;
+        }
         if (tr_engine_inject_bar(eng, c)) {
             injected++;
         }
+    }
+    if (future_dropped > 0) {
+        fprintf(stderr, "backfill %s: 미래 봉 %d개 제외\n", shcode, future_dropped);
     }
     return injected;
 }

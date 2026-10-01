@@ -191,6 +191,22 @@ if(TR_IPC_FOUND)
     add_test(NAME engine COMMAND test_engine)
 endif()
 
+# 백필 필터 단위 테스트: main.c의 tr_backfill_keep_bar를 링크해야 하므로
+# main.c를 main 심볼만 바꿔(trading_engine_main) 테스트용 정적 라이브러리로 만든다.
+# main.c는 lsrt 심볼을 직접 참조하므로 trading-engine과 같은 의존성 조건이 필요하다.
+if(TR_IPC_FOUND AND TR_LWS_FOUND)
+    add_library(appmain STATIC src/app/main.c)
+    target_compile_definitions(appmain
+        PRIVATE main=trading_engine_main TRADING_ENGINE_VERSION="${PROJECT_VERSION}")
+    target_compile_options(appmain PRIVATE ${TR_WARNINGS})
+    target_link_libraries(appmain PUBLIC runtime lsrt)
+
+    add_executable(test_backfill tests/test_backfill.c)
+    target_link_libraries(test_backfill PRIVATE appmain)
+    target_compile_options(test_backfill PRIVATE ${TR_WARNINGS})
+    add_test(NAME backfill COMMAND test_backfill)
+endif()
+
 if(SQLite3_FOUND)
     add_executable(test_store tests/test_store.c)
     target_link_libraries(test_store PRIVATE storage)
