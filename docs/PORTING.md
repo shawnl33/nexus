@@ -46,7 +46,15 @@
 - 살아있는 규약 예시: `tests/test_var.c`의 `test_yeslanguage_1to1_example` (예스랭귀지 스니펫과 같은 값을 냄)
 - 파일럿 전환: `src/core/functions/atr.c`의 SMA 이력(`sma_hist`)이 yl_var로 구현되어 있다
 
-**값 복사 불안전 제약**: 저장소 버퍼를 상태 구조체 안에 두는 이 규약은 값 복사 불안전 타입을 만든다 — yl_var를 포함한 구조체를 통째로 값 복사(이식 등)하면 사본의 `ring.storage`가 원본의 버퍼를 가리키는 채로 남아, 원본 슬롯이 재사용될 때 두 상태가 버퍼를 공유하며 조용히 깨진다. 통째 복사 후에는 반드시 재연결 헬퍼로 사본 자신의 버퍼로 저장소 포인터를 복구한다: 범용 `ylv_relink(&s, new_buf)` 또는 모듈별 래퍼(예: `tr_atr_relink(&a)`). 적용 사례: `tr_engine_pipe_remove`의 파이프라인 이식(src/runtime/engine.c)과 회귀 테스트 `tests/test_engine.c`의 `test_pipe_transplant_atr_relink`. 후속 yl_var 전환에서도 같은 검토가 필요하다.
+**값 복사 불안전 제약**: 저장소 버퍼를 상태 구조체 안에 두는 이 규약은 값 복사 불안전 타입을 만든다 — yl_var를 포함한 구조체를 통째로 값 복사(이식 등)하면 사본의 `ring.storage`가 원본의 버퍼를 가리키는 채로 남아, 원본 슬롯이 재사용될 때 두 상태가 버퍼를 공유하며 조용히 깨진다. 통째 복사 후에는 반드시 재연결 헬퍼로 사본 자신의 버퍼로 저장소 포인터를 복구한다: 범용 `ylv_relink(&s, new_buf)` 또는 모듈별 래퍼(예: `tr_atr_relink(&a)`). 적용 사례: `tr_engine_pipe_remove`의 파이프라인 이식(src/runtime/engine.c)과 회귀 테스트 `tests/test_engine.c`의 `test_pipe_transplant_atr_relink`. 후속 yl_var 전환에서도 같은 검토가 필요하다. 예외: score_1m의 `mid_hist`처럼 저장소를 외부(호출자 소유 버퍼)에서 부착받는 경우는 기증 슬롯을 가리키지 않으므로 relink가 필요 없다.
+
+### 전환 기준 (무엇을 yl_var로 하는가)
+
+- **전환한다** — 예스랭귀지 '변수'(암묵 시계열)에 1:1로 대응하는 double 이력: atr의 TR 이력, obd2의 핵심점수·계산호가방향, lp4의 회귀기울기입력 이력, htf의 (L+H)/2 이력, lr3의 회귀가격, sma의 종가 창, gap1의 완성 세션 TR, dtl1의 완성 일봉 중간값, score_1m의 핵심마켓 (H+L)/2.
+- **두는 것 ① 스칼라/[1] 깊이 재귀** — 직전 값 1개만 기억하는 갱신은 시계열 타입 없이 스칼라 필드로 둔다 (adx1, memory_lines의 prev 계열, score_1m의 prev_future_dir/prev_market_center).
+- **두는 것 ② 무상태** — 이력 자체가 없는 순수 계산은 해당 없음 (linreg.c의 OLS, daily_align_v2, daily_linreg_trend_v1).
+- **두는 것 ③ 캔들/프레임 링** — 예스랭귀지 '변수'가 아니라 내장 가격·거래량 시리즈 윈도우(캔들 링)나 복합 프레임(예측가+신뢰도+방향+유효) 이력은 double 전용 yl_var로 분해하면 충실도를 해치므로 기존 구조를 유지한다 (market_profile, daily_market_profile_v1, past_prediction).
+- **두는 것 ④ 정수 키 이력** — 값의 시계열이 아니라 비교 키(일자 경계 등)인 정수 이력은 정수 배열 그대로 둔다 (linreg_predict_v4의 day_hist — yyyymmdd < 2^53이라 double 표현은 가능하지만 타입 마찰 회피).
 
 ## HTS 고유 동작
 

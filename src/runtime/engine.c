@@ -214,6 +214,9 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
         tr_sma_relink(&e->pipe0.sma60);
         tr_gap1_relink(&e->pipe0.gap1);
         tr_dtl1_relink(&e->pipe0.dtl1);
+        /* score의 mid_hist(yl_var)는 relink 불필요: 저장소가 기증 슬롯 남부가 아니라
+         * 호출자 소유 외부 버퍼(score_mid_storage)라 복사된 포인터가 그대로 올바르고,
+         * 슬롯 재사용(add)도 새 파이프라인 자신의 저장소 인자를 쓴다 (score_1m.h 참조) */
         e->cfg.instrument_id = e->pipe0.instrument_id;
         e->cfg.is_futures = e->pipe0.is_futures;
         e->cfg.session = e->pipe0.session;

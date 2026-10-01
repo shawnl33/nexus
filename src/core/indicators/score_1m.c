@@ -10,7 +10,8 @@ bool tr_score1m_init(tr_score1m_t *s, uint32_t market_period, double min_r2,
     memset(s, 0, sizeof(*s));
     s->market_period = market_period;
     s->min_r2 = min_r2;
-    return tr_ring_init(&s->mid_hist, storage, sizeof(double), capacity);
+    /* 외부 저장소 부착 모델 유지: 호출자 소유 버퍼를 그대로 연결한다 */
+    return ylv_init(&s->mid_hist, storage, capacity);
 }
 
 void tr_score1m_on_bar(tr_score1m_t *s, const tr_score1m_input_t *in) {
@@ -33,12 +34,12 @@ void tr_score1m_on_bar(tr_score1m_t *s, const tr_score1m_input_t *in) {
 
     /* 핵심마켓 (원본 951~956): (H+L)/2 의 단순 평균 */
     double mid = (in->high + in->low) / 2.0;
-    tr_ring_push(&s->mid_hist, &mid);
+    ylv_push(&s->mid_hist, mid);
     double sum = 0.0;
-    size_t cnt = tr_ring_count(&s->mid_hist);
+    size_t cnt = ylv_count(&s->mid_hist);
     for (size_t i = 0; i < cnt; i++) {
-        double v;
-        tr_ring_at(&s->mid_hist, i, &v);
+        double v = 0.0;
+        ylv_at(&s->mid_hist, i, &v); /* 최신→과거 합산 순서 유지 */
         sum += v;
     }
     s->market_center = cnt > 0 ? sum / (double)cnt : mid;

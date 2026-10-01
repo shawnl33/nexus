@@ -19,12 +19,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "core/market/ring.h"
+#include "core/market/var.h"
 
 typedef struct {
     uint32_t market_period;   /* 마켓계산기간 */
     double min_r2;            /* 최소신뢰도 */
-    tr_ring mid_hist;         /* (H+L)/2 */
+    /* 핵심마켓 (H+L)/2 이력: 원본 Average((H+L)/2, 기간)의 변수 대응.
+     * yl_var이지만 저장소는 호출자 소유 외부 버퍼를 부착한다 (엔진의
+     * score_mid_storage 모델) — 기증 슬롯 남부가 아니므로 이식 시 relink 불필요 */
+    yl_var mid_hist;
     double prev_future_dir;
     bool has_prev_future;
     double prev_market_center;
