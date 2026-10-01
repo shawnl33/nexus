@@ -20,7 +20,7 @@ add_library(core STATIC
     src/core/market/bar_builder.c
     src/core/market/candle.c
     src/core/market/ring.c
-    src/core/market/series.c
+    src/core/market/var.c
     src/core/market/session.c
     src/core/functions/atr.c
     src/core/functions/auto_session_adx_v1.c
@@ -172,7 +172,7 @@ endif()
 enable_testing()
 
 # 0개 테스트 실행을 통과로 간주하지 않는다(계획서 §25).
-foreach(t IN ITEMS ring series units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma)
+foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE core)
     target_compile_options(test_${t} PRIVATE ${TR_WARNINGS})

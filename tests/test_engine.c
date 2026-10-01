@@ -903,8 +903,8 @@ static void test_two_pipes_independent(void) {
     TR_CHECK(!tr_engine_pipe_remove(&e, 100));
 }
 
-/* pipes[0] 제거 이식(transplant) 후 ATR 시계열 자기참조 회귀 테스트.
- * 이식은 pipe0 = *victim 통째 복사인데, atr의 yl_series ring.storage는 구조체 안
+/* pipes[0] 제거 이식(transplant) 후 ATR 변수(yl_var) 자기참조 회귀 테스트.
+ * 이식은 pipe0 = *victim 통째 복사인데, atr의 yl_var ring.storage는 구조체 안
  * 버퍼(sma_hist_buf)를 가리키는 자기참조라 복구 없이는 기증 슬롯의 버퍼를 계속
  * 가리킨다. 그 슬롯이 pipe_add로 재사용되면(memset + 자기 링 재연결) pipe0의 ATR
  * 링이 새 파이프라인과 버퍼를 공유해 생존 파이프라인의 ATR이 깨진다 (engine.h의
@@ -964,8 +964,8 @@ static void test_pipe_transplant_atr_relink(void) {
 
     TR_CHECK(tr_atr_value(&e.pipe0.lr3.v4.atr) == tr_atr_value(&ref));
     /* C도 독립적으로 정상이어야 한다 (버퍼 공유의 역방향 오염 없음) */
-    TR_CHECK(yls_count(&pc->lr3.v4.atr.sma_hist) == 2);
-    TR_CHECK(yls_count(&e.pipe0.lr3.v4.atr.sma_hist) == 14);
+    TR_CHECK(ylv_count(&pc->lr3.v4.atr.sma_hist) == 2);
+    TR_CHECK(ylv_count(&e.pipe0.lr3.v4.atr.sma_hist) == 14);
 }
 
 /* 혼합 시장: 파이프라인은 종목별 세션을 갖는다 — 기동 종목 세션을 상속하지 않는다.

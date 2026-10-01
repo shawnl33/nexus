@@ -22,10 +22,10 @@ static double true_range(const tr_atr_t *a, double high, double low, double clos
 static double sma_estimate(const tr_atr_t *a, double new_tr) {
     /* 진행 봉 포함 추정: 가장 오래된 값이 밀려나는 것을 반영 */
     double sum = a->sma_sum + new_tr;
-    uint32_t count = (uint32_t)yls_count(&a->sma_hist) + 1;
-    if (yls_count(&a->sma_hist) >= a->period) {
+    uint32_t count = (uint32_t)ylv_count(&a->sma_hist) + 1;
+    if (ylv_count(&a->sma_hist) >= a->period) {
         double oldest = 0.0;
-        yls_at(&a->sma_hist, a->period - 1, &oldest); /* 가장 오래된 TR */
+        ylv_at(&a->sma_hist, a->period - 1, &oldest); /* 가장 오래된 TR */
         sum -= oldest;
         count = a->period;
     }
@@ -49,8 +49,8 @@ bool tr_atr_init_ex(tr_atr_t *a, uint32_t period, tr_atr_mode_t mode) {
     memset(a, 0, sizeof(*a));
     a->mode = mode;
     a->period = period;
-    /* memset 다음에 시계열 저장소를 연결한다 (순서 고정). 유효 용량은 period개. */
-    return yls_init(&a->sma_hist, a->sma_hist_buf, period);
+    /* memset 다음에 변수 저장소를 연결한다 (순서 고정). 유효 용량은 period개. */
+    return ylv_init(&a->sma_hist, a->sma_hist_buf, period);
 }
 
 bool tr_atr_init(tr_atr_t *a, uint32_t period) {
@@ -60,12 +60,12 @@ bool tr_atr_init(tr_atr_t *a, uint32_t period) {
 double tr_atr_on_bar(tr_atr_t *a, double high, double low, double close) {
     double tr = true_range(a, high, low, close);
     if (a->mode == TR_ATR_SMA) {
-        if (yls_count(&a->sma_hist) >= a->period) {
+        if (ylv_count(&a->sma_hist) >= a->period) {
             double oldest = 0.0;
-            yls_at(&a->sma_hist, a->period - 1, &oldest); /* 가장 오래된 TR */
+            ylv_at(&a->sma_hist, a->period - 1, &oldest); /* 가장 오래된 TR */
             a->sma_sum -= oldest;
         }
-        yls_push(&a->sma_hist, tr);
+        ylv_push(&a->sma_hist, tr);
         a->sma_sum += tr;
     } else {
         if (a->wilder_seeded) {
@@ -100,7 +100,7 @@ double tr_atr_value(const tr_atr_t *a) {
         return 0.0;
     }
     if (a->mode == TR_ATR_SMA) {
-        size_t n = yls_count(&a->sma_hist);
+        size_t n = ylv_count(&a->sma_hist);
         return n > 0 ? a->sma_sum / (double)n : 0.0;
     }
     if (a->wilder_seeded) {
@@ -113,5 +113,5 @@ bool tr_atr_relink(tr_atr_t *a) {
     if (a == 0) {
         return false;
     }
-    return yls_relink(&a->sma_hist, a->sma_hist_buf);
+    return ylv_relink(&a->sma_hist, a->sma_hist_buf);
 }
