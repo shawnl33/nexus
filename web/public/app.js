@@ -172,7 +172,8 @@ function createPane(heightFrac = 1) {
     // whitespace를 포함한 시리즈 기준이라 봉 수만 재면 구멍 수만큼 어긋난다.
     // wsCount는 renderSymbolPanes(시딩)와 rebuildPaneCandles(정정)가 같은 withWhitespace
     // 결과로 갱신한다 (정합 고정).
-    // 라이브 꼬리는 봉이 1개 붙을 때 barSeq와 시리즈가 함께 +1되므로 이 합계식이 그대로 맞는다.
+    // 라이브 꼬리는 봉·whitespace(균일 분 그리드 채움)가 붙을 때 barSeq/wsCount와 시리즈가
+    // 함께 자라므로(noteBar 주석 참조) 이 합계식이 그대로 맞는다.
     // 시간축 전파에서 이 길이는 데이터 없는 칸 스킵과 레거시 폴백(시각 미제공 칸)에만
     // 쓴다 — 창 변환은 getTimes 기준 (pane-sync.js 헤더의 엄밀 시각 정렬 참조).
     getLength: () => {
@@ -641,7 +642,17 @@ function applyStatus(msg) {
   const [o, h, l, c] = p.ohlc ?? [];
   // noteBar 코드: 0 기존 봉 갱신 / 1 꼬리 추가 / 2 중간 삽입(늦은 정정·구멍 채움),
   // -1은 이 틱에 봉이 없음(ohlc 미포함). 꼬리 판정은 캐시 기준이라 봉 없는 틱에서도 성립한다.
+  // prevTail은 noteBar가 seriesTimes를 밀기 전의 마지막 시리즈 항목(봉 또는 whitespace)
+  // 시각 — 꼬리 추가 시 사이에 넣을 균일 분 그리드 whitespace 목록을 만드는 기준이다.
+  const prevTail = cache.seriesTimes[cache.seriesTimes.length - 1];
   const barCode = o != null ? feed.noteBar(cache, t, { time: t, open: o, high: h, low: l, close: c }) : -1;
+  // 균일 분 그리드(1칸=1분): 꼬리 추가(code 1)로 직전 항목과 1분 초과 공백이 생기면
+  // 사이 매분의 whitespace 행 — noteBar가 seriesTimes에 넣은 것과 같은 목록이다.
+  // 칸 반영 시 새 봉 앞에 같은 순서로 update()한다 (아래 isTail 분기 주석 참조).
+  const liveWs = [];
+  if (barCode === 1 && prevTail !== undefined) {
+    for (let wt = prevTail + 60; wt < t; wt += 60) liveWs.push({ time: wt });
+  }
   const isTail = cache.barSeq[cache.barSeq.length - 1] === t;
   if (barCode >= 0) {
     // 시딩 중인 종목의 칸에는 라이브를 그리지 않는다 — 봉은 캐시에 쌓이고 시딩 끝의
@@ -655,19 +666,25 @@ function applyStatus(msg) {
       // 캐시와 차트가 영구 발산했다 — 2026-09-30 실측).
       try {
         if (isTail) {
-          // 라이브 꼬리에는 whitespace를 넣지 않는다: 새 봉이 직전 봉과 60초 넘게 떨어져
-          // 와도(실시간으로 생기는 구멍) 그대로 붙인다. RT 캐치업이 빠진 봉을 채우고, 못
-          // 채운 구멍은 generation 상승 → 재시딩(seedSymbol)의 gaps가 whitespace로 표시한다.
-          // 꼬리 갱신(code 0)은 범위 이벤트가 없고(실측) 꼬리 추가(code 1)만 범위가 밀리므로,
-          // 추가일 때만 이 칸을 뮤트한다 — 틱마다 뮤트 창이 열리며 사용자의 줌/스크롤
-          // 이벤트를 삼키는 일을 피한다.
-          if (barCode === 1) mutePaneRange(pane);
+          // 균일 분 그리드 유지: 꼬리 봉이 직전 시리즈 항목과 1분 초과로 떨어져 오면
+          // (무틱 분·세션 경계·주말) 사이 매분 whitespace를 먼저 붙이고 새 봉을 붙인다.
+          // 무틱 분은 "아직 안 온 것"이 아니라 다음 봉이 왔을 때 확정되므로 이 시점에
+          // 채운다. 엔진이 무거래 봉을 스스로 채우면(no_trade FILL) 간격이 정확히
+          // 60초라 liveWs가 비어 자연히 멱등이다 (현재 엔진은 SKIP — src/app/main.c).
+          // 꼬리 갱신(code 0)은 범위 이벤트가 없고(실측) 꼬리 추가(code 1, whitespace
+          // 포함)만 범위가 밀리므로, 추가일 때만 이 칸을 뮤트한다 — 틱마다 뮤트 창이
+          // 열리며 사용자의 줌/스크롤 이벤트를 삼키는 일을 피한다.
+          if (barCode === 1) {
+            mutePaneRange(pane);
+            for (const w of liveWs) pane.candleSeries.update(w);
+          }
           pane.candleSeries.update(cache.bars.get(t));
         } else {
           // 늦은 정정/구멍 채움(과거 시각): candleSeries.update()는 시리즈 마지막보다
           // 과거 시각에 throw("Cannot update oldest data")하므로 캐시에서 다시 깐다.
-          // 중간 삽입이면 채운 분이 gaps에 남아 whitespace 중복이 생기지 않게 구간을 수술한다.
-          if (barCode === 2) feed.fillGapMinute(cache, t);
+          // 재구성의 withWhitespace가 균일 분 그리드로 다시 채우므로 채운 분의
+          // whitespace는 저절로 캔들로 교체된다 — 엔진 gaps 구간 수술은 폐기했다
+          // (표시 경로가 엔진 gaps를 더 쓰지 않는다, gaps.js 헤더 참조).
           rebuildPaneCandles(pane, cache);
         }
       } catch (err) {
@@ -783,7 +800,7 @@ const INITIAL_VISIBLE_BARS = 380;
 // renderSymbolPanes와 달리 스크롤 애니메이션이 없어 프레임 뮤트(mutePaneRange)로 충분하다.
 function rebuildPaneCandles(pane, cache) {
   const bars = cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean);
-  const rows = Gaps.withWhitespace(bars, cache.gaps ?? []);
+  const rows = Gaps.withWhitespace(bars); // 균일 분 그리드 — renderSymbolPanes와 같은 계약
   const range = pane.chart.timeScale().getVisibleRange(); // 시각 창 (데이터 없으면 null)
   mutePaneRange(pane);
   pane.candleSeries.setData(rows);
@@ -803,10 +820,15 @@ function renderSymbolPanes(shcode) {
   const cache = feed.get(shcode);
   if (!cache) return;
   const bars = cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean);
-  // 구멍 구간을 분 단위 whitespace({time}만 있는 항목)로 펼쳐 캔들 사이에 섞는다 (gaps.js) —
-  // 빠진 분이 이어 붙어 보이지 않게 시간축에 빈 칸으로 남는다. 라이브 꼬리에는 넣지 않는다
-  // (applyStatus 주석 참조).
-  const rows = Gaps.withWhitespace(bars, cache.gaps ?? []);
+  // 균일 분 그리드(1칸=1분): 연속 봉 사이의 1분 초과 공백을 전부 분당 1칸
+  // whitespace({time}만 있는 항목)로 펼쳐 캔들 사이에 섞는다 (gaps.js) — 밤·주말·
+  // 무틱 공백을 가리지 않으므로 모든 칸이 같은 분 그리드에 오고, 창 가장자리가 같은
+  // 시계 창이면 칸마다 같은 시각의 x가 픽셀 단위로 일치한다 (엄밀 시각 정렬의 기반).
+  // 엔진 gaps 페이로드는 이 채움의 부분집합이라 표시 경로에서는 쓰지 않는다 — 종목별
+  // 구멍 채움 정책 차이로 1칸의 시간이 구간마다 달라 칸 간 x가 어긋났기 때문이다
+  // (gaps.js 헤더의 2026-10-01 실측 참조). 라이브 꼬리는 noteBar/applyStatus가 같은
+  // 규칙으로 채운다 (applyStatus 주석 참조).
+  const rows = Gaps.withWhitespace(bars);
   // pane-sync getLength의 시리즈 길이(봉 + whitespace)와 같은 기준 — 반드시 여기서 갱신한다
   cache.wsCount = rows.length - bars.length;
   // pane-sync getTimes의 시각 기준 — 시리즈(봉 + whitespace)의 인덱스와 1:1로 맞닿아야 하므로
@@ -896,7 +918,9 @@ async function seedSymbolNow(shcode) {
       }
       if (cache.seedToken !== seedTok) continue; // 시딩 중 리셋 — 새 기준으로 다시 가져온다
       feed.reset(cache); // 시딩 중 라이브로 쌓인 봉과 혼합하지 않는다 (스냅샷 기준으로 다시 쌓음)
-      cache.gaps = gapsSec; // renderSymbolPanes가 whitespace로 펼친다 (reset 이후에 넣어야 지워지지 않는다)
+      cache.gaps = gapsSec; // 수신·보관만 한다 — 표시용 채움은 균일 분 그리드(엔진 gaps의
+                            // 상위 집합)가 담당하므로 표시 경로는 읽지 않는다 (gaps.js 헤더 참조).
+                            // reset 이후에 넣어야 지워지지 않는다
       all.sort((a, b) => a.time - b.time);
       const dedup = all.filter((b, i) => i === 0 || b.time !== all[i - 1].time);
       for (const b of dedup) feed.noteBar(cache, b.time, b);

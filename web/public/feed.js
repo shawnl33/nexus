@@ -6,6 +6,8 @@
 "use strict";
 
 const Feed = (() => {
+  const MIN_SEC = 60; // 1분봉 간격 — 균일 분 그리드 칸 폭 (gaps.js의 MIN_SEC과 같은 엔진 계약)
+
   function createCache(shcode) {
     return {
       shcode,
@@ -17,11 +19,14 @@ const Feed = (() => {
       tickRaw: 5,        // raw 단위 틱 크기 (엔진 tick 키가 갱신; 선물 5, 주식 100)
       generation: 0,     // 이 종목의 최신 세대 — 더 큰 세대가 오면 리셋 트리거
       seedToken: 0,      // 리셋 때마다 증가 — 진행 중 시딩의 늦은 응답 폐기에 쓴다
-      gaps: [],          // 시딩 스냅샷의 구멍 구간 ([startSec, endSec]) — 시리즈 whitespace로 펼친다
-      wsCount: 0,        // 시딩이 만든 whitespace 포인트 수 — pane-sync getLength가 봉 수에 더해 쓴다
+      gaps: [],          // 시딩 스냅샷의 구멍 구간 ([startSec, endSec]) — 수신·보관만 한다.
+                         // 표시용 채움은 withWhitespace의 균일 분 그리드(엔진 gaps의 상위 집합)가
+                         // 담당하므로 표시 경로에서는 읽지 않는다 (gaps.js 헤더 참조)
+      wsCount: 0,        // 시리즈의 whitespace 포인트 수 — pane-sync getLength가 봉 수에 더해 쓴다
       seriesTimes: [],   // 차트 시리즈(봉+whitespace) 항목별 시각(초) 오름차순 — pane-sync getTimes의
-                         // 시각 변환 기준. 시딩(renderSymbolPanes)과 정정 재구성(rebuildPaneCandles)이
-                         // 통째로 세우고, 라이브 꼬리는 noteBar가 민다
+                         // 시각 변환 기준. 균일 분 그리드 불변식: 첫~마지막 항목 사이 인접 시각 차는
+                         // 항상 60초 (1칸=1분). 시딩(renderSymbolPanes)과 정정 재구성
+                         // (rebuildPaneCandles)이 통째로 세우고, 라이브 꼬리는 noteBar가 민다
       ctx: null,         // 렌더러 컨텍스트 (app.js가 지연 생성해 붙인다)
     };
   }
@@ -80,6 +85,20 @@ const Feed = (() => {
       }
       if (st[sLo] === t) {
         if (cache.wsCount > 0) cache.wsCount--;
+      } else if (sLo === st.length) {
+        // 균일 분 그리드(1칸=1분): 꼬리에 새 시각을 붙일 때 직전 시리즈 항목(봉 또는
+        // whitespace)과 1분 초과 공백이면 사이 매분을 whitespace 시각으로 먼저 채운다 —
+        // 무틱 분은 다음 봉이 올 때 확정되므로 이 시점에 채운다. 엔진이 무거래 봉을
+        // 스스로 채워 본낸 경우(no_trade FILL)에는 간격이 정확히 60초라 채울 게 없어
+        // 자연히 멱등이다 (현재 엔진은 TR_NO_TRADE_SKIP — src/app/main.c의 ecfg.no_trade).
+        // 호출자(app.js)는 같은 분 목록을 새 봉 앞에 차트 update()로 붙인다.
+        if (st.length > 0) {
+          for (let wt = st[st.length - 1] + MIN_SEC; wt < t; wt += MIN_SEC) {
+            st.push(wt);
+            cache.wsCount++;
+          }
+        }
+        st.push(t);
       } else {
         st.splice(sLo, 0, t);
       }
@@ -97,25 +116,6 @@ const Feed = (() => {
       seq.splice(lo, 0, t);
       for (let i = lo; i < seq.length; i++) cache.barPos.set(seq[i], i);
       return 2;
-    }
-
-    // 구멍 구간 수술: 늦은 봉이 채운 분 t가 cache.gaps 구간 안에 있으면 그 분을 구간에서
-    // 뺀다 (구간의 앞/뒤를 줄이거나, 가운데면 둘로 쪼개고, 1분짜리 구간은 제거한다).
-    // withWhitespace가 그 분의 whitespace를 다시 만들지 않게 하기 위함 — 채운 봉과 같은
-    // 시각의 whitespace가 남으면 setData가 중복 시각을 거부한다. 구간 간격은 1분봉 기준
-    // 60초 (gaps.js의 MIN_SEC과 같은 엔진 계약). 반환: 어느 구간에라도 속했으면 true.
-    function fillGapMinute(cache, t) {
-      const gaps = cache.gaps;
-      for (let i = 0; i < gaps.length; i++) {
-        const [a, b] = gaps[i];
-        if (t < a || t > b) continue;
-        if (a === b) gaps.splice(i, 1);                          // 1분짜리 구간 소멸
-        else if (t === a) gaps[i] = [a + 60, b];                 // 앞에서 하나 줄임
-        else if (t === b) gaps[i] = [a, b - 60];                 // 뒤에서 하나 줄임
-        else gaps.splice(i, 1, [a, t - 60], [t + 60, b]);        // 가운데 채움 — 분할
-        return true;
-      }
-      return false;
     }
 
     // barSeq[pos]까지 최근 n개 봉 (오름차순) — ⑥⑦ 5봉 규칙에 사용
@@ -137,7 +137,7 @@ const Feed = (() => {
       return true;
     }
 
-    return { forSymbol, get, symbols, drop, reset, noteBar, fillGapMinute, recentBars, noteGeneration };
+    return { forSymbol, get, symbols, drop, reset, noteBar, recentBars, noteGeneration };
   }
 
   return { create };

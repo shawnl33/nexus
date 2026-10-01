@@ -60,34 +60,76 @@ test("noteBar: 구멍(whitespace) 자리 채움은 중간 삽입 코드 2를 돌
   c.seriesTimes.splice(1, 0, 1030);
   c.seriesTimes.splice(3, 0, 1090);
   c.wsCount = 2;
-  c.gaps = [[1030, 1090]];
   assert.equal(feed.noteBar(c, 1030, { time: 1030, close: 7 }), 2); // 구멍 채움
   assert.equal(c.wsCount, 1); // whitespace 하나가 캔들로 교체됐다
   assert.deepEqual(c.seriesTimes, [1000, 1030, 1060, 1090, 1120]); // 시각 목록 길이 불변
   assert.equal(c.seriesTimes.length, c.barSeq.length + c.wsCount); // 시리즈 길이 정합
 });
+test("noteBar: 라이브 꼬리가 1분 초과로 떨어져 오면 사이 매분을 whitespace로 채운다 (균일 분 그리드)", () => {
+  const feed = Feed.create();
+  const c = feed.forSymbol("005930");
+  feed.noteBar(c, 1000, { time: 1000 });
+  feed.noteBar(c, 1060, { time: 1060 });
+  // 3분 뒤 라이브 봉 — 사이 1120, 1180 두 분이 whitespace 시각으로 먼저 들어간다
+  assert.equal(feed.noteBar(c, 1240, { time: 1240 }), 1); // 꼬리 추가 코드는 그대로
+  assert.deepEqual(c.seriesTimes, [1000, 1060, 1120, 1180, 1240]);
+  assert.deepEqual(c.barSeq, [1000, 1060, 1240]); // 봉 목록에는 whitespace가 없다
+  assert.equal(c.wsCount, 2);
+  assert.equal(c.seriesTimes.length, c.barSeq.length + c.wsCount); // getLength 정합
+  // 채운 꼬리 뒤에 이어 붙는 정상 1분 봉은 추가 채움 없이 붙는다
+  assert.equal(feed.noteBar(c, 1300, { time: 1300 }), 1);
+  assert.equal(c.wsCount, 2);
+  assert.deepEqual(c.seriesTimes, [1000, 1060, 1120, 1180, 1240, 1300]);
+});
 
-test("fillGapMinute: 구간 앞/가운데/끝의 분을 빼고, 구간 밖이면 false", () => {
+test("noteBar: 꼬리 간격이 정확히 60초면 채우지 않는다 (엔진 무거래 채움과 멱등)", () => {
   const feed = Feed.create();
   const c = feed.forSymbol("s");
-
-  c.gaps = [[1200, 1320]]; // 3분 구간 (1200, 1260, 1320)
-  assert.equal(feed.fillGapMinute(c, 1190), false); // 구간 밖 — 손대지 않는다
-  assert.deepEqual(c.gaps, [[1200, 1320]]);
-
-  assert.equal(feed.fillGapMinute(c, 1200), true);  // 앞 끝 채움 → 앞을 줄인다
-  assert.deepEqual(c.gaps, [[1260, 1320]]);
-
-  assert.equal(feed.fillGapMinute(c, 1320), true);  // 뒤 끝 채움 → 뒤를 줄인다
-  assert.deepEqual(c.gaps, [[1260, 1260]]);
-
-  assert.equal(feed.fillGapMinute(c, 1260), true);  // 1분짜리 구간은 소멸한다
-  assert.deepEqual(c.gaps, []);
-
-  c.gaps = [[1200, 1380]];
-  assert.equal(feed.fillGapMinute(c, 1260), true);  // 가운데 채움 → 둘로 쪼갠다
-  assert.deepEqual(c.gaps, [[1200, 1200], [1320, 1380]]);
+  feed.noteBar(c, 1000, { time: 1000 });
+  feed.noteBar(c, 1060, { time: 1060 }); // 엔진이 무틱 분을 채워 본낸 경우와 동일
+  assert.deepEqual(c.seriesTimes, [1000, 1060]);
+  assert.equal(c.wsCount, 0);
 });
+
+test("noteBar: 첫 봉 이전은 채우지 않는다 (스팬 밖)", () => {
+  const feed = Feed.create();
+  const c = feed.forSymbol("s");
+  assert.equal(feed.noteBar(c, 100000, { time: 100000 }), 1); // 첫 봉 — 이전 항목이 없다
+  assert.deepEqual(c.seriesTimes, [100000]);
+  assert.equal(c.wsCount, 0);
+});
+
+test("noteBar: 주말급 큰 공백도 라이브 꼬리에서 분당 1칸으로 채운다", () => {
+  const feed = Feed.create();
+  const c = feed.forSymbol("s");
+  const fri = Date.UTC(2026, 9, 2, 9, 0) / 1000;  // 금 18:00 KST
+  const mon = Date.UTC(2026, 9, 5, 0, 0) / 1000;  // 월 09:00 KST (63시간 뒤)
+  feed.noteBar(c, fri, { time: fri });
+  assert.equal(feed.noteBar(c, mon, { time: mon }), 1);
+  assert.equal(c.wsCount, 3780 - 1); // 사이 매분 전부
+  assert.equal(c.seriesTimes.length, c.barSeq.length + c.wsCount);
+  assert.equal(c.seriesTimes[0], fri);
+  assert.equal(c.seriesTimes[c.seriesTimes.length - 1], mon);
+  // 1칸=1분 불변식: 채워진 구간의 인접 시각 차가 전부 60초
+  for (let i = 1; i < c.seriesTimes.length; i++) {
+    assert.equal(c.seriesTimes[i] - c.seriesTimes[i - 1], 60);
+  }
+});
+
+test("noteBar: 라이브로 채워진 whitespace 자리에 늦은 정정 봉이 오면 캔들로 교체된다", () => {
+  const feed = Feed.create();
+  const c = feed.forSymbol("s");
+  feed.noteBar(c, 1000, { time: 1000 });
+  feed.noteBar(c, 1180, { time: 1180 }); // 1060, 1120이 whitespace로 채워진다
+  assert.equal(c.wsCount, 2);
+  // 무틱이 아니라 늦게 도착한 봉 — 균일 그리드의 whitespace 자리를 채운다
+  assert.equal(feed.noteBar(c, 1120, { time: 1120 }), 2); // 중간 삽입
+  assert.deepEqual(c.seriesTimes, [1000, 1060, 1120, 1180]); // 길이 불변
+  assert.deepEqual(c.barSeq, [1000, 1120, 1180]);
+  assert.equal(c.wsCount, 1);
+  assert.equal(c.seriesTimes.length, c.barSeq.length + c.wsCount);
+});
+
 
 test("noteBar: seriesTimes도 봉과 함께 시각 오름차순을 유지한다 (시간축 동기화의 시각 기준)", () => {
   const feed = Feed.create();
