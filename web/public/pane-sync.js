@@ -1,18 +1,24 @@
 // 칸 간 동기화 — 시간축(보이는 범위)과 크로스헤어를 모든 칸에 맞춘다.
-// 시간축은 '시각 도메인' 기준의 엄밀 시각 정렬이다: 종목마다 봉 수·구멍(whitespace) 수가
-// 달라 같은 논리 인덱스 창은 칸마다 다른 시각을 가리키므로, 발생 칸의 논리 범위를 시각
-// 창으로 환산한 뒤(timeAt) 대상 칸에서 그 시각 창의 논리 범위로 정확히 되돌린다
-// (logicalAt — 소수·음수·데이터 초과 인덱스도 클램프 없이 그대로 적용한다).
+// 시간축 규칙 (2026-10-01 개정): 모든 칸이 '같은 px 봉 간격(같은 줌) + 같은 오른쪽 끝
+// 시각'을 쓰도록 맞춘다. 종목마다 봉 수·구멍(whitespace) 수가 달라 같은 논리 인덱스는
+// 칸마다 다른 시각을 가리키므로, 발생 칸의 오른쪽 끝 논리 인덱스를 시각으로 환산한 뒤
+// (timeAt) 대상 칸에서 그 시각의 논리 인덱스(logicalAt)를 구해 오른쪽 끝에 두고, 대상 칸
+// 폭에 맞는 슬롯 수만큼 왼쪽으로 펼친다. 차트 영역의 오른쪽 끝은 칸의 접이식 지표 패널
+// 상태와 무관하게 항상 같은 윈도우 x라서(패널은 왼쪽·차트는 오른쪽 정렬 — app.js
+// createPane), 오른쪽 끝 시각과 px 봉 간격이 같으면 모든 공유 시각이 모든 칸에서 같은
+// x에 놓인다 — 칸 폭이 달라도 수직선이 어긋나지 않고, 넓은 칸은 왼쪽에 더 많은 이력이
+// 보일 뿐이다. 균일 분 그리드(1칸=1분)라 시간↔논리 인덱스가 아핀이라 이 환산이 정확하다.
+// 폭 정보(getWidth)가 없는 칸(테스트·구 호출자)은 종전 '같은 시계 창' 규칙으로 폴백한다.
 //
 // 시간축 전파 계약:
-// - 모든 칸은 항상 같은 시계 창을 보여야 한다 (엄밀 시각 정렬, 2026-09-30 확정) —
-//   꼬리(최신) 창이든 과거 탐색 창이든 예외 없다. 대상 칸에 데이터가 없는 구간
+// - 모든 칸은 항상 같은 오른쪽 끝 시각과 같은 px 봉 간격을 보여야 한다 (2026-10-01
+//   개정) — 꼬리(최신) 창이든 과거 탐색 창이든 예외 없다. 대상 칸에 데이터가 없는 구간
 //   (마감 종목의 미래 등)은 빈 영역으로 둔다: 없는 데이터를 없는 대로 보이는 것은
 //   구멍 whitespace 표시와 같은 데이터 정직성 원칙이다. 라이브러리 제약으로 딱 하나
 //   예외가 있다: 창이 대상 칸 데이터와 전혀 겹치지 않으면(무겹침 0) lightweight-charts가
 //   폭을 유지한 채 데이터에 닿는 위치로 강제 시프트하므로, 그 칸은 같은 규칙의 가장
-//   가까운 가장자리 창으로 먼저 클램프해 적용한다 — 겹치는 시각대로 돌아오면 엄밀
-//   정렬이 즉시 재개된다 (propagateRange 주석의 2026-09-30 계측 참조).
+//   가까운 가장자리 창으로 먼저 클램프해 적용한다 — 겹치는 시각대로 돌아오면 규칙
+//   적용이 즉시 재개된다 (propagateRange 주석의 2026-09-30 계측 참조).
 // - 이 계약은 fixLeftEdge/fixRightEdge를 끈 상태에서만 성립한다 (app.js chartOptions
 //   주석의 실측 참조 — 켜져 있으면 프로그램적 적용도 클램프되어 expectEcho가 어긋난다).
 // - 전파는 정확히 1회다: 대상 칸에 적용한 범위가 에코 이벤트로 돌아와도 다시 전파하지
@@ -48,6 +54,23 @@ const PaneSync = (() => {
     return lo;
   }
 
+  // 논리 인덱스(소수 가능)를 시각으로 환산한다. 정수는 그 항목의 시각, 소수는 양옆 항목
+  // 시각의 선형 보간. 범위 밖 인덱스는 양끝 항목에 고정한 채 끝 간격으로 외삽한다 —
+  // 꼬리 초과 드래그처럼 인덱스가 데이터 밖으로 나가도 같은 시각 폭으로 환산된다.
+  function timeAt(times, idx) {
+    const n = times.length, last = n - 1;
+    if (idx <= 0) {
+      if (n < 2 || idx === 0) return times[0];
+      return times[0] + idx * (times[1] - times[0]); // 처음보다 왼쪽: 첫 간격으로 외삽
+    }
+    if (idx >= last) {
+      if (n < 2 || idx === last) return times[last];
+      return times[last] + (idx - last) * (times[last] - times[last - 1]); // 끝보다 오른쪽
+    }
+    const i = Math.floor(idx);
+    return times[i] + (idx - i) * (times[i + 1] - times[i]); // 소수 인덱스는 선형 보간
+  }
+
   // 시각(초)을 시리즈의 논리 인덱스로 환산한다 — timeAt의 정확한 역함수.
   // 항목과 정확히 겹치는 시각은 그 정수 인덱스, 사이 시각은 양옆 항목의 선형 보간(소수),
   // 범위 밖 시각은 양끝 간격으로 외삽한 음수·초과 인덱스를 돌려준다 (클램프 없음) —
@@ -77,7 +100,7 @@ const PaneSync = (() => {
   // getPrice(timeSec): 그 시각 봉의 대표 가격(종가 등). 없으면 undefined를 돌려야 한다.
   // 칸마다 종목이 다르므로 add의 칸별 getPrice가 우선하고, 없으면 create의 공유 값을 쓴다.
   function create(getPrice) {
-    const members = new Set(); // { chart, candleSeries, getPrice?, getLength?, getTimes?, muteCount, expectEcho?, unsubs: [fn] }
+    const members = new Set(); // { chart, candleSeries, getPrice?, getLength?, getTimes?, getWidth?, muteCount, expectEcho?, unsubs: [fn] }
     let syncing = false;       // 적용이 다시 이벤트를 일으키는 재진입(무한 루프) 방지
 
     // 창 [from,to]를 대상 칸의 데이터 길이 안으로 클램프한다 — 레거시 경로(시각 정보
@@ -91,35 +114,20 @@ const PaneSync = (() => {
         : { from: 0, to: width };          // 처음보다 왼쪽 → 첫 창
     }
 
-    // 논리 인덱스(소수 가능)를 시각으로 환산한다. 정수는 그 항목의 시각, 소수는 양옆 항목
-    // 시각의 선형 보간. 범위 밖 인덱스는 양끝 항목에 고정한 채 끝 간격으로 외삽한다 —
-    // 꼬리 초과 드래그처럼 인덱스가 데이터 밖으로 나가도 같은 시각 폭으로 환산된다.
-    function timeAt(times, idx) {
-      const n = times.length, last = n - 1;
-      if (idx <= 0) {
-        if (n < 2 || idx === 0) return times[0];
-        return times[0] + idx * (times[1] - times[0]); // 처음보다 왼쪽: 첫 간격으로 외삽
-      }
-      if (idx >= last) {
-        if (n < 2 || idx === last) return times[last];
-        return times[last] + (idx - last) * (times[last] - times[last - 1]); // 끝보다 오른쪽
-      }
-      const i = Math.floor(idx);
-      return times[i] + (idx - i) * (times[i + 1] - times[i]); // 소수 인덱스는 선형 보간
-    }
 
-    // 시간축 동기화: 한 칸의 보이는 범위가 바뀌면 나머지 칸에 '같은 시계 창'으로 맞춘다.
-    // 종목마다 봉 수와 구멍(whitespace) 수가 달라(선물 2400봉 vs 주식 500봉) 같은 논리
-    // 인덱스를 억지로 맞추면 칸마다 다른 시각을 보게 된다 — 그래서 발생 칸의 논리 범위를
-    // 먼저 시각 창으로 환산하고(getTimes, 소수 인덱스는 보간 — timeAt), 대상 칸에서는
-    // 그 시각 창의 논리 인덱스를 logicalAt으로 정확히 구해 적용한다 (timeAt의 역함수 —
-    // 창이 대상 데이터 밖으로 일부 벗어나도 소수·음수·초과 인덱스 그대로 적용해 빈
-    // 영역으로 보인다. 전혀 겹치지 않는 창만 라이브러리 제약으로 가장 가까운 가장자리에
-    // 고정한다 — 아래 계측 참조).
-    // - 사용자 제스처(휠 줌·드래그)든 꼬리(최신) 창이든 예외 없이 같은 시계 창이다 —
-    //   발생 칸이 최신에 붙어 있어도 대상 칸을 자기 꼬리로 보내지 않는다. 마감 종목의
-    //   미래 구간처럼 대상 칸에 데이터가 없는 구간은 빈 영역으로 두는 게 의도된 표시다
-    //   (구멍 whitespace와 같은 데이터 정직성 원칙).
+    // 시간축 동기화: 한 칸의 보이는 범위가 바뀌면 나머지 칸을 '같은 px 봉 간격 + 같은
+    // 오른쪽 끝 시각'으로 맞춘다. 발생 칸의 오른쪽 끝 논리 인덱스를 시각으로 환산하고
+    // (timeAt), 대상 칸에서는 그 시각의 논리 인덱스를 logicalAt으로 구해 오른쪽 끝에 둔
+    // 뒤, 대상 칸 폭 / 발생 칸 px 봉 간격 = 슬롯 수만큼 왼쪽으로 펼친다. 기하학적 근거는
+    // 파일 헤더 참조 — 차트 영역의 오른쪽 끝이 패널 상태와 무관하게 같은 윈도우 x이므로,
+    // 오른쪽 끝 정렬 + 같은 간격이면 공유 시각의 x가 칸 폭과 무관하게 일치한다.
+    // - 사용자 제스처(휠 줌·드래그)든 꼬리(최신) 창이든 예외 없이 같은 규칙이다 —
+    //   발생 칸이 최신에 붙어 있어도 대상 칸을 자기 꼬리로 별도 처리하지 않는다. 마감
+    //   종목의 미래 구간처럼 대상 칸에 데이터가 없는 구간은 빈 영역으로 두는 게 의도된
+    //   표시다 (구멍 whitespace와 같은 데이터 정직성 원칙).
+    // - 폭 정보(getWidth)가 어느 한쪽이라도 없으면(테스트·구 호출자) 종전 '같은 시계
+    //   창' 규칙으로 폴백한다: 발생 칸의 논리 범위를 시각 창 [t0,t1]로 환산해 대상 칸의
+    //   같은 시각 창으로 되돌린다.
     // - getTimes를 제공하지 않는 칸(테스트·구 호출자)은 레거시 논리 규칙을 그대로 따른다
     //   (꼬리면 대상 칸의 인덱스 폭 최신 창, 아니면 데이터와 겹치게 클램프 — clampRange).
     // 적용은 대상 칸에서 에코 이벤트를 낳는다 (실측: rAF에서 비동기로). 데이터에 조금이라도
@@ -161,10 +169,12 @@ const PaneSync = (() => {
       const tWin = Array.isArray(srcTimes) && srcTimes.length > 0
         ? { from: timeAt(srcTimes, range.from), to: timeAt(srcTimes, range.to) }
         : null;
-      // srcAtTail은 레거시 경로(시각 정보 미제공 칸)의 폴백에서만 쓴다 — 엄밀 시각
-      // 정렬에는 꼬리 분기가 없다
+      // srcAtTail은 레거시 경로(시각 정보 미제공 칸)의 폴백에서만 쓴다 — 새 규칙에는
+      // 꼬리 분기가 없다
       const srcLen = src.getLength?.();
       const srcAtTail = Number.isFinite(srcLen) && srcLen > 0 && range.to >= srcLen - 1;
+      // 발생 칸 차트 영역의 px 폭 — 폭 제공 칸끼리는 이것으로 px 봉 간격을 구한다
+      const srcWidth = src.getWidth?.();
       syncing = true;
       try {
         for (const m of members) {
@@ -179,15 +189,35 @@ const PaneSync = (() => {
           const mTimes = m.getTimes?.();
           let next;
           if (tWin && Array.isArray(mTimes) && mTimes.length > 0) {
-            // 엄밀 시각 정렬: 발생 칸과 같은 시계 창을 대상 칸의 논리 인덱스로 정확히
-            // 옮긴다 — 데이터에 조금이라도 겹치는 창(오른쪽/왼쪽 초과 포함)은 raw 그대로
-            // 적용해 빈 영역으로 보인다 (마감 종목의 미래 구간 등, 의도된 표시)
-            const raw = { from: logicalAt(mTimes, tWin.from), to: logicalAt(mTimes, tWin.to) };
+            const mWidth = m.getWidth?.();
+            let raw;
+            if (Number.isFinite(srcWidth) && srcWidth > 0 && range.to > range.from
+                && Number.isFinite(mWidth) && mWidth > 0) {
+              // 새 규칙: 같은 px 봉 간격 + 같은 오른쪽 끝 시각. px 봉 간격 =
+              // 폭 / (보이는 슬롯 수 + 1) — lightweight-charts 4.2.3의 실제 관계다
+              // (읽기 _private__updateVisibleRange: leftBorder = rightBorder −
+              // width/barSpacing + 1, 쓰기 _internal_setVisibleRange: barSpacing =
+              // width/(to−from+1)). 대상 칸에는 슬롯 수 = mWidth/spacingPx − 1을 적용한다 —
+              // 라이브러리가 그 창에 설정할 간격 mWidth/(slots+1)이 spacingPx와 정확히 같아
+              // 모든 폭에서 '같은 간격' 불변식이 구성상 성립한다 (단순 폭/슬롯 식은 폭이
+              // 다른 칸에서 ~1% 어긋나 오른쪽 끝에서 멀어질수록 x 드리프트가 커진다).
+              // (라이브러리의 timeScale().barSpacing()을 읽지 않는 이유: 목 차트와 무관하게
+              // 같은 식을 쓸 수 있고, 남아 있는 불일치가 없어 expectEcho 계약이 깨질 경로를 없앤다.)
+              const spacingPx = srcWidth / (range.to - range.from + 1);
+              const slots = mWidth / spacingPx - 1;
+              const toM = logicalAt(mTimes, tWin.to); // 오른쪽 끝 시각을 대상 칸 인덱스로
+              raw = { from: toM - slots, to: toM };
+            } else {
+              // 폭 미제공 칸(테스트·구 호출자)은 종전 '같은 시계 창' 규칙으로 폴백한다 —
+              // 데이터에 조금이라도 겹치는 창(오른쪽/왼쪽 초과 포함)은 raw 그대로 적용해
+              // 빈 영역으로 보인다 (마감 종목의 미래 구간 등, 의도된 표시)
+              raw = { from: logicalAt(mTimes, tWin.from), to: logicalAt(mTimes, tWin.to) };
+            }
             // 무겹침 0 창은 라이브러리가 폭 유지로 강제 시프트하므로(위 계측 로그 참조)
             // 우리가 먼저 같은 규칙의 가장 가까운 가장자리 창으로 클램프한다 — 라이브러리가
             // 받아들이는 값과 expectEcho가 일치해 에코가 삼켜지고 재전파가 없다. 사용자가
             // 창을 데이터가 전혀 없는 시각대로 옮기면 그 칸은 자기 데이터의 가장 가까운
-            // 가장자리에 고정되고, 겹치는 시각대로 돌아오면 엄밀 정렬이 즉시 재개된다
+            // 가장자리에 고정되고, 겹치는 시각대로 돌아오면 규칙 적용이 즉시 재개된다
             next = (raw.to < 0 || raw.from > mTimes.length - 1) ? clampRange(raw, mTimes.length) : raw;
           } else {
             // 레거시 경로: 시각 정보가 없는 쪽이 끼어 있으면 종전 논리 규칙으로 폴백한다 (호환)
@@ -233,10 +263,13 @@ const PaneSync = (() => {
     // options.getTimes: 그 칸 시리즈(봉+whitespace)의 항목별 시각(초) 오름차순 배열 —
     //   시간축 전파를 시각 도메인으로 환산하는 기준 (엄밀 시각 정렬). 없으면 레거시
     //   논리 규칙으로 동작한다.
+    // options.getWidth: 그 칸 차트 영역의 px 폭 — 새 규칙(같은 px 봉 간격 + 같은
+    //   오른쪽 끝 시각)의 줌 기준. 패널 접기로 폭이 바뀌므로 호출 시점에 잰다.
+    //   없으면(테스트·구 호출자) 종전 '같은 시계 창' 규칙으로 폴백한다.
     function add(chart, candleSeries, options) {
       const member = { chart, candleSeries,
                        getPrice: options?.getPrice, getLength: options?.getLength,
-                       getTimes: options?.getTimes,
+                       getTimes: options?.getTimes, getWidth: options?.getWidth,
                        muteCount: 0, expectEcho: null, unsubs: [] };
       const ts = chart.timeScale();
       const onRange = (range) => propagateRange(member, range);
@@ -273,7 +306,7 @@ const PaneSync = (() => {
     return { add, remove, mute, unmute, get size() { return members.size; } };
   }
 
-  return { create, logicalAt };
+  return { create, logicalAt, timeAt };
 })();
 
 if (typeof globalThis !== "undefined") {

@@ -344,6 +344,7 @@ function setupWithTimes(specs, autofire = true) {
   const handles = ms.map((m, i) => sync.add(m.chart, { id: `s${i}` }, {
     getLength: () => specs[i].times.length,
     getTimes: () => specs[i].times,
+    getWidth: specs[i].width === undefined ? undefined : () => specs[i].width, // 폭(px) 지정 시 새 규칙 경로
   }));
   return { sync, ms, handles };
 }
@@ -542,6 +543,98 @@ test("시간축(시각): 라이브 칸의 최신 창은 마감 칸에 데이터 
   // 클램프 없이 그대로 적용해 마감 칸의 오른쪽이 빈 영역으로 보인다:
   // (28030-1000)/60 = 450.5, 479 + (30940-29740)/60 = 499
   assert.deepEqual(ms[1].calls.setRange, [{ from: 450.5, to: 499 }]);
+});
+
+// 폭 규칙 (2026-10-01): 같은 px 봉 간격 + 같은 오른쪽 끝 시각. 칸 폭이 달라도(접이식
+// 지표 패널) 차트 영역의 오른쪽 끝이 같은 윈도우 x라서, 두 조건이면 공유 시각의 x가
+// 일치한다 — 넓은 칸은 왼쪽에 더 많은 이력이 보일 뿐이다.
+// 간격 관계식은 라이브러리 기준 barSpacing = width/(to−from+1)이다 (4.2.3 소스 확인 —
+// pane-sync.js 주석 참조). 이 섹션의 기대값 계산도 코드가 아니라 이 관계식을 기준으로 한다.
+
+test("시간축(폭): 폭이 같으면 새 규칙은 종전 '같은 시계 창'과 같은 결과를 낸다 (회귀)", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(1000 + 120 * 60, 380); // 120분 늦게 시작
+  const { ms } = setupWithTimes([{ times: aT, width: 990 }, { times: bT, width: 990 }], false);
+  fireRange(ms[0], { from: 200, to: 299 });
+  // 종전 창 규칙의 결과 {80,179}와 동일 — 폭이 같으면 +1이 상쇄되어 slots = 창 폭이라
+  // 두 규칙이 같다
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 80, to: 179 }]);
+});
+
+test("시간축(폭): 폭이 다른 칸은 같은 오른쪽 끝 시각과 같은 px 봉 간격을 갖는다 (x 일치)", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(8200, 380); // A와 같은 분 그리드, 120분 늦게 시작
+  const { ms } = setupWithTimes([{ times: aT, width: 800 }, { times: bT, width: 400 }], false);
+  fireRange(ms[0], { from: 200, to: 299 }); // A 오른쪽 끝 시각 18940, 간격 800/(99+1) = 8px
+  const applied = ms[1].calls.setRange[0];
+  // 오른쪽 끝 시각 일치: B의 to 인덱스가 같은 시각(18940 → 인덱스 179)을 가리킨다
+  assert.equal(applied.to, 179);
+  // px 봉 간격 일치 (라이브러리 수식): B의 슬롯 = 400/8 − 1 = 49 → B 간격 400/(49+1) = 8px
+  assert.deepEqual(applied, { from: 130, to: 179 });
+  // 공유 시각의 오른쪽 끝 기준 x 거리가 양 칸에서 같다 — 라이브러리 좌표 관계
+  // (x(i) = (i − from + 0.5)·spacing)로 직접 계산해 대조한다. 차트 오른쪽 끝이 같은
+  // 윈도우 x이므로 수직선이 정확히 겹친다 (넓은 A가 왼쪽에 50봉을 더 보여줄 뿐)
+  for (const time of [aT[210], aT[250], aT[290]]) {
+    const distA = 800 - (PaneSync.logicalAt(aT, time) - 200 + 0.5) * (800 / (299 - 200 + 1));
+    const distB = 400 - (PaneSync.logicalAt(bT, time) - applied.from + 0.5)
+                      * (400 / (applied.to - applied.from + 1));
+    assert.equal(distA, distB);
+  }
+});
+
+test("시간축(폭): 라이브 칸의 오른쪽 끝 시각은 마감 칸에도 그대로 맞춰진다 (빈 영역 포함)", () => {
+  const aT = uniformTimes(1000, 500); // 라이브 — 끝 30940
+  const bT = uniformTimes(1000, 480); // 마감 — 끝 29740
+  const { ms } = setupWithTimes([{ times: aT, width: 990 }, { times: bT, width: 505 }], false);
+  fireRange(ms[0], { from: 450.5, to: 499 }); // A 오른쪽 끝 30940, 간격 990/(48.5+1) = 20px
+  // B의 오른쪽 끝도 30940(인덱스 499 — 데이터(479) 너머 빈 영역), 슬롯은 505/20 − 1 = 24.25
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 474.75, to: 499 }]);
+});
+
+test("시간축(폭): 무겹침 0이면 폭 유지 가장자리 창으로 선클램프한다 (에코 삼킴)", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(1000, 200); // 마감 — 끝 12940
+  const { ms } = setupWithTimes([{ times: aT, width: 910 }, { times: bT, width: 460 }], false);
+  fireRange(ms[0], { from: 400, to: 490 }); // A 오른쪽 끝 30400, 간격 910/91 = 10px → B 슬롯 460/10 − 1 = 45
+  // raw {445,490}은 B(last=199)를 완전히 지나침 → 폭 유지 최신 창 {154,199}
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 154, to: 199 }]);
+  fireRange(ms[1], { from: 154, to: 199 }); // 적용 값과 같은 에코
+  assert.deepEqual(ms[0].calls.setRange, []); // 재전파 없음
+});
+
+test("시간축(폭): 창이 대상 칸 데이터보다 전부 앞이면 폭 유지 첫 창으로 선클램프한다", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(100000, 300); // B는 A보다 훨씬 뒤 시간대
+  const { ms } = setupWithTimes([{ times: aT, width: 910 }, { times: bT, width: 460 }], false);
+  fireRange(ms[0], { from: 400, to: 490 }); // A 오른쪽 끝 30400 — B 시작(100000) 이전
+  // toM = (30400-100000)/60 = -1160 < 0 → 무겹침 0 → 폭 유지 첫 창 {0,45}
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 0, to: 45 }]);
+});
+
+test("시간축(폭): 폭이 바뀐 뒤(패널 접기·펼치기) 전파되면 새 폭 기준으로 다시 맞춘다", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(1000, 500);
+  const specB = { times: bT, width: 1000 };
+  const { ms } = setupWithTimes([{ times: aT, width: 1000 }, specB], false);
+  fireRange(ms[0], { from: 399, to: 498 }); // 간격 1000/100 = 10px — 같은 폭이라 같은 창
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 399, to: 498 }]);
+  specB.width = 505; // 패널을 펼쳐 B의 차트 폭이 줄었다
+  fireRange(ms[0], { from: 399, to: 498 });
+  // 오른쪽 끝(498)은 그대로, 슬롯만 505/10 − 1 = 49.5로 — x 정렬이 유지된다
+  assert.deepEqual(ms[1].calls.setRange[1], { from: 448.5, to: 498 });
+});
+
+test("시간축(폭): 한쪽이라도 폭 정보가 없으면 종전 '같은 시계 창' 규칙으로 폴백한다", () => {
+  const aT = uniformTimes(1000, 500);
+  const bT = uniformTimes(8200, 380);
+  // B만 폭 제공 — A→B 전파는 발생 칸 폭이 없어 창 규칙으로 폴백
+  const { ms } = setupWithTimes([{ times: aT }, { times: bT, width: 500 }], false);
+  fireRange(ms[0], { from: 200, to: 299 });
+  assert.deepEqual(ms[1].calls.setRange, [{ from: 80, to: 179 }]); // 창 규칙 결과
+  // 반대 방향(B→A)도 대상 칸(A) 폭이 없어 창 규칙
+  fireRange(ms[1], { from: 80, to: 179 }); // 적용 값과 같은 에코 — 삼킨다
+  fireRange(ms[1], { from: 80, to: 179 }); // 같은 값의 사용자 제스처 — 창 규칙으로 전파
+  assert.deepEqual(ms[0].calls.setRange, [{ from: 200, to: 299 }]);
 });
 
 test("칸 삭제: remove 후에는 구독이 해제되어 더 이상 전파되지 않는다", () => {

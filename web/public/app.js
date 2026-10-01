@@ -194,10 +194,14 @@ function createPane(heightFrac = 1) {
       const c = feed.get(pane.symbol);
       return c ? c.barSeq.length + (c.wsCount ?? 0) : 0;
     },
-    // 시리즈(봉 + whitespace)의 항목별 시각(초) 오름차순 — pane-sync가 발생 칸의 논리 범위를
-    // 시각 창으로 환산하고 대상 칸에서 같은 시계 창의 인덱스를 찾는 기준이다. 종목마다 봉 수·
-    // 구멍 수가 달라 논리 인덱스로 맞추면 칸마다 다른 시각을 보게 되므로 시각이 공통 기준이다.
+    // 시리즈(봉 + whitespace)의 항목별 시각(초) 오름차순 — pane-sync가 발생 칸의 오른쪽
+    // 끝 논리 인덱스를 시각으로 환산하고 대상 칸에서 그 시각의 인덱스를 찾는 기준이다.
+    // 종목마다 봉 수·구멍 수가 달라 논리 인덱스로 맞추면 칸마다 다른 시각을 보게 되므로
+    // 시각이 공통 기준이다.
     getTimes: () => feed.get(pane.symbol)?.seriesTimes,
+    // 차트 영역(.chart-host)의 px 폭 — 새 시간축 규칙(같은 px 봉 간격 + 같은 오른쪽 끝
+    // 시각)의 줌 기준. 지표 패널 접기/펼치기로 폭이 바뀌므로 호출 시점에 잰다.
+    getWidth: () => pane.chartEl.clientWidth,
   });
   buildPanePicker(pane); // 종목 입력은 칸 도구줄 맨 앞에 1회 만든다 (트리 재구성과 무관)
   buildPaneToolButtons(pane); // ☰(지표 패널 접기)·×(칸 삭제)도 1회 만든다 (상태만 동기화)
@@ -913,21 +917,31 @@ function renderSymbolPanes(shcode) {
     // 돌아가며 내는 범위 이벤트가 다른 칸의 탐색 위치를 빼앗지 않게 뮤트한다
     mutePaneRangeForSeeding(pane);
     pane.candleSeries.setData(rows);
-    // 초기 범위: 다른 칸이 이미 보이는 시계 창을 갖고 있으면 그 창을 이 시리즈에 엄밀
-    // 적용한다 (엄밀 시각 정렬 — 이 종목에 데이터가 없는 구간은 빈 영역으로 남는다).
-    // ref가 같은 종목 재시딩 중인 칸이어도 시각 값은 유효하므로 그대로 쓴다.
-    // 아직 아무 칸도 창을 갖지 않았으면(첫 칸) 최근 380봉을 기본으로 한다.
-    let refRange = null;
+    // 초기 범위: 다른 칸이 이미 창을 갖고 있으면 그 칸의 px 봉 간격과 오른쪽 끝 시각을
+    // 이 칸 폭에 적용한다 (pane-sync와 같은 규칙 — 이 종목에 데이터가 없는 구간은 빈
+    // 영역으로 남고, 칸 폭이 달라도 공유 시각의 x가 일치한다). ref가 같은 종목 재시딩
+    // 중인 칸이어도 값은 유효하므로 그대로 쓴다. 아직 아무 칸도 창을 갖지 않았으면
+    // (첫 칸) 최근 380봉을 기본으로 한다.
+    let refSpacingPx = 0, refRightTime = 0;
     for (const q of panes) {
       if (q === pane || !q.symbol) continue;
-      const r = q.chart.timeScale().getVisibleRange(); // 한 번만 읽어 변수에 담는다
-      if (r) { refRange = r; break; }
+      const lr = q.chart.timeScale().getVisibleLogicalRange();
+      const qTimes = feed.get(q.symbol)?.seriesTimes;
+      if (lr && lr.to > lr.from && q.chartEl.clientWidth > 0
+          && Array.isArray(qTimes) && qTimes.length > 0) {
+        // px 봉 간격 = 폭/(슬롯 수+1) — 라이브러리 관계식 (pane-sync.js 주석 참조)
+        refSpacingPx = q.chartEl.clientWidth / (lr.to - lr.from + 1); // 한 번만 읽어 변수에 담는다
+        // 오른쪽 끝 앵커는 '논리 인덱스 → 시각' 환산으로 — getVisibleRange().to는
+        // floor/ceil 후 데이터 범위로 클램프되어, ref가 마지막 봉 뒤 여백으로 스크롤돼
+        // 있으면 어긋난다 (pane-sync의 tWin.to와 같은 timeAt 환산)
+        refRightTime = PaneSync.timeAt(qTimes, lr.to);
+        break;
+      }
     }
-    if (refRange && times.length) {
-      pane.chart.timeScale().setVisibleLogicalRange({
-        from: PaneSync.logicalAt(times, Number(refRange.from)),
-        to: PaneSync.logicalAt(times, Number(refRange.to)),
-      });
+    if (refSpacingPx > 0 && times.length && pane.chartEl.clientWidth > 0) {
+      const toM = PaneSync.logicalAt(times, refRightTime);
+      const fromM = toM - (pane.chartEl.clientWidth / refSpacingPx - 1);
+      pane.chart.timeScale().setVisibleLogicalRange({ from: fromM, to: toM });
     } else if (rows.length) {
       pane.chart.timeScale().setVisibleLogicalRange({
         from: Math.max(0, rows.length - INITIAL_VISIBLE_BARS),
