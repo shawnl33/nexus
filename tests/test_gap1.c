@@ -82,29 +82,101 @@ static void test_prime(void) {
         trs[i] = 10.0;
     }
     tr_gap1_prime(&s, trs, 10);
-    TR_CHECK(s.tr_count == 10);
+    TR_CHECK(ylv_count(&s.tr) == 10);
     TR_CHECK(s.primed_count == 10);
     TR_CHECK(!s.valid);
 
     /* 첫 실세션 진행: 완성 전까지 prev_close가 없어 무효 유지 */
     tr_gap1_on_bar(&s, 100.0, 105.0, 95.0, 100.0, 540, true, 1, true);
     TR_CHECK(!s.valid);
-    TR_CHECK(s.tr_count == 10); /* 진행 중 세션은 이력을 바꾸지 않는다 */
+    TR_CHECK(ylv_count(&s.tr) == 10); /* 진행 중 세션은 이력을 바꾸지 않는다 */
 
     /* 두 번째 세션 첫 봉 → 첫 실세션 완성이 정상 이어짐:
      * 프라임에 종가가 없어 첫 완성 세션 TR은 기존 첫 완성 규칙(H−L=10)을 따르고,
      * prev_close=100이 채워져 프라임만으로 워밍업 없이 곧바로 유효 조건 만족 */
     tr_gap1_on_bar(&s, 103.5, 105.0, 95.0, 100.0, 540, true, 2, true);
-    TR_CHECK(s.tr_count == 11);
+    TR_CHECK(ylv_count(&s.tr) == 11);
     TR_CHECK(s.completed_days == 1);
-    TR_CHECK(fabs(s.tr_array[0] - 10.0) < 1e-9);  /* 실세션 TR이 [0]에 push */
-    TR_CHECK(fabs(s.tr_array[10] - 10.0) < 1e-9); /* 프라임 최연소값까지 유지 */
+    double tr0 = 0.0, tr10 = 0.0;
+    TR_CHECK(ylv_at(&s.tr, 0, &tr0) && fabs(tr0 - 10.0) < 1e-9);  /* 실세션 TR이 [0]에 push */
+    TR_CHECK(ylv_at(&s.tr, 10, &tr10) && fabs(tr10 - 10.0) < 1e-9); /* 프라임 최연소값까지 유지 */
     TR_CHECK(s.valid);
     /* 평균TR = 최신 10개(실세션 10 + 프라임 9개×10) = 10, 갭비율 = 3.5/10 = 0.35 */
     TR_CHECK(fabs(s.gap_ratio - 0.35) < 1e-9);
     TR_CHECK(s.gap_grade == 1);
     TR_CHECK(s.daily_weight == 0.5);
     TR_CHECK(s.gap_dir == 1);
+}
+
+/* 채워진 링 위의 재prime(k>0): 기존 신값 뒤(더 과거)에 이어 붙는다.
+ * prime 10 → 실세션 완성 1개 → 재prime 5 → 최종 링 레이아웃 전수 대조 */
+static void test_reprime_appends_behind(void) {
+    tr_gap1_t s;
+    tr_gap1_config_t cfg = {10, 0.35, 0.75};
+    tr_gap1_init(&s, &cfg);
+
+    /* 프라임 10개: 오래된 순 1..10 → 링 [0]=10, [9]=1 */
+    double trs[10];
+    for (int i = 0; i < 10; i++) {
+        trs[i] = (double)(i + 1);
+    }
+    tr_gap1_prime(&s, trs, 10);
+
+    /* 실세션 1개 완성: 첫 완성 규칙으로 TR = H−L = 50이 [0]에 push */
+    tr_gap1_on_bar(&s, 100.0, 105.0, 55.0, 104.0, 540, true, 1, true); /* 세션1 시작 */
+    tr_gap1_on_bar(&s, 101.0, 106.0, 99.0, 103.0, 540, true, 2, true); /* 세션2 시작 → 세션1 완성 */
+    /* 링: [0]=50, [1]=10, ..., [10]=1, count=11 */
+
+    /* 재prime 5개: 오래된 순 100,200,300,400,500 */
+    double trs2[5] = {100.0, 200.0, 300.0, 400.0, 500.0};
+    tr_gap1_prime(&s, trs2, 5);
+
+    /* 기대 레이아웃(원 코드 인덱스 규약): 기존 이력이 앞, 재prime이 뒤([11]=재prime 최신) */
+    static const double expect[16] = {
+        50.0,
+        10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0,
+        500.0, 400.0, 300.0, 200.0, 100.0
+    };
+    TR_CHECK(ylv_count(&s.tr) == 16);
+    TR_CHECK(s.primed_count == 15);
+    for (int i = 0; i < 16; i++) {
+        double v = 0.0;
+        TR_CHECK(ylv_at(&s.tr, (size_t)i, &v) && v == expect[i]);
+    }
+}
+
+/* 재prime 절단: room 부족 시 입력 최구부터 버리고 기존 값은 하나도 밀리지 않는다 */
+static void test_reprime_truncates_to_room(void) {
+    tr_gap1_t s;
+    tr_gap1_config_t cfg = {10, 0.35, 0.75};
+    tr_gap1_init(&s, &cfg);
+
+    /* 프라임 10개 + 실세션 8개 완성(TR 100,110,...,170) → count=18 */
+    double trs[10];
+    for (int i = 0; i < 10; i++) {
+        trs[i] = (double)(i + 1);
+    }
+    tr_gap1_prime(&s, trs, 10);
+    for (int j = 1; j <= 9; j++) {
+        tr_gap1_on_bar(&s, 100.0, 190.0 + 10.0 * j, 100.0, 100.0, 540, true, j, true);
+    }
+    TR_CHECK(ylv_count(&s.tr) == 18);
+
+    /* 재prime 5개: room=2라 입력 {500,600,700}은 버려지고 {800,900}만 붙는다 */
+    double trs2[5] = {500.0, 600.0, 700.0, 800.0, 900.0};
+    tr_gap1_prime(&s, trs2, 5);
+
+    static const double expect[20] = {
+        170.0, 160.0, 150.0, 140.0, 130.0, 120.0, 110.0, 100.0,
+        10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0,
+        900.0, 800.0
+    };
+    TR_CHECK(ylv_count(&s.tr) == 20);
+    TR_CHECK(s.primed_count == 12);
+    for (int i = 0; i < 20; i++) {
+        double v = 0.0;
+        TR_CHECK(ylv_at(&s.tr, (size_t)i, &v) && v == expect[i]);
+    }
 }
 
 int main(void) {
@@ -115,5 +187,7 @@ int main(void) {
     test_elapsed_min();
     test_midnight_elapsed();
     test_prime();
+    test_reprime_appends_behind();
+    test_reprime_truncates_to_room();
     TR_TEST_SUMMARY();
 }

@@ -381,9 +381,9 @@ static void test_sma_late_correction(void) {
     for (int i = 1; i <= 6; i++) {
         feed_min1(&e, i, 100 + i, id++);
     }
-    TR_CHECK(e.sma5.valid && e.sma5.count == 5);
+    TR_CHECK(e.sma5.valid && ylv_count(&e.sma5.win) == 5);
     TR_CHECK(fabs(e.sma5.value - 104.0) < 1e-9);
-    TR_CHECK(e.sma20.count == 6 && e.sma60.count == 6);
+    TR_CHECK(ylv_count(&e.sma20.win) == 6 && ylv_count(&e.sma60.win) == 6);
 
     /* 늦은 틱: 확정된 봉 3(9:03)을 999로 정정한다. exec_id는 단조 증가를 유지해야
      * 중복 필터를 지나 정정 경로(TR_BB_LATE_CORRECTED)에 도달한다 */
@@ -406,14 +406,14 @@ static void test_sma_late_correction(void) {
 
     /* 창이 오염하지 않는다: 개수·값 모두 정정 전 그대로 (오염 시 999가 push되어
      * SMA5 = (103+104+105+106+999)/5 = 283.4) */
-    TR_CHECK(e.sma5.count == 5);
+    TR_CHECK(ylv_count(&e.sma5.win) == 5);
     TR_CHECK(fabs(e.sma5.value - 104.0) < 1e-9);
-    TR_CHECK(e.sma20.count == 6 && e.sma60.count == 6);
+    TR_CHECK(ylv_count(&e.sma20.win) == 6 && ylv_count(&e.sma60.win) == 6);
     TR_CHECK(strstr(cap.last, "\"sma\":[0,104,0,0]") != 0); /* 정정 이벤트 발행에도 현재 창 유지 */
 
     /* 다음 새 봉은 정상 push: 창은 103..107로 밀려 평균 105 (999가 남아 있으면 실패) */
     feed_min1(&e, 7, 107, id++);
-    TR_CHECK(e.sma5.count == 5);
+    TR_CHECK(ylv_count(&e.sma5.win) == 5);
     TR_CHECK(fabs(e.sma5.value - 105.0) < 1e-9);
     TR_CHECK(strstr(cap.last, "\"sma\":[0,105,0,0]") != 0);
 }
@@ -912,9 +912,52 @@ static void test_two_pipes_independent(void) {
 static double tp_low(int i)  { return 500.0 + 2.0 * i; }
 static double tp_high(int i) { return 503.0 + 2.0 * i + (double)(i % 3); }
 
+/* tp 패턴 봉 1개(틱 2개): i번째 봉을 09:(i%60) + (i/60)시간, 주어진 일자(day)에 공급.
+ * day-2(1월 3일) 봉은 세션 경계를 넘겨 gap1/dtl1의 세션 완성 저장을 일으킨다 */
+static void feed_tp_bar_d(tr_engine_t *e, uint64_t instrument_id, unsigned day, int i, uint64_t *id) {
+    for (int t = 0; t < 2; t++) {
+        tr_event_envelope_t env;
+        memset(&env, 0, sizeof(env));
+        env.kind = TR_EVENT_TICK;
+        tr_civil_t c = {2024, 1, day, 9 + (unsigned)(i / 60), (unsigned)(i % 60), t == 0 ? 0u : 30u};
+        tr_time_us_from_civil(&c, KST, &env.event_time_us);
+        env.received_time_us = env.event_time_us;
+        tr_tick_t tk;
+        memset(&tk, 0, sizeof(tk));
+        tk.instrument_id = instrument_id;
+        tk.price = (tr_price_t)(t == 0 ? tp_low(i) : tp_high(i));
+        tk.qty = 10;
+        tk.source_exec_id = (*id)++;
+        tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+        TR_CHECK(tr_engine_on_tick(e, &env, &tk) != TR_BB_ERROR);
+    }
+}
+
 static void feed_tp_bar(tr_engine_t *e, uint64_t instrument_id, int i, uint64_t *id) {
-    feed_pipe(e, instrument_id, (unsigned)i, 0, (tr_price_t)tp_low(i), (*id)++);
-    feed_pipe(e, instrument_id, (unsigned)i, 30, (tr_price_t)tp_high(i), (*id)++);
+    feed_tp_bar_d(e, instrument_id, 2, i, id); /* 2024-01-02 */
+}
+
+static void feed_tp_bar_d2(tr_engine_t *e, uint64_t instrument_id, int i, uint64_t *id) {
+    feed_tp_bar_d(e, instrument_id, 3, i, id); /* 2024-01-03 */
+}
+
+/* 틱 1개: 같은 봉 재평가(is_new_bar=false)를 유도한다 */
+static void feed_tp_tick(tr_engine_t *e, uint64_t instrument_id, unsigned day,
+                         unsigned h, unsigned mi, unsigned s, tr_price_t price, uint64_t *id) {
+    tr_event_envelope_t env;
+    memset(&env, 0, sizeof(env));
+    env.kind = TR_EVENT_TICK;
+    tr_civil_t c = {2024, 1, day, h, mi, s};
+    tr_time_us_from_civil(&c, KST, &env.event_time_us);
+    env.received_time_us = env.event_time_us;
+    tr_tick_t tk;
+    memset(&tk, 0, sizeof(tk));
+    tk.instrument_id = instrument_id;
+    tk.price = price;
+    tk.qty = 10;
+    tk.source_exec_id = (*id)++;
+    tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+    TR_CHECK(tr_engine_on_tick(e, &env, &tk) != TR_BB_ERROR);
 }
 
 /* 이식된 파이프라인과 미러 엔진의 같은 종목 파이프라인: 모든 yl_var 기반 지표 출력이
@@ -940,6 +983,27 @@ static void check_pipe_eq(const tr_pipeline_t *a, const tr_pipeline_t *b) {
     TR_CHECK(a->htf.pred_price == b->htf.pred_price);
     TR_CHECK(a->htf.direction == b->htf.direction);
     TR_CHECK(a->htf.change == b->htf.change);
+    /* sma 창 5/20/60 */
+    TR_CHECK(a->sma5.value == b->sma5.value);
+    TR_CHECK(a->sma5.valid == b->sma5.valid);
+    TR_CHECK(a->sma20.value == b->sma20.value);
+    TR_CHECK(a->sma20.valid == b->sma20.valid);
+    TR_CHECK(a->sma60.value == b->sma60.value);
+    TR_CHECK(a->sma60.valid == b->sma60.valid);
+    /* gap1 갭 환경 (tr yl_var) */
+    TR_CHECK(a->gap1.gap_ratio == b->gap1.gap_ratio);
+    TR_CHECK(a->gap1.gap_grade == b->gap1.gap_grade);
+    TR_CHECK(a->gap1.gap_dir == b->gap1.gap_dir);
+    TR_CHECK(a->gap1.daily_weight == b->gap1.daily_weight);
+    TR_CHECK(a->gap1.valid == b->gap1.valid);
+    /* dtl1 일봉 회귀 (day_mids yl_var) */
+    TR_CHECK(a->dtl1.reg_line == b->dtl1.reg_line);
+    TR_CHECK(a->dtl1.reg_slope == b->dtl1.reg_slope);
+    TR_CHECK(a->dtl1.reg_r2 == b->dtl1.reg_r2);
+    TR_CHECK(a->dtl1.reg_residual == b->dtl1.reg_residual);
+    TR_CHECK(a->dtl1.link_valid == b->dtl1.link_valid);
+    /* ATR 값 자첵도 대조 (v4.volatility는 candidate라 경로가 다르다) */
+    TR_CHECK(tr_atr_value(&a->lr3.v4.atr) == tr_atr_value(&b->lr3.v4.atr));
     /* obd2 호가 출력 (core_hist/dir_hist yl_var) */
     TR_CHECK(a->obd2.score == b->obd2.score);
     TR_CHECK(a->obd2.slope3 == b->obd2.slope3);
@@ -980,16 +1044,30 @@ static void test_pipe_transplant_atr_relink(void) {
     tr_pipeline_t *mb = tr_engine_pipe_add(&m, 100, false, "BBB002", &TEST_SESS, m_bbb, BB_CAP, m_midb, 32);
     TR_CHECK(mb != 0);
 
-    /* B에 20봉 공급 (봉 1~19 확정 → ATR(14) 가득 참). 독립 참조 ATR에 같은 H/L/C를 주고,
+    /* ⑤ 체인 워밍업: 백필 1-1 단계처럼 prime으로 과거 완성 세션을 채운다 (미러 동일).
+     * 이 시점 링은 비어 있다 (봉 주입 전) — 실전 호출 경로와 같은 순서다 */
+    double prime_trs[10], prime_mids[5];
+    for (int i = 0; i < 10; i++) {
+        prime_trs[i] = 6.0 + 0.5 * i;
+    }
+    for (int i = 0; i < 5; i++) {
+        prime_mids[i] = 100.0 + 2.0 * i;
+    }
+    tr_gap1_prime(&pb->gap1, prime_trs, 10);
+    tr_dtl1_prime(&pb->dtl1, prime_mids, 5);
+    tr_gap1_prime(&mb->gap1, prime_trs, 10);
+    tr_dtl1_prime(&mb->dtl1, prime_mids, 5);
+
+    /* B에 60봉 공급 (봉 1~59 확정 → ATR(14) 가득, sma60 유효). 독립 참조 ATR에 같은 H/L/C를 주고,
      * 미러 엔진에도 같은 틱 스트림을 준다 */
     tr_atr_t ref;
     TR_CHECK(tr_atr_init(&ref, 14));
     uint64_t id = 1, mid_id = 1;
-    for (int i = 1; i <= 20; i++) {
+    for (int i = 1; i <= 60; i++) {
         feed_tp_bar(&e, 100, i, &id);
         feed_tp_bar(&m, 100, i, &mid_id);
     }
-    for (int i = 1; i <= 19; i++) {
+    for (int i = 1; i <= 59; i++) {
         tr_atr_on_bar(&ref, tp_high(i), tp_low(i), tp_high(i));
     }
     /* 참조 모델이 엔진 경로와 정확히 일치함을 먼저 고정한다 (이식 전) */
@@ -1017,19 +1095,29 @@ static void test_pipe_transplant_atr_relink(void) {
         tr_engine_on_orderbook(&e, 200, kst(9, 3, (unsigned)(10 + k)), 5000.0, 4000.0);
     }
 
-    /* 이식된 pipe0(id=100)에 봉 21~25 공급 → 봉 20~24 확정, 참조도 동기화.
+    /* 같은 봉 갱신 틱(봉 60 진행 중, close 동일): 새 push 없이 각 지표를 재계산시킨다.
+     * 출력 필드는 이식 복사로 올바른 값을 갖고 있으므로, 재계산을 강제해야 버퍼 공유
+     * 오염이 출력으로 드러난다 (미러 동기화) */
+    feed_tp_tick(&e, 100, 2, 10, 0, 45, (tr_price_t)tp_high(60), &id);
+    feed_tp_tick(&m, 100, 2, 10, 0, 45, (tr_price_t)tp_high(60), &mid_id);
+
+    /* 1차 대조: 재계산 직후라 sma·dtl1처럼 이후 push로 창이 자연 회복되는 모듈의
+     * 버퍼 공유 오염도 그대로 드러난다 */
+    check_pipe_eq(&e.pipe0, mb);
+
+    /* 이식된 pipe0(id=100)에 봉 61~65 공급 → 봉 60~64 확정, 참조도 동기화.
      * ATR 창이 가득 차 있으므로 매 확정이 최구값 축출을 일으켜 버퍼 공유 시 즉시 드러난다 */
-    for (int i = 21; i <= 25; i++) {
+    for (int i = 61; i <= 65; i++) {
         feed_tp_bar(&e, 100, i, &id);
         feed_tp_bar(&m, 100, i, &mid_id);
     }
-    for (int i = 20; i <= 24; i++) {
+    for (int i = 60; i <= 64; i++) {
         tr_atr_on_bar(&ref, tp_high(i), tp_low(i), tp_high(i));
     }
     /* 이식 후에도 호가를 더 공급한다 (obd2 링 축출 유발, 미러 동기화) */
     for (int k = 0; k < 3; k++) {
-        tr_engine_on_orderbook(&e, 100, kst(9, 22, (unsigned)(k * 10)), 3100.0 + 100 * k, 2600.0 + 50 * k);
-        tr_engine_on_orderbook(&m, 100, kst(9, 22, (unsigned)(k * 10)), 3100.0 + 100 * k, 2600.0 + 50 * k);
+        tr_engine_on_orderbook(&e, 100, kst(10, 2, (unsigned)(k * 10)), 3100.0 + 100 * k, 2600.0 + 50 * k);
+        tr_engine_on_orderbook(&m, 100, kst(10, 2, (unsigned)(k * 10)), 3100.0 + 100 * k, 2600.0 + 50 * k);
     }
 
     TR_CHECK(tr_atr_value(&e.pipe0.lr3.v4.atr) == tr_atr_value(&ref));
@@ -1037,7 +1125,13 @@ static void test_pipe_transplant_atr_relink(void) {
     TR_CHECK(ylv_count(&pc->lr3.v4.atr.sma_hist) == 2);
     TR_CHECK(ylv_count(&e.pipe0.lr3.v4.atr.sma_hist) == 14);
 
-    /* 이식된 pipe0의 모든 yl_var 지표 출력(lr3/v4/htf/obd2)이 미러와 비트 동일해야 한다 */
+    /* day-2 봉 3개: 세션 경계를 넘겨 gap1/dtl1의 완성 세션 저장을 일으킨다 (미러 동기화) */
+    for (int i = 66; i <= 68; i++) {
+        feed_tp_bar_d2(&e, 100, i, &id);
+        feed_tp_bar_d2(&m, 100, i, &mid_id);
+    }
+
+    /* 2차 대조: 세션 완성 뒤에는 gap1 출력까지 미러와 비트 동일해야 한다 */
     check_pipe_eq(&e.pipe0, mb);
 }
 

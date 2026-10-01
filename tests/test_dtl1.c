@@ -73,7 +73,7 @@ static void test_prime(void) {
     /* 프라임: 오래된 순으로 100, 102, 104, 106, 108 → 즉시 유효 조건 만족 */
     double mids[5] = {100, 102, 104, 106, 108};
     tr_dtl1_prime(&s, mids, 5);
-    TR_CHECK(s.day_count == 5);
+    TR_CHECK(ylv_count(&s.day_mids) == 5);
     TR_CHECK(s.primed_count == 5);
     TR_CHECK(s.link_valid);
     TR_CHECK(fabs(s.reg_slope - 2.0) < 1e-9);
@@ -82,11 +82,12 @@ static void test_prime(void) {
 
     /* 프라임 후 첫 실세션 완성이 정상 이어짐: 세션6(mid 110)이 [0]에 push */
     tr_dtl1_on_bar(&s, 111.0, 109.0, 110.0, true, 1, true);  /* 세션6 시작 */
-    TR_CHECK(s.day_count == 5); /* 진행 중 세션은 이력을 바꾸지 않는다 */
+    TR_CHECK(ylv_count(&s.day_mids) == 5); /* 진행 중 세션은 이력을 바꾸지 않는다 */
     tr_dtl1_on_bar(&s, 113.0, 111.0, 112.0, true, 2, true);  /* 세션7 시작 → 세션6 완성 */
-    TR_CHECK(s.day_count == 6);
-    TR_CHECK(fabs(s.day_mids[0] - 110.0) < 1e-9);
-    TR_CHECK(fabs(s.day_mids[1] - 108.0) < 1e-9); /* 프라임 최신값이 뒤로 밀림 */
+    TR_CHECK(ylv_count(&s.day_mids) == 6);
+    double dm0 = 0.0, dm1 = 0.0;
+    TR_CHECK(ylv_at(&s.day_mids, 0, &dm0) && fabs(dm0 - 110.0) < 1e-9);
+    TR_CHECK(ylv_at(&s.day_mids, 1, &dm1) && fabs(dm1 - 108.0) < 1e-9); /* 프라임 최신값이 뒤로 밀림 */
     /* 회귀는 최신 5개(102..110): 기울기 2, 투영 112 */
     TR_CHECK(s.link_valid);
     TR_CHECK(fabs(s.reg_slope - 2.0) < 1e-9);
@@ -94,8 +95,68 @@ static void test_prime(void) {
 
     /* 프라임은 진행 중 세션 집계를 덮지 않는다: 세션7 진행 갱신 */
     tr_dtl1_on_bar(&s, 115.0, 113.0, 114.0, false, 3, true);
-    TR_CHECK(s.day_count == 6);
+    TR_CHECK(ylv_count(&s.day_mids) == 6);
     TR_CHECK(fabs(s.sess_high - 115.0) < 1e-9);
+}
+
+/* 채워진 링 위의 재prime(k>0): 기존 신값 뒤(더 과거)에 이어 붙는다.
+ * prime 5 → 실세션 완성 1개 → 재prime 3 → 최종 링 레이아웃 전수 대조 */
+static void test_reprime_appends_behind(void) {
+    tr_dtl1_t s;
+    tr_dtl1_init(&s, &CFG);
+
+    /* 프라임 5개: 오래된 순 100,102,104,106,108 → 링 [0]=108, [4]=100 */
+    double mids[5] = {100.0, 102.0, 104.0, 106.0, 108.0};
+    tr_dtl1_prime(&s, mids, 5);
+
+    /* 실세션 1개 완성: 세션A(mid 110)가 [0]에 push */
+    tr_dtl1_on_bar(&s, 111.0, 109.0, 110.0, true, 1, true); /* 세션A 시작 */
+    tr_dtl1_on_bar(&s, 113.0, 111.0, 112.0, true, 2, true); /* 세션B 시작 → A 완성 */
+    /* 링: [0]=110, [1]=108, ..., [5]=100, count=6 */
+
+    /* 재prime 3개: 오래된 순 90,92,94 */
+    double mids2[3] = {90.0, 92.0, 94.0};
+    tr_dtl1_prime(&s, mids2, 3);
+
+    /* 기대 레이아웃(원 코드 인덱스 규약): 기존 이력이 앞, 재prime이 뒤([6]=재prime 최신) */
+    static const double expect[9] = {
+        110.0, 108.0, 106.0, 104.0, 102.0, 100.0, 94.0, 92.0, 90.0
+    };
+    TR_CHECK(ylv_count(&s.day_mids) == 9);
+    TR_CHECK(s.primed_count == 8);
+    for (int i = 0; i < 9; i++) {
+        double v = 0.0;
+        TR_CHECK(ylv_at(&s.day_mids, (size_t)i, &v) && v == expect[i]);
+    }
+}
+
+/* 재prime 절단: room 부족 시 입력 최구부터 버리고 기존 값은 하나도 밀리지 않는다 */
+static void test_reprime_truncates_to_room(void) {
+    tr_dtl1_t s;
+    tr_dtl1_init(&s, &CFG);
+
+    /* 프라임 98개(오래된 순 1..98) → count=98, room=2 */
+    double mids[98];
+    for (int i = 0; i < 98; i++) {
+        mids[i] = (double)(i + 1);
+    }
+    tr_dtl1_prime(&s, mids, 98);
+    TR_CHECK(ylv_count(&s.day_mids) == 98);
+
+    /* 재prime 5개: 입력 {501,502,503}은 버려지고 {504,505}만 붙는다 */
+    double mids2[5] = {501.0, 502.0, 503.0, 504.0, 505.0};
+    tr_dtl1_prime(&s, mids2, 5);
+
+    TR_CHECK(ylv_count(&s.day_mids) == 100);
+    TR_CHECK(s.primed_count == 100);
+    for (int i = 0; i < 98; i++) {
+        double v = 0.0;
+        TR_CHECK(ylv_at(&s.day_mids, (size_t)i, &v) && v == (double)(98 - i));
+    }
+    double v98 = 0.0, v99 = 0.0;
+    TR_CHECK(ylv_at(&s.day_mids, 98, &v98) && v98 == 505.0); /* 재prime 최신 */
+    TR_CHECK(ylv_at(&s.day_mids, 99, &v99) && v99 == 504.0);
+    TR_CHECK(!ylv_at(&s.day_mids, 100, &(double){0.0})); /* cap 초과 참조 불가 */
 }
 
 int main(void) {
@@ -103,5 +164,7 @@ int main(void) {
     test_trend_weak_side();
     test_partial_first_session_excluded();
     test_prime();
+    test_reprime_appends_behind();
+    test_reprime_truncates_to_room();
     TR_TEST_SUMMARY();
 }

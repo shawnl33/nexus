@@ -18,6 +18,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/market/var.h"
+
 typedef struct {
     int32_t volatility_period; /* 변동기간입력 (5~10으로 클램프) */
     double mid_gap_threshold;  /* 중간갭기준입력 */
@@ -35,9 +37,9 @@ typedef struct {
     /* 완성 세션 이력 */
     double prev_close;      /* 직전완성종가 */
     double prev_prev_close; /* 직전직전종가 */
-    double tr_array[20];    /* [0]=최신 완성 세션 TR */
-    int32_t tr_count;
-    int32_t primed_count;   /* tr_gap1_prime으로 채운 완성 세션 TR 수 (마지막 프라임 기준 기록) */
+    double tr_buf[20];      /* tr의 저장소 (yl_var 규약: 상태 구조체 안) */
+    yl_var tr;              /* 완성 세션 TR ([0]=최신) */
+    int32_t primed_count;   /* tr_gap1_prime으로 채운 완성 세션 TR 수 (프라임 누적 기록) */
     int32_t completed_days; /* 완성일수 (첫 완성 세션 TR 규칙용, 실세션 완성만 센다) */
     /* 출력 */
     double gap_ratio;       /* 갭비율 */
@@ -59,11 +61,16 @@ void tr_gap1_on_bar(tr_gap1_t *s, double o, double h, double l, double c,
 
 /* 워밍업 프라임: 완성 세션 TR(고−저)을 **오래된 순**으로 주입해 과거 이력을 채운다.
  * - 이미 보유한 완성 세션의 뒤(더 과거)에 이어 붙인다 — 기존 이력과 진행 중 세션 집계를
- *   덮지 않는다 (프라임은 과거 채우기일 뿐이다).
+ *   덮지 않는다 (프라임은 과거 채우기일 뿐이다). 링이 비어 있으면(일반 호출 경로:
+ *   pipe_init 직후 백필 1-1 단계) 오래된 순 push와 정확히 동등하다.
  * - prev_close/prev_prev_close/completed_days는 건드리지 않는다: 프라임 입력에는 종가가
  *   없으므로 첫 실세션 완성은 기존 첫 완성 규칙(TR=고−저)을 따르고, 그때 prev_close가
  *   채워지며 valid가 성립한다 (TR 개수 조건은 프라임으로 즉시 충족된다).
  * - 이후 실세션이 완성되면 [0]에 push되어 프라임 이력은 뒤로 밀린다 (시간순 연속 유지). */
 void tr_gap1_prime(tr_gap1_t *s, const double *session_trs, size_t n);
+
+/* tr_gap1_t를 포함한 구조체의 통째 값 복사(이식) 후 호출: 시계열 저장소 포인터를
+ * 이 인스턴스 자신의 버퍼로 다시 연결한다 (yl_var 값 복사 불안전 — var.h 참조). */
+bool tr_gap1_relink(tr_gap1_t *s);
 
 #endif

@@ -209,6 +209,11 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
         tr_lr3_relink(&e->pipe0.lr3);
         tr_obd2_relink(&e->pipe0.obd2);
         tr_htf_curve_relink(&e->pipe0.htf);
+        tr_sma_relink(&e->pipe0.sma5);
+        tr_sma_relink(&e->pipe0.sma20);
+        tr_sma_relink(&e->pipe0.sma60);
+        tr_gap1_relink(&e->pipe0.gap1);
+        tr_dtl1_relink(&e->pipe0.dtl1);
         e->cfg.instrument_id = e->pipe0.instrument_id;
         e->cfg.is_futures = e->pipe0.is_futures;
         e->cfg.session = e->pipe0.session;

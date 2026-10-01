@@ -9,6 +9,8 @@ void tr_gap1_init(tr_gap1_t *s, const tr_gap1_config_t *cfg) {
         s->cfg = *cfg;
     }
     s->last_start_bar = -1;
+    /* memset 다음에 시계열 저장소를 연결한다 (순서 고정) */
+    ylv_init(&s->tr, s->tr_buf, sizeof(s->tr_buf) / sizeof(s->tr_buf[0]));
 }
 
 void tr_gap1_prime(tr_gap1_t *s, const double *session_trs, size_t n) {
@@ -18,17 +20,27 @@ void tr_gap1_prime(tr_gap1_t *s, const double *session_trs, size_t n) {
     /* 이미 보유한 완성 세션의 뒤(더 과거)에 이어 붙인다. 진행 중 세션 집계와
      * prev_close/prev_prev_close/completed_days는 건드리지 않는다 — completed_days는
      * 실세션 완성 수라 첫 실세션의 TR 규칙(직전 종가 미보유 시 H−L)이 유지된다. */
-    size_t k = (size_t)s->tr_count;
-    size_t room = (sizeof(s->tr_array) / sizeof(s->tr_array[0])) - k;
+    /* 링은 최신 push만 지원하므로, 기존 이력을 보관해 둔 뒤 프라임(오래된→최신)을 먼저
+     * 채우고 기존 이력을 그 위에 다시 쌓아 "뒤에 이어 붙이기"를 재현한다.
+     * 링이 비어 있으면(일반 호출 경로) 오래된 순 push와 정확히 동등하다. */
+    size_t k = ylv_count(&s->tr);
+    size_t room = (sizeof(s->tr_buf) / sizeof(s->tr_buf[0])) - k;
     if (n > room) {
         session_trs += n - room; /* 버퍼가 모자라면 가장 오래된 입력부터 버린다 */
         n = room;
     }
-    /* 입력은 오래된 순, 내부 버퍼는 [0]=최신 — 뒤집어 채운다 */
-    for (size_t i = 0; i < n; i++) {
-        s->tr_array[k + i] = session_trs[n - 1 - i];
+    /* 입력은 오래된 순, 내부 버퍼는 [0]=최신 — 보관 후 다시 쌓는다 */
+    double keep[sizeof(s->tr_buf) / sizeof(s->tr_buf[0])];
+    for (size_t i = 0; i < k; i++) {
+        ylv_at(&s->tr, i, &keep[i]); /* 최신→과거 순 보관 */
     }
-    s->tr_count = (int32_t)(k + n);
+    ylv_clear(&s->tr);
+    for (size_t i = 0; i < n; i++) {
+        ylv_push(&s->tr, session_trs[i]); /* 입력은 오래된 순 */
+    }
+    for (size_t i = k; i-- > 0;) {
+        ylv_push(&s->tr, keep[i]); /* 과거→최신 순 복원: 최종 [0]=기존 최신 */
+    }
     s->primed_count += (int32_t)n;
 }
 
@@ -69,13 +81,7 @@ void tr_gap1_on_bar(tr_gap1_t *s, double o, double h, double l, double c,
                 double lc = fabs(s->sess_low - s->prev_prev_close);
                 tr = fmax(hl, fmax(hc, lc));
             }
-            for (int j = 18; j >= 0; j--) {
-                s->tr_array[j + 1] = s->tr_array[j];
-            }
-            s->tr_array[0] = tr;
-            if (s->tr_count < 20) {
-                s->tr_count++;
-            }
+            ylv_push(&s->tr, tr);
             s->completed_days++;
         }
 
@@ -110,10 +116,12 @@ void tr_gap1_on_bar(tr_gap1_t *s, double o, double h, double l, double c,
     s->gap_dir = 0;
     s->valid = false;
 
-    if (s->tr_count >= n && s->prev_close > 0.0) {
+    if (ylv_count(&s->tr) >= (size_t)n && s->prev_close > 0.0) {
         double avg_tr = 0.0;
         for (int32_t j = 0; j < n; j++) {
-            avg_tr += s->tr_array[j];
+            double v = 0.0;
+            ylv_at(&s->tr, (size_t)j, &v); /* 최신→과거 합산 순서 유지 */
+            avg_tr += v;
         }
         avg_tr /= (double)n;
         if (avg_tr > 0.0) {
@@ -132,4 +140,11 @@ void tr_gap1_on_bar(tr_gap1_t *s, double o, double h, double l, double c,
             s->valid = true;
         }
     }
+}
+
+bool tr_gap1_relink(tr_gap1_t *s) {
+    if (s == 0) {
+        return false;
+    }
+    return ylv_relink(&s->tr, s->tr_buf);
 }
