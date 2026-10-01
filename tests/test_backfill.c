@@ -11,10 +11,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "adapters/ls/ls_chart.h"
+#include "adapters/ls/ls_http.h"
+#include "adapters/ls/ls_master.h"
 #include "core/model/civil_time.h"
 
 /* src/app/main.c 정의 — 테스트에서는 extern 선언으로 링크한다. */
 bool tr_backfill_keep_bar(tr_time_us_t open_us, tr_time_us_t now_us, uint32_t timeframe_sec);
+bool tr_backfill_marks_rt_only(int kind, int chart_rc);
 
 #define TF1M_SEC 60u
 #define TF1M_US ((tr_time_us_t)TF1M_SEC * TR_US_PER_SEC)
@@ -58,11 +62,24 @@ static void test_timeframe_parameterized(void) {
     TR_CHECK(!tr_backfill_keep_bar(NOW + tf_us + 1, NOW, tf));
 }
 
+/* RT-only 판정: 해외선물 백필의 LS_CHART_EMPTY("해당자료가 없습니다" — 계정 권한 차단,
+ * 2026-10-01 ESZ26 실측)만 RT-only다. 국내의 빈 응답(주말·거래정지)이나 해외의
+ * 전송 오류는 RT-only가 아니다 (60초 재백필 대상 유지) */
+static void test_rt_only_classification(void) {
+    TR_CHECK(tr_backfill_marks_rt_only(LS_MARKET_OVS_FUT, LS_CHART_EMPTY));
+    TR_CHECK(!tr_backfill_marks_rt_only(LS_MARKET_OVS_FUT, LS_HTTP_OK));
+    TR_CHECK(!tr_backfill_marks_rt_only(LS_MARKET_OVS_FUT, LS_HTTP_TRANSPORT_ERR));
+    TR_CHECK(!tr_backfill_marks_rt_only(LS_MARKET_KP200_FUT, LS_CHART_EMPTY));
+    TR_CHECK(!tr_backfill_marks_rt_only(LS_MARKET_KOSPI, LS_CHART_EMPTY));
+    TR_CHECK(!tr_backfill_marks_rt_only(LS_MARKET_KOSDAQ, LS_CHART_EMPTY));
+}
+
 int main(void) {
     test_current_minute_bar_kept();
     test_past_bar_kept();
     test_next_session_stub_dropped();
     test_boundary_one_bar_slack();
     test_timeframe_parameterized();
+    test_rt_only_classification();
     TR_TEST_SUMMARY();
 }

@@ -121,6 +121,35 @@ H1_ 실측 body 필드 (2026-09-28 005930 확인):
 - 단계별: `bidho1..10`/`bidrem1..10` (매수 호가/잔량), `offerho1..10`/`offerrem1..10` (매도 호가/잔량). 값은 문자열.
 - `volume`(누적거래량), `midsumremgubun`, `donsigubun` 등 부가 필드.
 
+해외선물 실시간 (2026-10-01 ESZ26 실측, OVC 초당 ~12건 수신 확인):
+- **tr_key는 8자리 고정 — 심볼 우측 공백 패딩** (`"ESZ26   "`). 미패딩 시 `rsp_cd 10009` 거절.
+  OVC/OVH/WOC/WOH 모두 같은 규칙 (어댑터가 구독 시 자동 패딩, 수신 tr_key 비교는 후행 공백 무시).
+- OVC body 필드 (전부 문자열): `symbol`, `curpr`(현재가), `trdq`(**개별 체결량** — 누적은 `totq`),
+  `cgubun`(체결구분 "+"/"-"), `trdtm`/`ovsdate`(**거래소 현지** 시각/날짜),
+  **`kortm`/`kordate`(한국 시각/날짜 — 이벤트 시각은 이걸 쓴다)**, `ovsmkend`(세션 일자), `lSeq`.
+- OVH body 필드: `hotime`(**거래소 현지 시각** — KST 22:33 수신 메시지에 "083301"(시카고)로 온다.
+  한국 날짜 필드가 없어 epoch 변환이 불가하므로 호가 이벤트 시각은 수신 시각을 쓴다),
+  5단계 `offerho1..5`/`offerrem1..5`/`offerno1..5`, `bidho1..5`/`bidrem1..5`/`bidno1..5`,
+  총잔량 `totofferrem`/`totbidrem`, 건수 `totoffercnt`/`totbidcnt`.
+
+해외선물 REST (2026-10-01 실측 — **이 계정은 CME 차단**):
+- `o3101`(해외선물마스터조회, `/overseas-futureoption/market-data`, InBlock gubun 공백):
+  이 계정은 HKEX(42)+LME(33) 75행만 온다 (CME 없음). 행 필드: `Symbol`, `SymbolNm`, `BscGdsCd`,
+  `ExchCd`, `UntPrc`(최소가격변동 = 틱, 실제 가격 단위 문자열), `DlStrtTm`/`DlEndTm`,
+  `DotGb`(가격 소수 자리, Number — 실측 분포: 0→26종, 1→3종, 2→39종, 4→7종. CUS=4, HSI=0).
+  **`DotGb > 2`(소수 3자리 이상)는 ×100 raw 스케일에서 가격이 절단되므로 레지스트리에 등록하지 않는다**
+  (예: CUS "6.7124" → 671, 24틱 오차 — 정적 표의 배제 원칙과 동일. 기동 시 "정밀도 배제 N종" 요약 1줄).
+  CME 계열은 내장 정적 표(ls_ovsfut)로 해결한다.
+- `o3103`(해외선물차트 분봉, `/overseas-futureoption/chart`): InBlock `shcode`/`ncnt`/`readcnt`(500 성공)/
+  `cts_date`/`cts_time`. 응답 OutBlock1은 **최신→과거 내림차순**, `date`/`time`은 **거래소 현지**,
+  OHLC는 문자열, `volume`은 Number. OutBlock `timediff`가 시차(현지 = KST + timediff 시간, HKEX는 -1).
+  **연속 조회는 동작하지 않는다**: cts_date/cts_time 입력은 무시(첫 페이지 반복), tr_cont_key는
+  "해당자료가 없습니다" — v1은 1페이지만 쓴다. **CME 종목(ESZ26)은 rsp_cd 00000 + "해당자료가 없습니다."**
+  (OutBlock 자체가 없음) — 백필 불가 계정이라 실시간 전용(RT-only)으로 억제한다.
+  일시적 빈 페이지로 RT-only가 오탐 고정될 수 있으므로, 권한 해소·오탐 의심 시 회복은
+  **수동 unwatch/watch** (watch 때마다 o3103을 다시 시도한다).
+- `o3108`(해외선물차트 일주월): HKEX는 응답 옴. 해외선물의 ⑤ 체인 일봉 프라임은 v1에서 스킵.
+
 ## 5. 계좌 (읽기, 단계 6 후반)
 
 | TR | 내용 | 경로 |

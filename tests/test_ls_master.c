@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "adapters/ls/ls_master.h"
+#include "adapters/ls/ls_ovsfut.h"
 
 #define CAP 8
 static ls_instrument_info_t g_items[CAP];
@@ -87,10 +88,110 @@ static void test_search(void) {
     free(m);
 }
 
+/* 실제 o3101 응답 캡처 (2026-10-01 — 이 계정은 HKEX/LME만 온다. 필드는 실측 그대로,
+ * 나머지 필드는 생략): CUSV26은 DotGb=4(소수 4자리), HSIV26은 DotGb=0 */
+static const char *OVS_RESP =
+    "{\"o3101OutBlock\":["
+    "{\"Symbol\":\"CUSV26\",\"SymbolNm\":\"Renminbi_USD/CNH(2026.10\",\"ApplDate\":\"20261001\","
+    "\"BscGdsCd\":\"CUS\",\"BscGdsNm\":\"Renminbi_USD/CNH\",\"ExchCd\":\"HKEX\",\"ExchNm\":\"홍콩거래소\","
+    "\"CrncyCd\":\"CNY\",\"UntPrc\":\"0.000100000\",\"MnChgAmt\":\"10.000000000\",\"DotGb\":4},"
+    "{\"Symbol\":\"HSIV26\",\"SymbolNm\":\"Hang Seng(2026.10\",\"ApplDate\":\"20261001\","
+    "\"BscGdsCd\":\"HSI\",\"BscGdsNm\":\"Hang Seng\",\"ExchCd\":\"HKEX\",\"ExchNm\":\"홍콩거래소\","
+    "\"CrncyCd\":\"HKD\",\"UntPrc\":\"1.000000000\",\"MnChgAmt\":\"1.000000000\",\"DotGb\":0}],"
+    "\"rsp_cd\":\"00000\",\"rsp_msg\":\"정상적으로 조회가 완료되었습니다.\"}";
+
+static void test_parse_ovs_master(void) {
+    ls_ovsfut_master_row_t rows[CAP];
+    int n = ls_ovsfut_parse_master(OVS_RESP, strlen(OVS_RESP), rows, CAP);
+    TR_CHECK(n == 2);
+    TR_CHECK(strcmp(rows[0].symbol, "CUSV26") == 0);
+    TR_CHECK(strcmp(rows[0].exch_cd, "HKEX") == 0);
+    TR_CHECK(rows[0].tick_raw > 0.009 && rows[0].tick_raw < 0.011); /* 0.0001 × 100 */
+    TR_CHECK(rows[0].dot_gb == 4);
+    TR_CHECK(rows[1].tick_raw > 99.9 && rows[1].tick_raw < 100.1);  /* 1.0 × 100 */
+    TR_CHECK(rows[1].dot_gb == 0);
+    /* OutBlock 없음(이 계정의 CME처럼)은 0행 — 오류 아님 */
+    const char *empty = "{\"rsp_cd\":\"00000\",\"rsp_msg\":\"해당자료가 없습니다.\"}";
+    TR_CHECK(ls_ovsfut_parse_master(empty, strlen(empty), rows, CAP) == 0);
+}
+
+static void test_ovs_precision_exclusion(void) {
+    /* ×100 raw 정밀도 배제 (ls_master_fetch의 o3101 등록 필터와 같은 규칙):
+     * 소수 3자리 이상(DotGb > 2)은 가격이 절단되므로 미등록 — CUSV26(4)은 배제,
+     * HSIV26(0) 같은 정상 종목은 등록된다. DotGb 없음(-1)은 보수적 배제 */
+    TR_CHECK(!ls_ovsfut_fits_raw100(4));
+    TR_CHECK(!ls_ovsfut_fits_raw100(3));
+    TR_CHECK(ls_ovsfut_fits_raw100(2));
+    TR_CHECK(ls_ovsfut_fits_raw100(1));
+    TR_CHECK(ls_ovsfut_fits_raw100(0));
+    TR_CHECK(!ls_ovsfut_fits_raw100(-1));
+    /* 실측 응답에 필터를 적용하면 CUSV26만 빠지고 HSI는 남는다 */
+    ls_ovsfut_master_row_t rows[CAP];
+    int n = ls_ovsfut_parse_master(OVS_RESP, strlen(OVS_RESP), rows, CAP);
+    TR_CHECK(n == 2);
+    int registered = 0;
+    const char *last_sym = 0;
+    for (int i = 0; i < n; i++) {
+        if (ls_ovsfut_fits_raw100(rows[i].dot_gb)) {
+            registered++;
+            last_sym = rows[i].symbol;
+        }
+    }
+    TR_CHECK(registered == 1);
+    TR_CHECK(last_sym != 0 && strcmp(last_sym, "HSIV26") == 0);
+}
+
+static void test_ovsfut_static_table(void) {
+    /* 월물 코드 정확 일치 + 접두 매치 (롤링된 신규 월물도 접두로 판별) */
+    const ls_ovsfut_entry_t *es = ls_ovsfut_find("ESZ26");
+    TR_CHECK(es != 0 && strcmp(es->prefix, "ES") == 0 && es->tick_raw == 25.0);
+    TR_CHECK(ls_ovsfut_find("ESH27") == es);       /* 다음 월물도 ES */
+    TR_CHECK(ls_ovsfut_find("NQZ26") != es);       /* NQ는 별 행 (ES 접두 오매치 방지) */
+    const ls_ovsfut_entry_t *cl = ls_ovsfut_find("CLX26");
+    TR_CHECK(cl != 0 && strcmp(cl->prefix, "CL") == 0 && cl->tick_raw == 1.0);
+    /* 국내·HKEX 코드는 정적 표에 없다 (o3101 레지스트리가 담당) */
+    TR_CHECK(ls_ovsfut_find("005930") == 0);
+    TR_CHECK(ls_ovsfut_find("A016C000") == 0);
+    TR_CHECK(ls_ovsfut_find("CUSV26") == 0);
+    TR_CHECK(ls_ovsfut_find("ES") == 0); /* 월물 없는 접두만으로는 구독 불가 — 미매치 */
+    TR_CHECK(ls_ovsfut_find(0) == 0);
+    /* 세션: KST 07:00 → 익일 06:00 (close < open = 야간 넘김), 평일 */
+    tr_session_policy_t s = ls_ovsfut_session();
+    TR_CHECK(s.utc_offset_min == 540 && s.open_min == 420 && s.close_min == 360);
+    TR_CHECK(s.days_mask == TR_SESSION_WEEKDAYS);
+    TR_CHECK(tr_session_policy_validate(&s));
+}
+
+static void test_ovsfut_static_search(void) {
+    const ls_ovsfut_entry_t *hits[CAP];
+    /* 접두·월물 코드 접두사 */
+    size_t k = ls_ovsfut_search("ES", hits, CAP);
+    TR_CHECK(k == 1 && strcmp(hits[0]->prefix, "ES") == 0); /* 접두 매치만 (이름 오탐 없음) */
+    k = ls_ovsfut_search("ESZ26", hits, CAP);
+    TR_CHECK(k == 1 && strcmp(hits[0]->contract, "ESZ26") == 0);
+    /* 이름 부분 문자열 (대소문자 무시) — 단어 경계에서 시작하는 매치만 인정 */
+    k = ls_ovsfut_search("nasdaq", hits, CAP);
+    TR_CHECK(k == 1 && strcmp(hits[0]->prefix, "NQ") == 0);
+    k = ls_ovsfut_search("crude", hits, CAP);
+    TR_CHECK(k == 1 && strcmp(hits[0]->prefix, "CL") == 0);
+    k = ls_ovsfut_search("jones", hits, CAP); /* "Mini Dow Jones"의 단어 시작 */
+    TR_CHECK(k == 1 && strcmp(hits[0]->prefix, "YM") == 0);
+    /* 단어 중간 매치는 오탐으로 거부 ("es"가 "Jones"의 끝 두 글자에 걸리던 문제) */
+    TR_CHECK(ls_ovsfut_search("es", hits, CAP) == 0);
+    TR_CHECK(ls_ovsfut_search("ones", hits, CAP) == 0);
+    /* 일치 없음·빈 검색어(전체) */
+    TR_CHECK(ls_ovsfut_search("삼성전자", hits, CAP) == 0);
+    TR_CHECK(ls_ovsfut_search("", hits, CAP) == ls_ovsfut_count());
+}
+
 int main(void) {
     test_parse_stock();
     test_parse_fut();
     test_find_and_at();
     test_search();
+    test_parse_ovs_master();
+    test_ovs_precision_exclusion();
+    test_ovsfut_static_table();
+    test_ovsfut_static_search();
     TR_TEST_SUMMARY();
 }

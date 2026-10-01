@@ -91,6 +91,7 @@ if(CURL_INCLUDE_DIR AND CURL_LIBRARY)
         src/adapters/ls/ls_chart.c
         src/adapters/ls/ls_http.c
         src/adapters/ls/ls_master.c
+        src/adapters/ls/ls_ovsfut.c
     )
     target_link_libraries(ls PUBLIC core yyjson ${CURL_LIBRARY})
     target_include_directories(ls PUBLIC src ${CURL_INCLUDE_DIR})

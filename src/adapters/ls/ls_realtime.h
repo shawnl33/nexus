@@ -4,7 +4,8 @@
 /* LS 실시간 WebSocket 어댑터 (계획서 §15, docs/ls_api_mapping.md §4).
  *
  * - libwebsockets 클라이언트. 엔진 루프에서 tr_ls_rt_service로 구동한다 (콜백은 결과 이벤트만 큐에 넣는다).
- * - 구독: S3_/K3_(체결), H1_/HA_(호가잔량), FC9/FH9(코스피200선물 체결/호가).
+ * - 구독: S3_/K3_(체결), H1_/HA_(호가잔량), FC9/FH9(코스피200선물 체결/호가),
+ *   DC0/DH0(KRX야간파생), OVC/OVH(해외선물 체결/호가).
  * - 재연결 시 재인증(토큰 갱신)·재구독한다. 단, 구독 복원만으로 데이터 연속성이 회복됐다고
  *   선언하지 않는다 — 공백 감지는 순번·시각과 별도 보충 조회(과거 데이터)로 처리한다.
  * - 연속 단기 세션(LS_RT_REAUTH_THRESHOLD회)은 서버 측 토큰 무효화로 보고 토큰을
@@ -119,5 +120,11 @@ bool ls_rt_should_reauth(int consec_short, int64_t last_reauth_us, int64_t now_u
 /* 구독 ACK의 거절 판정 (테스트 가능하도록 분리, 순수 함수).
  * header.rsp_cd가 문자열로 존재하고 "00000"이 아니면 true (정상 ACK는 false). */
 bool ls_rt_sub_ack_rejected(const char *body, size_t len);
+
+/* 채널별 tr_key 고정 길이 (테스트 가능하도록 분리, 순수 함수).
+ * 통합 채널(US3/UH1)은 10자리, 해외선물 채널(OVC/OVH/WOC/WOH)은 8자리 고정 —
+ * 짧은 코드는 우측 공백 패딩이다 (미패딩 시 rsp_cd 10009, 2026-10-01 실측).
+ * 패딩 규칙이 없는 채널은 0. */
+int ls_rt_key_pad_width(const char *tr_cd);
 
 #endif

@@ -100,6 +100,38 @@ static int64_t parse_chetime(yyjson_val *v, int64_t recv_time_us) {
     return midnight + us * TR_US_PER_SEC;
 }
 
+/* YYYYMMDD + HHMMSS(둘 다 KST) → epoch µs. 형식 이상이면 수신 시각.
+ * 해외선물 체결(OVC)의 kordate/kortm에 쓴다 — 현지 시각(trdtm/ovsdate)이 아니라
+ * 한국 시각 필드가 따로 온다 (2026-10-01 실측, docs/ls_api_mapping.md §4). */
+static int64_t parse_kor_datetime(yyjson_val *date_v, yyjson_val *tm_v, int64_t recv_time_us) {
+    if (!yyjson_is_str(date_v) || !yyjson_is_str(tm_v)) {
+        return recv_time_us;
+    }
+    const char *d = yyjson_get_str(date_v);
+    const char *s = yyjson_get_str(tm_v);
+    if (strlen(d) != 8 || strlen(s) < 6) {
+        return recv_time_us;
+    }
+    char ybuf[5] = {d[0], d[1], d[2], d[3], 0};
+    char mobuf[3] = {d[4], d[5], 0};
+    char dbuf[3] = {d[6], d[7], 0};
+    char hh[3] = {s[0], s[1], 0};
+    char mm[3] = {s[2], s[3], 0};
+    char ss[3] = {s[4], s[5], 0};
+    tr_civil_t c;
+    c.year = atoi(ybuf);
+    c.month = (unsigned)atoi(mobuf);
+    c.day = (unsigned)atoi(dbuf);
+    c.hour = (unsigned)atoi(hh);
+    c.min = (unsigned)atoi(mm);
+    c.sec = (unsigned)atoi(ss);
+    tr_time_us_t out;
+    if (!tr_time_us_from_civil(&c, 540, &out)) {
+        return recv_time_us;
+    }
+    return out;
+}
+
 bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id,
                             int64_t recv_time_us, ls_rt_event_t *out) {
     memset(out, 0, sizeof(*out));
@@ -131,6 +163,16 @@ bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id
         out->qty = parse_i64(yyjson_obj_get(b, "cvolume"));
         out->volume_meaning = TR_TICK_VOLUME_PER_TRADE; /* cvolume = 개별 체결량 */
         out->event_time_us = parse_chetime(yyjson_obj_get(b, "chetime"), recv_time_us);
+    } else if (strcmp(out->tr_cd, "OVC") == 0 || strcmp(out->tr_cd, "WOC") == 0) {
+        /* 해외선물 체결 (2026-10-01 ESZ26 실측): curpr=현재가, trdq=개별 체결량,
+         * 시각은 현지(trdtm)가 아니라 한국(kordate+kortm KST)을 그대로 쓴다.
+         * trdq = 개별 체결량, totq = 누적 (PER_TRADE 매핑) */
+        out->kind = LS_RT_TICK;
+        out->price = parse_price(yyjson_obj_get(b, "curpr"));
+        out->qty = parse_i64(yyjson_obj_get(b, "trdq"));
+        out->volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+        out->event_time_us = parse_kor_datetime(yyjson_obj_get(b, "kordate"),
+                                                yyjson_obj_get(b, "kortm"), recv_time_us);
     } else if (strcmp(out->tr_cd, "UH1") == 0) {
         out->kind = LS_RT_ORDERBOOK;
         out->event_time_us = parse_chetime(yyjson_obj_get(b, "hotime"), recv_time_us);
@@ -158,9 +200,15 @@ bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id
             out->level_count = i;
         }
     } else if (strcmp(out->tr_cd, "H1_") == 0 || strcmp(out->tr_cd, "HA_") == 0 ||
-               strcmp(out->tr_cd, "FH9") == 0 || strcmp(out->tr_cd, "DH0") == 0) {
+               strcmp(out->tr_cd, "FH9") == 0 || strcmp(out->tr_cd, "DH0") == 0 ||
+               strcmp(out->tr_cd, "OVH") == 0 || strcmp(out->tr_cd, "WOH") == 0) {
         out->kind = LS_RT_ORDERBOOK;
-        out->event_time_us = parse_chetime(yyjson_obj_get(b, "hotime"), recv_time_us);
+        /* 해외선물(OVH/WOH)의 hotime은 거래소 현지 시각이다 (2026-10-01 ESZ26 실측:
+         * KST 22:33 수신 메시지의 hotime "083301" — 시카고 현지). 한국 날짜 필드가
+         * 없어 epoch으로 못 옮기므로 수신 시각을 쓴다. 국내 채널의 hotime은 KST다 */
+        bool ovs = strcmp(out->tr_cd, "OVH") == 0 || strcmp(out->tr_cd, "WOH") == 0;
+        out->event_time_us =
+            ovs ? recv_time_us : parse_chetime(yyjson_obj_get(b, "hotime"), recv_time_us);
         /* 실제 필드명(2026-09-28 H1_ 실측): totbidrem=총매수잔량, totofferrem=총매도잔량.
            Bids/Asks(예스랭귀지 매수/매도잔량)에 각각 대응한다 (docs/ls_api_mapping.md §4). */
         out->bid_total = parse_i64(yyjson_obj_get(b, "totbidrem"));
@@ -247,6 +295,23 @@ bool ls_rt_sub_ack_rejected(const char *body, size_t len) {
     bool rejected = yyjson_is_str(rsp_cd) && strcmp(yyjson_get_str(rsp_cd), "00000") != 0;
     yyjson_doc_free(doc);
     return rejected;
+}
+
+int ls_rt_key_pad_width(const char *tr_cd) {
+    if (tr_cd == 0) {
+        return 0;
+    }
+    /* 통합 채널은 10자리 고정 (단축코드 7 + 공백 3, 공식 명세) */
+    if (strcmp(tr_cd, "US3") == 0 || strcmp(tr_cd, "UH1") == 0) {
+        return 10;
+    }
+    /* 해외선물 채널은 8자리 고정 — 심볼 우측 공백 패딩 (미패딩 시 rsp_cd 10009,
+     * 2026-10-01 ESZ26 실측) */
+    if (strcmp(tr_cd, "OVC") == 0 || strcmp(tr_cd, "OVH") == 0 ||
+        strcmp(tr_cd, "WOC") == 0 || strcmp(tr_cd, "WOH") == 0) {
+        return 8;
+    }
+    return 0;
 }
 
 /* 구독 ACK 거절 로그. 토큰 무효 등 서버 거절 원인(rsp_cd/rsp_msg)이 로그에 바로 보이게 한다.
@@ -491,9 +556,12 @@ bool tr_ls_rt_subscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key, u
     }
     ls_rt_sub_t *s = &rt->subs[rt->n_subs++];
     snprintf(s->tr_cd, sizeof(s->tr_cd), "%.7s", tr_cd);
-    /* 통합 채널(US3/UH1)의 tr_key는 10자리 고정(단축코드 + 공백 패딩, 공식 명세) */
-    if (strcmp(tr_cd, "US3") == 0 || strcmp(tr_cd, "UH1") == 0) {
+    /* 채널별 tr_key 고정 길이 패딩 (통합 10자리, 해외선물 8자리 — ls_rt_key_pad_width) */
+    int pad = ls_rt_key_pad_width(tr_cd);
+    if (pad == 10) {
         snprintf(s->tr_key, sizeof(s->tr_key), "%-10.10s", tr_key);
+    } else if (pad == 8) {
+        snprintf(s->tr_key, sizeof(s->tr_key), "%-8.8s", tr_key);
     } else {
         snprintf(s->tr_key, sizeof(s->tr_key), "%.15s", tr_key);
     }
@@ -520,9 +588,10 @@ bool tr_ls_rt_unsubscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key)
     if (found < 0) {
         return false;
     }
-    /* 전송은 READY 상태일 때만. 목록에서도 제거해 재연결 시 복원되지 않게 한다 */
+    /* 전송은 READY 상태일 때만. 목록에서도 제거해 재연결 시 복원되지 않게 한다.
+     * 해지 키는 등록 시와 같은 형태(패딩 포함)여야 하므로 저장된 키를 그대로 본낸다 */
     if (rt->state == LS_RT_READY && rt->wsi != 0) {
-        send_tr(rt, "4", tr_cd, tr_key);
+        send_tr(rt, "4", tr_cd, rt->subs[found].tr_key);
     }
     for (int i = found; i < rt->n_subs - 1; i++) {
         rt->subs[i] = rt->subs[i + 1];

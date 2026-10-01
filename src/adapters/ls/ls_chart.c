@@ -18,7 +18,7 @@
 
 /* 차트 TR은 초당 1건(1 TPS) 제한 — 연속 조회 시 서버가 HTTP 500으로 거절한다 (2026-09-28 실측).
  * 요청 간 최소 간격을 여기서 강제한다 (헤더 주석의 계약 구현). */
-static int64_t g_last_req_us[5]; /* 0=t8412, 1=t8465, 2=t8461, 3=t8410, 4=t8466 */
+static int64_t g_last_req_us[6]; /* 0=t8412, 1=t8465, 2=t8461, 3=t8410, 4=t8466, 5=o3103 */
 
 static int64_t mono_us(void) {
     struct timespec ts;
@@ -608,6 +608,166 @@ int ls_chart_fetch_daily(ls_auth_t *auth, ls_chart_kind_t kind, const char *shco
         }
         fprintf(stderr, "%s fetch retry %d/%d rc=%d: %s\n",
                 tr_for(kind), attempt, LS_CHART_MAX_ATTEMPTS - 1, rc, errbuf);
+        sleep_us(LS_CHART_RETRY_WAIT_US);
+    }
+    return rc;
+}
+
+/* ---------- 해외선물 분봉 (o3103) ----------
+ * 2026-10-01 실측 (HKEX CUSV26): OutBlock1은 최신→과거 내림차순, date/time은
+ * 거래소 현지 시각이고 OHLC는 문자열(소수점), volume은 Number. OutBlock의 timediff가
+ * 시차(현지 = KST + timediff 시간, HKEX는 -1)라 KST = 현지 - timediff로 환산한다.
+ * 이 계정에서 CME 종목은 OutBlock 없이 "해당자료가 없습니다."(rsp_cd 00000)만 온다
+ * — LS_CHART_EMPTY로 분류해 호출자가 RT-only로 억제한다 (백필 권한 문제, 오류 아님).
+ * 연속 조회는 cts_date/cts_time·tr_cont_key 모두 서버가 무시하거나 빈 응답을 줘서
+ * v1은 1페이지(readcnt)만 쓴다 (2026-10-01 실측). */
+
+/* 현지 date "20261001" + time "212300" → UTC epoch µs. utc_offset은 현지 오프셋(분). */
+static bool local_to_epoch_us(const char *date, const char *time_s, int32_t utc_offset_min,
+                              tr_time_us_t *out) {
+    if (date == 0 || time_s == 0 || strlen(date) != 8 || strlen(time_s) < 4) {
+        return false;
+    }
+    tr_civil_t c;
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.4s", date);
+    c.year = atoi(buf);
+    snprintf(buf, sizeof(buf), "%.2s", date + 4);
+    c.month = (unsigned)atoi(buf);
+    snprintf(buf, sizeof(buf), "%.2s", date + 6);
+    c.day = (unsigned)atoi(buf);
+    size_t tl = strlen(time_s);
+    char hh[3] = {time_s[0], time_s[1], 0};
+    char mm[3] = {time_s[2], time_s[3], 0};
+    char ss[3] = {tl >= 6 ? time_s[4] : '0', tl >= 6 ? time_s[5] : '0', 0};
+    c.hour = (unsigned)atoi(hh);
+    c.min = (unsigned)atoi(mm);
+    c.sec = (unsigned)atoi(ss);
+    return tr_time_us_from_civil(&c, utc_offset_min, out);
+}
+
+int ls_chart_parse_ovs_minute(const char *body, size_t body_len,
+                              uint64_t instrument_id, uint64_t source_id, uint32_t timeframe_sec,
+                              tr_candle_t *out, size_t out_cap, size_t *out_count,
+                              char *errbuf, size_t errlen) {
+    if (out == 0 || out_count == 0) {
+        return LS_HTTP_PARSE_ERR;
+    }
+    *out_count = 0;
+    yyjson_doc *doc = yyjson_read((char *)body, body_len, 0);
+    if (doc == 0) {
+        snprintf(errbuf, errlen, "ovs chart response is not JSON");
+        return LS_HTTP_PARSE_ERR;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *summary = yyjson_obj_get(root, "o3103OutBlock");
+    yyjson_val *bars = yyjson_obj_get(root, "o3103OutBlock1");
+    if (!yyjson_is_arr(bars) || yyjson_arr_size(bars) == 0) {
+        /* 성공이지만 데이터 없음 (이 계정의 CME 등): 오류가 아니다 */
+        yyjson_doc_free(doc);
+        return LS_CHART_EMPTY;
+    }
+    /* 시차: 현지 = KST + timediff(시간) → 현지 시민시각의 UTC 오프셋은 540 + timediff*60분 */
+    int64_t timediff_h = 0;
+    yyjson_val *td = yyjson_obj_get(summary, "timediff");
+    if (yyjson_is_num(td)) {
+        timediff_h = (int64_t)yyjson_get_num(td);
+    } else if (yyjson_is_str(td)) {
+        timediff_h = atoll(yyjson_get_str(td));
+    }
+    int32_t local_offset_min = (int32_t)(KST_OFFSET_MIN + timediff_h * 60);
+
+    /* 입력은 내림차순 — 마지막 행부터 읽어 오름차순으로 기록한다 (걸러낸 행은 압축) */
+    size_t rows = yyjson_arr_size(bars);
+    size_t n = 0;
+    for (size_t ri = rows; ri-- > 0 && n < out_cap;) {
+        yyjson_val *bar = yyjson_arr_get(bars, ri);
+        tr_time_us_t open_us;
+        if (!local_to_epoch_us(yyjson_get_str(yyjson_obj_get(bar, "date")),
+                               yyjson_get_str(yyjson_obj_get(bar, "time")),
+                               local_offset_min, &open_us)) {
+            continue;
+        }
+        tr_candle_t c;
+        memset(&c, 0, sizeof(c));
+        c.instrument_id = instrument_id;
+        c.timeframe_sec = timeframe_sec;
+        c.open_time_us = open_us;
+        c.close_time_us = open_us + (int64_t)timeframe_sec * TR_US_PER_SEC;
+        if (!parse_price_scaled(yyjson_obj_get(bar, "open"), &c.open) ||
+            !parse_price_scaled(yyjson_obj_get(bar, "high"), &c.high) ||
+            !parse_price_scaled(yyjson_obj_get(bar, "low"), &c.low) ||
+            !parse_price_scaled(yyjson_obj_get(bar, "close"), &c.close)) {
+            continue;
+        }
+        c.volume = parse_volume(yyjson_obj_get(bar, "volume"));
+        c.state = TR_CANDLE_CLOSED;
+        c.revision = 0;
+        c.source_id = source_id;
+        c.quality = TR_QUALITY_NONE;
+        out[n++] = c;
+    }
+    yyjson_doc_free(doc);
+
+    /* 중복·역순 최종 확인 (분봉 파서와 같은 규칙) */
+    for (size_t i = 1; i < n; i++) {
+        if (out[i].open_time_us <= out[i - 1].open_time_us) {
+            snprintf(errbuf, errlen, "duplicate or out-of-order bars in ovs page");
+            return LS_HTTP_PARSE_ERR;
+        }
+    }
+    *out_count = n;
+    return n > 0 ? LS_HTTP_OK : LS_CHART_EMPTY;
+}
+
+int ls_chart_fetch_ovs_minute(ls_auth_t *auth, const char *shcode,
+                              int32_t ncnt, int32_t readcnt,
+                              uint64_t instrument_id, uint64_t source_id,
+                              tr_candle_t *out, size_t out_cap, size_t *out_count,
+                              char *errbuf, size_t errlen) {
+    if (shcode == 0 || out == 0 || out_count == 0 || ncnt <= 0 || readcnt <= 0) {
+        return LS_HTTP_PARSE_ERR;
+    }
+    if (readcnt > 500) {
+        readcnt = 500; /* 1페이지 실측 상한 (2026-10-01, readcnt=500 성공) */
+    }
+    char body[512];
+    snprintf(body, sizeof(body),
+             "{\"o3103InBlock\":{\"shcode\":\"%s\",\"ncnt\":%d,\"readcnt\":%d,"
+             "\"cts_date\":\"\",\"cts_time\":\"\"}}",
+             shcode, (int)ncnt, (int)readcnt);
+    ls_http_req_t req = {0};
+    req.url = "https://openapi.ls-sec.co.kr:8080/overseas-futureoption/chart";
+    req.tr_cd = "o3103";
+    req.tr_cont = "N";
+    req.body_json = body;
+    req.timeout_ms = 10000;
+
+    int rc = LS_HTTP_TRANSPORT_ERR;
+    for (int attempt = 1; attempt <= LS_CHART_MAX_ATTEMPTS; attempt++) {
+        const char *token;
+        if (!ls_auth_ensure(auth, &token)) {
+            snprintf(errbuf, errlen, "%.120s", auth->last_error);
+            rc = LS_HTTP_TRANSPORT_ERR;
+        } else {
+            req.token = token;
+            throttle_slot(5);
+            ls_http_resp_t resp;
+            rc = ls_http_post(&req, &resp);
+            if (rc == LS_HTTP_OK) {
+                rc = ls_chart_parse_ovs_minute(resp.body.data, resp.body.len, instrument_id,
+                                               source_id, (uint32_t)ncnt * 60u, out, out_cap,
+                                               out_count, errbuf, errlen);
+            } else {
+                snprintf(errbuf, errlen, "%.80s %.40s", resp.err_detail, resp.rsp_msg);
+            }
+            ls_http_resp_free(&resp);
+        }
+        if (!ls_chart_retryable(rc) || attempt == LS_CHART_MAX_ATTEMPTS) {
+            return rc;
+        }
+        fprintf(stderr, "o3103 fetch retry %d/%d rc=%d: %s\n",
+                attempt, LS_CHART_MAX_ATTEMPTS - 1, rc, errbuf);
         sleep_us(LS_CHART_RETRY_WAIT_US);
     }
     return rc;

@@ -8,10 +8,17 @@
 
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar);
 
-/* 원본 PriceScale 대응: raw 가격 단위의 1틱 — 선물 0.05pt×100=5, 주식 1원×100=100
- * (raw는 주식·선물 모두 실제 × 100 스케일: ls_chart.c parse_price_scaled) */
+/* 원본 PriceScale 대응: raw 가격 단위의 1틱 — tick_raw 명시(해외선물) > 자동(선물 0.05pt×100=5,
+ * 주식 1원×100=100). raw는 주식·선물 모두 실제 × 100 스케일 (ls_chart.c parse_price_scaled) */
 static double tick_scale(const tr_pipeline_t *p) {
+    if (p->tick_raw > 0.0) {
+        return p->tick_raw;
+    }
     return p->is_futures ? 5.0 : 100.0;
+}
+
+double tr_engine_pipe_tick_scale(const tr_pipeline_t *p) {
+    return p != 0 ? tick_scale(p) : 100.0;
 }
 
 /* shcode를 JSON 안전 문자(영숫자)만 남겨 복사한다. 페이로드에 그대로 실리므로
@@ -44,6 +51,7 @@ static bool pipe_init(tr_engine_t *e, tr_pipeline_t *p, const tr_engine_config_t
     sanitize_shcode(p->shcode, cfg->shcode);
     p->is_futures = cfg->is_futures;
     p->session = cfg->session; /* 종목별 세션 — 봉 구축·지표 컨텍스트가 여기서 읽는다 */
+    p->tick_raw = cfg->tick_raw; /* 종목별 틱 크기 (0이면 자동 — tick_scale 참조) */
     p->bb_storage = bb_storage;
     p->bb_capacity = bb_capacity;
     p->score_mid_storage = score_mid_storage;
@@ -161,6 +169,7 @@ static tr_pipeline_t *pipe_free_slot(tr_engine_t *e) {
 
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
                                   const char *shcode, const tr_session_policy_t *session,
+                                  double tick_raw,
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity) {
     if (e == 0 || instrument_id == 0 || session == 0) {
@@ -178,6 +187,7 @@ tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool i
     sanitize_shcode(cfg.shcode, shcode);
     cfg.is_futures = is_futures;
     cfg.session = *session; /* 기동 종목 세션을 상속하지 않고 이 종목의 세션을 쓴다 */
+    cfg.tick_raw = tick_raw;  /* 틱 크기도 종목별로 넘긴다 (해외선물은 자동 규칙이 다르다) */
     tr_pipeline_t *p = pipe_free_slot(e);
     if (p == 0) {
         return 0;
@@ -974,7 +984,8 @@ void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
 }
 
 bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
-                             const char *shcode, const tr_session_policy_t *session) {
+                             const char *shcode, const tr_session_policy_t *session,
+                             double tick_raw) {
     /* 델타 기록: 파이프라인 분리 전에는 이 함수가 tr_engine_init을 경유해 status_seq가
      * 1로 재시작했다. 이제 파이프라인 0만 재초기화하므로 스트림 시퀀스는 계속 증가한다
      * — 구독자 입장에서 seq 역행이 없어 이 동작을 유지한다. */
@@ -993,6 +1004,7 @@ bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_fut
     sanitize_shcode(cfg.shcode, shcode);
     cfg.is_futures = is_futures;
     cfg.session = *session; /* 새 종목의 세션 정책 (시장이 다르면 바뀐다) */
+    cfg.tick_raw = tick_raw;  /* 새 종목의 틱 크기 (0이면 자동 — 해외선물만 명시) */
     /* 파이프라인 0의 지표 상태를 새 종목 기준으로 재구성한다. 링 저장소는 그대로 재사용한다 */
     if (!pipe_init(e, p0, &cfg, p0->bb_storage, p0->bb_capacity,
                    p0->score_mid_storage, p0->score_mid_capacity)) {

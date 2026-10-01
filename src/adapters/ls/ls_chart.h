@@ -108,4 +108,26 @@ int ls_chart_fetch_daily(ls_auth_t *auth, ls_chart_kind_t kind, const char *shco
                          ls_daily_bar_t *out, size_t out_cap, size_t *out_count,
                          char *errbuf, size_t errlen);
 
+/* ---------- 해외선물 분봉 (o3103, 해외선물차트 분봉 조회) ----------
+ * /overseas-futureoption/chart. 이 계정에서 CME 종목은 데이터가 안 온다
+ * (LS_CHART_EMPTY — 오류가 아니라 RT-only 신호로 쓴다, 2026-10-01 실측).
+ * v1은 1페이지만 조회한다 (서버가 cts 연속 조회를 받지 않음, 2026-10-01 실측). */
+
+/* o3103 응답 파서 (테스트 가능하도록 분리). OutBlock1은 최신→과거 내림차순,
+ * date/time은 거래소 현지 시각 — OutBlock timediff(시차)로 KST 환산한다.
+ * out에는 open_time 오름차순으로 기록된다.
+ * 반환: LS_HTTP_OK / LS_CHART_EMPTY(데이터 없음, 오류 아님) / 오류 코드. */
+int ls_chart_parse_ovs_minute(const char *body, size_t body_len,
+                              uint64_t instrument_id, uint64_t source_id, uint32_t timeframe_sec,
+                              tr_candle_t *out, size_t out_cap, size_t *out_count,
+                              char *errbuf, size_t errlen);
+
+/* o3103 분봉 1페이지 조회 (1 TPS 스로틀 적용). readcnt는 1~500 (실측 상한).
+ * 반환 코드는 parse_ovs_minute와 같다. */
+int ls_chart_fetch_ovs_minute(ls_auth_t *auth, const char *shcode,
+                              int32_t ncnt, int32_t readcnt,
+                              uint64_t instrument_id, uint64_t source_id,
+                              tr_candle_t *out, size_t out_cap, size_t *out_count,
+                              char *errbuf, size_t errlen);
+
 #endif

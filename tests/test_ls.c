@@ -250,6 +250,54 @@ static void test_retryable_classification(void) {
     TR_CHECK(!ls_chart_retryable(LS_HTTP_OK));
 }
 
+/* ---------- 해외선물 분봉 (o3103, 2026-10-01 HKEX CUSV26 실측 캡처) ---------- */
+
+/* 실측 그대로: 최신→과거 내림차순, date/time은 거래소 현지(HK) 시각, OHLC는 문자열,
+ * volume은 Number, timediff=-1 (현지 = KST − 1시간) */
+static const char *OVS_RESP =
+    "{\"o3103OutBlock\":{\"shcode\":\"CUSV26\",\"timediff\":-1,\"readcnt\":5,"
+    "\"cts_date\":\"20261001\",\"cts_time\":\"210600\"},"
+    "\"o3103OutBlock1\":["
+    "{\"date\":\"20261001\",\"time\":\"212300\",\"open\":\"6.7124\",\"high\":\"6.7124\",\"low\":\"6.7124\",\"close\":\"6.7124\",\"volume\":1},"
+    "{\"date\":\"20261001\",\"time\":\"211900\",\"open\":\"6.7128\",\"high\":\"6.7128\",\"low\":\"6.7128\",\"close\":\"6.7128\",\"volume\":5},"
+    "{\"date\":\"20261001\",\"time\":\"211200\",\"open\":\"6.7129\",\"high\":\"6.7129\",\"low\":\"6.7129\",\"close\":\"6.7129\",\"volume\":1},"
+    "{\"date\":\"20261001\",\"time\":\"211000\",\"open\":\"6.7127\",\"high\":\"6.7129\",\"low\":\"6.7127\",\"close\":\"6.7129\",\"volume\":6},"
+    "{\"date\":\"20261001\",\"time\":\"210600\",\"open\":\"6.7126\",\"high\":\"6.7126\",\"low\":\"6.7126\",\"close\":\"6.7126\",\"volume\":3}],"
+    "\"rsp_cd\":\"00000\",\"rsp_msg\":\"정상적으로 조회가 완료되었습니다.\"}";
+
+static void test_ovs_minute_parse(void) {
+    size_t n = 0;
+    char err[128] = {0};
+    int rc = ls_chart_parse_ovs_minute(OVS_RESP, strlen(OVS_RESP), 42, 7, 60,
+                                       g_bars, CAP, &n, err, sizeof(err));
+    TR_CHECK(rc == LS_HTTP_OK);
+    TR_CHECK(n == 5);
+    /* 내림차순 입력이 오름차순으로 뒤집힌다: 첫 봉은 현지 21:06 = KST 22:06 (timediff -1) */
+    TR_CHECK(g_bars[0].open_time_us == kst_us(2026, 10, 1, 22, 6, 0));
+    TR_CHECK(g_bars[4].open_time_us == kst_us(2026, 10, 1, 22, 23, 0));
+    for (size_t i = 1; i < n; i++) {
+        TR_CHECK(g_bars[i].open_time_us > g_bars[i - 1].open_time_us);
+    }
+    /* 가격 ×100 스케일 (6.7124 → 671) · 봉 속성 */
+    TR_CHECK(g_bars[0].open == 671 && g_bars[0].close == 671);
+    TR_CHECK(g_bars[0].volume == 3);
+    TR_CHECK(g_bars[3].high == 671 && g_bars[3].low == 671);
+    TR_CHECK(g_bars[0].state == TR_CANDLE_CLOSED && g_bars[0].instrument_id == 42);
+    TR_CHECK(g_bars[0].source_id == 7 && g_bars[0].timeframe_sec == 60);
+    TR_CHECK(g_bars[0].close_time_us - g_bars[0].open_time_us == 60 * TR_US_PER_SEC);
+}
+
+static void test_ovs_empty_is_not_error(void) {
+    /* 이 계정의 CME 응답 (2026-10-01 ESZ26 실측): OutBlock 없이 "해당자료가 없습니다."
+     * — 오류가 아니라 LS_CHART_EMPTY (호출자가 RT-only로 억제하는 신호) */
+    size_t n = 999;
+    char err[128] = {0};
+    int rc = ls_chart_parse_ovs_minute(EMPTY_RESP, strlen(EMPTY_RESP), 1, 7, 60,
+                                       g_bars, CAP, &n, err, sizeof(err));
+    TR_CHECK(rc == LS_CHART_EMPTY);
+    TR_CHECK(n == 0);
+}
+
 int main(void) {
     test_stock_parse();
     test_futures_string_prices();
@@ -263,5 +311,7 @@ int main(void) {
     test_daily_duplicate_detected();
     test_daily_kind_guard();
     test_retryable_classification();
+    test_ovs_minute_parse();
+    test_ovs_empty_is_not_error();
     TR_TEST_SUMMARY();
 }

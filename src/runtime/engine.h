@@ -36,6 +36,7 @@ typedef struct {
     uint32_t timeframe_sec;      /* 기본 봉 주기(초) */
     tr_no_trade_policy_t no_trade;
     bool is_futures;             /* 호가 부호 규칙(선물=매수 우세 양수)에 사용 */
+    double tick_raw;             /* 1틱의 raw 크기 (실제 × 100). 0이면 자동(선물 5, 주식 100) — 해외선물만 명시 */
     /* 지표 파라미터 (메인 원본 기본값 대응) */
     int32_t predict_bars[3];     /* 예측봉수1~3 (기본 5/10/15) */
     int32_t htf_ticks;           /* 예측변수 (기본 10) */
@@ -103,6 +104,7 @@ typedef struct {
     char shcode[16];            /* 종목 코드 (페이로드 "shcode" 키). JSON 안전 문자만 보관 */
     bool is_futures;            /* 호가 부호 규칙·틱 양자화에 사용 */
     tr_session_policy_t session; /* 이 종목의 세션 정책 (봉 구축·trading day·⑤ 바 분 계산의 기준) */
+    double tick_raw;            /* 1틱의 raw 크기. 0이면 자동(선물 5, 주식 100) — 해외선물만 명시 */
     tr_candle_t *bb_storage;
     size_t bb_capacity;
     double *score_mid_storage;
@@ -155,6 +157,7 @@ struct tr_engine {
             char shcode[16];
             bool is_futures;
             tr_session_policy_t session;
+            double tick_raw;
             tr_candle_t *bb_storage;
             size_t bb_capacity;
             double *score_mid_storage;
@@ -195,6 +198,7 @@ TR_ENGINE_PIPE_LAYOUT_CHECK(instrument_id);
 TR_ENGINE_PIPE_LAYOUT_CHECK(shcode);
 TR_ENGINE_PIPE_LAYOUT_CHECK(is_futures);
 TR_ENGINE_PIPE_LAYOUT_CHECK(session);
+TR_ENGINE_PIPE_LAYOUT_CHECK(tick_raw);
 TR_ENGINE_PIPE_LAYOUT_CHECK(bb_storage);
 TR_ENGINE_PIPE_LAYOUT_CHECK(bb_capacity);
 TR_ENGINE_PIPE_LAYOUT_CHECK(score_mid_storage);
@@ -243,9 +247,14 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
 tr_pipeline_t *tr_engine_pipe_find(tr_engine_t *e, uint64_t instrument_id);
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
                                   const char *shcode, const tr_session_policy_t *session,
+                                  double tick_raw,
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity);
 bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id);
+
+/* 파이프라인의 1틱 raw 크기 (tick_raw 명시 > 자동: 선물 5, 주식 100).
+ * chart.snapshot의 reg_flat 재계산 등 엔진 밖 포맷이 엔진과 같은 규칙을 쓰게 한다. */
+double tr_engine_pipe_tick_scale(const tr_pipeline_t *p);
 
 void tr_engine_attach_ipc(tr_engine_t *e, tr_ipc_t *ipc, const char *stream_id);
 void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ctx);
@@ -342,6 +351,7 @@ void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
    이전 세대의 늦은 응답과 새 화면이 섞이지 않게 한다. 전략의 거래 대상과는 무관하다(화면 상태 변경).
    session은 새 종목의 세션 정책이다 (필수 — 시장이 다르면 바뀐다). */
 bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
-                             const char *shcode, const tr_session_policy_t *session);
+                             const char *shcode, const tr_session_policy_t *session,
+                             double tick_raw);
 
 #endif

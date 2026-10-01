@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "adapters/ls/ls_realtime.h"
+#include "core/model/civil_time.h"
 
 static void test_parse_s3_tick(void) {
     const char *msg =
@@ -112,6 +113,77 @@ static void test_parse_dh0_night_fut_orderbook(void) {
     TR_CHECK(ev.level_count == 1);
     TR_CHECK(ev.levels[0].price == 108700);
     TR_CHECK(ev.levels[5].price == 108715);
+}
+
+static void test_parse_ovc_tick(void) {
+    /* 해외선물 체결 (2026-10-01 ESZ26 실측 그대로): curpr=현재가, trdq=개별 체결량,
+     * 시각은 현지(trdtm)가 아니라 한국(kordate+kortm KST) */
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"OVC\",\"tr_key\":\"ESZ26   \"},"
+        "\"body\":{\"symbol\":\"ESZ26\",\"trdtm\":\"080004\",\"kortm\":\"220004\","
+        "\"ovsdate\":\"20261001\",\"kordate\":\"20261001\",\"curpr\":\"7734.75\","
+        "\"open\":\"7719.50\",\"high\":\"7767.75\",\"low\":\"7705.00\",\"ydiffpr\":\"19.25\","
+        "\"ydiffSign\":\"2\",\"chgrate\":\"0.25\",\"trdq\":\"2\",\"totq\":\"360993\","
+        "\"cgubun\":\"-\",\"ovsmkend\":\"20261001\",\"lSeq\":\"60\",\"mdvolume\":\"\",\"msvolume\":\"\"}}";
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 99, 1790567100000000LL, &ev));
+    TR_CHECK(ev.kind == LS_RT_TICK);
+    TR_CHECK(ev.instrument_id == 99);
+    TR_CHECK(ev.price == 773475); /* ×100 */
+    TR_CHECK(ev.qty == 2);        /* trdq = 개별 체결량 (누적 totq가 아니다) */
+    TR_CHECK(ev.volume_meaning == TR_TICK_VOLUME_PER_TRADE);
+    /* 2026-10-01 22:00:04 KST = 13:00:04 UTC */
+    tr_civil_t c = {2026, 10, 1, 13, 0, 4};
+    tr_time_us_t expect;
+    TR_CHECK(tr_time_us_from_civil(&c, 0, &expect));
+    TR_CHECK(ev.event_time_us == expect);
+    TR_CHECK(strcmp(ev.tr_cd, "OVC") == 0);
+}
+
+static void test_parse_ovh_orderbook(void) {
+    /* 해외선물 호가 (2026-10-01 ESZ26 실측 필드): 총잔량 totbidrem/totofferrem, 5단계.
+     * hotime은 거래소 현지 시각이라 수신 시각을 이벤트 시각으로 쓴다 */
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"OVH\",\"tr_key\":\"ESZ26   \"},"
+        "\"body\":{\"symbol\":\"ESZ26\",\"hotime\":\"083301\","
+        "\"offerho1\":\"7729.50\",\"offerrem1\":\"36\",\"offerno1\":\"22\","
+        "\"offerho2\":\"7729.75\",\"offerrem2\":\"41\",\"offerno2\":\"25\","
+        "\"offerho3\":\"7730.00\",\"offerrem3\":\"55\",\"offerno3\":\"30\","
+        "\"offerho4\":\"7730.25\",\"offerrem4\":\"60\",\"offerno4\":\"31\","
+        "\"offerho5\":\"7730.50\",\"offerrem5\":\"30\",\"offerno5\":\"34\","
+        "\"bidho1\":\"7729.25\",\"bidrem1\":\"21\",\"bidno1\":\"15\","
+        "\"bidho2\":\"7729.00\",\"bidrem2\":\"18\",\"bidno2\":\"12\","
+        "\"bidho3\":\"7728.75\",\"bidrem3\":\"25\",\"bidno3\":\"14\","
+        "\"bidho4\":\"7728.50\",\"bidrem4\":\"30\",\"bidno4\":\"16\","
+        "\"bidho5\":\"7728.25\",\"bidrem5\":\"40\",\"bidno5\":\"18\","
+        "\"totofferrem\":\"222\",\"totbidrem\":\"181\",\"totoffercnt\":\"141\",\"totbidcnt\":\"127\"}}";
+    int64_t recv = 1790567100000000LL;
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 99, recv, &ev));
+    TR_CHECK(ev.kind == LS_RT_ORDERBOOK);
+    TR_CHECK(ev.bid_total == 181);
+    TR_CHECK(ev.ask_total == 222);
+    TR_CHECK(ev.level_count == 5);
+    TR_CHECK(ev.levels[0].price == 772925 && ev.levels[0].qty == 21);  /* 매수 1단계 */
+    TR_CHECK(ev.levels[4].price == 772825 && ev.levels[4].qty == 40);  /* 매수 5단계 */
+    TR_CHECK(ev.levels[5].price == 772950 && ev.levels[5].qty == 36);  /* 매도 1단계 */
+    TR_CHECK(ev.levels[9].price == 773050 && ev.levels[9].qty == 30);  /* 매도 5단계 */
+    TR_CHECK(ev.event_time_us == recv); /* hotime은 현지 시각 — KST 변환 불가, 수신 시각 */
+}
+
+static void test_key_pad_width(void) {
+    /* 해외선물 채널은 8자리 고정 (미패딩 시 rsp_cd 10009, 2026-10-01 실측),
+     * 통합 채널은 10자리 고정, 국내 채널은 패딩 없음 */
+    TR_CHECK(ls_rt_key_pad_width("OVC") == 8);
+    TR_CHECK(ls_rt_key_pad_width("OVH") == 8);
+    TR_CHECK(ls_rt_key_pad_width("WOC") == 8);
+    TR_CHECK(ls_rt_key_pad_width("WOH") == 8);
+    TR_CHECK(ls_rt_key_pad_width("US3") == 10);
+    TR_CHECK(ls_rt_key_pad_width("UH1") == 10);
+    TR_CHECK(ls_rt_key_pad_width("S3_") == 0);
+    TR_CHECK(ls_rt_key_pad_width("H1_") == 0);
+    TR_CHECK(ls_rt_key_pad_width("FC9") == 0);
+    TR_CHECK(ls_rt_key_pad_width(0) == 0);
 }
 
 static void test_parse_rejects(void) {
@@ -224,6 +296,9 @@ int main(void) {
     test_parse_orderbook();
     test_parse_uh1_orderbook();
     test_parse_dh0_night_fut_orderbook();
+    test_parse_ovc_tick();
+    test_parse_ovh_orderbook();
+    test_key_pad_width();
     test_parse_rejects();
     test_retry_backoff();
     test_consec_short_counter();

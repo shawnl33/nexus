@@ -398,7 +398,8 @@ function showPaneResults(pane, items, seq) {
     name.textContent = it.name;
     const mkt = document.createElement("span");
     mkt.className = "mkt";
-    mkt.textContent = it.fut ? "선물" : "";
+    // fut: 0=주식, 1=국내선물, 2=해외선물 (엔진 market.instruments)
+    mkt.textContent = it.fut === 2 ? "해외" : it.fut ? "선물" : "";
     row.append(code, name, mkt);
     row.onclick = () => selectPaneSymbol(pane, it.shcode, it.name);
     pane.symResults.append(row);

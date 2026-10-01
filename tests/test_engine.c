@@ -159,13 +159,13 @@ static void test_select_symbol_generation(void) {
     TR_CHECK(e.lr3.reg_valid); /* 워밍업 완료 상태 */
 
     /* 종목 전환: 상태가 리셋되고 generation이 오른다 */
-    TR_CHECK(tr_engine_select_symbol(&e, 999, false, "099999", &TEST_SESS));
+    TR_CHECK(tr_engine_select_symbol(&e, 999, false, "099999", &TEST_SESS, 0.0));
     TR_CHECK(e.generation == 2);
     TR_CHECK(e.cfg.instrument_id == 999);
     TR_CHECK(strcmp(e.shcode, "099999") == 0); /* 전환 종목 코드가 파이프라인에 실린다 */
     TR_CHECK(!e.lr3.reg_valid); /* 지표는 새 종목 기준으로 다시 워밍업 */
     TR_CHECK(e.status_cb == capture_cb); /* 출력 연결은 보존 */
-    TR_CHECK(tr_engine_select_symbol(&e, 1000, true, "1000F0", &TEST_SESS));
+    TR_CHECK(tr_engine_select_symbol(&e, 1000, true, "1000F0", &TEST_SESS, 0.0));
     TR_CHECK(e.generation == 3);
 
     /* 전환 후에도 상태 발행이 계속된다 */
@@ -721,15 +721,15 @@ static void test_pipe_slot_reuse(void) {
     init_engine(&e, &cap);
     static tr_candle_t bb_a[BB_CAP], bb_b[BB_CAP], bb_c[BB_CAP], bb_d[BB_CAP];
     static double mid_a[32], mid_b[32], mid_c[32], mid_d[32];
-    tr_pipeline_t *pa = tr_engine_pipe_add(&e, 100, true, "0100A0", &TEST_SESS, bb_a, BB_CAP, mid_a, 32);
-    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 200, true, "0200B0", &TEST_SESS, bb_b, BB_CAP, mid_b, 32);
-    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 300, true, "0300C0", &TEST_SESS, bb_c, BB_CAP, mid_c, 32);
+    tr_pipeline_t *pa = tr_engine_pipe_add(&e, 100, true, "0100A0", &TEST_SESS, 0.0, bb_a, BB_CAP, mid_a, 32);
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 200, true, "0200B0", &TEST_SESS, 0.0, bb_b, BB_CAP, mid_b, 32);
+    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 300, true, "0300C0", &TEST_SESS, 0.0, bb_c, BB_CAP, mid_c, 32);
     TR_CHECK(pa != 0 && pb != 0 && pc != 0);
     TR_CHECK(e.pipe_count == 4);
     /* 저장소·세션 인자 검증: NULL·용량 부족은 거부 */
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, 0, BB_CAP, mid_b, 32) == 0);
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, bb_b, BB_CAP, mid_b, 4) == 0);
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", 0, bb_b, BB_CAP, mid_b, 32) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, 0.0, 0, BB_CAP, mid_b, 32) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, 0.0, bb_b, BB_CAP, mid_b, 4) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", 0, 0.0, bb_b, BB_CAP, mid_b, 32) == 0);
     TR_CHECK(e.pipe_count == 4);
 
     /* C에 먼저 상태를 쌓아 둔다 (OPEN 봉 1개) */
@@ -740,7 +740,7 @@ static void test_pipe_slot_reuse(void) {
     TR_CHECK(tr_engine_pipe_remove(&e, 200));
     TR_CHECK(e.pipe_count == 3);
     TR_CHECK(tr_engine_pipe_find(&e, 200) == 0);
-    tr_pipeline_t *pd = tr_engine_pipe_add(&e, 400, true, "0400D0", &TEST_SESS, bb_d, BB_CAP, mid_d, 32);
+    tr_pipeline_t *pd = tr_engine_pipe_add(&e, 400, true, "0400D0", &TEST_SESS, 0.0, bb_d, BB_CAP, mid_d, 32);
     TR_CHECK(pd != 0);
     TR_CHECK(e.pipe_count == 4);
     /* D는 독립 저장소: 어느 활성 파이프라인과도 주소가 다르다 (on_timer 이중 호출 방지) */
@@ -821,7 +821,7 @@ static void test_two_pipes_independent(void) {
     static tr_bar_status_t ring_b[BB_CAP];
     /* B는 파이프0과 다른 세션(선물형 08:45~익일 05:00)을 갖는다 — 종목별 세션 보관 검증 겸용 */
     static const tr_session_policy_t fut_sess = {KST, 525, 300, TR_SESSION_WEEKDAYS};
-    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &fut_sess, bb_b, BB_CAP, mid_b, 32);
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &fut_sess, 0.0, bb_b, BB_CAP, mid_b, 32);
     TR_CHECK(pb != 0);
     TR_CHECK(strcmp(pb->shcode, "BBB002") == 0);
     TR_CHECK(pb->session.open_min == 525 && pb->session.close_min == 300); /* 기동 세션 미상속 */
@@ -1019,7 +1019,7 @@ static void test_pipe_transplant_atr_relink(void) {
 
     static tr_candle_t bb_b[BB_CAP], bb_c[BB_CAP];
     static double mid_b[32], mid_c[32];
-    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &TEST_SESS, bb_b, BB_CAP, mid_b, 32);
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &TEST_SESS, 0.0, bb_b, BB_CAP, mid_b, 32);
     TR_CHECK(pb != 0);
 
     /* 미러 엔진: 같은 종목(100)을 이식 없이 운영하는 독립 참조 */
@@ -1041,7 +1041,7 @@ static void test_pipe_transplant_atr_relink(void) {
     mcfg.market_period = 20;
     mcfg.is_futures = true;
     TR_CHECK(tr_engine_init(&m, &mcfg, m_bb0, BB_CAP, m_mid0, 32));
-    tr_pipeline_t *mb = tr_engine_pipe_add(&m, 100, false, "BBB002", &TEST_SESS, m_bbb, BB_CAP, m_midb, 32);
+    tr_pipeline_t *mb = tr_engine_pipe_add(&m, 100, false, "BBB002", &TEST_SESS, 0.0, m_bbb, BB_CAP, m_midb, 32);
     TR_CHECK(mb != 0);
 
     /* ⑤ 체인 워밍업: 백필 1-1 단계처럼 prime으로 과거 완성 세션을 채운다 (미러 동일).
@@ -1084,7 +1084,7 @@ static void test_pipe_transplant_atr_relink(void) {
     TR_CHECK(e.pipe0.instrument_id == 100);
 
     /* 기증 슬롯 재사용: 새 파이프라인 C가 그 슬롯에 들어가 memset + 자기 링 재연결 */
-    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 200, false, "CCC003", &TEST_SESS, bb_c, BB_CAP, mid_c, 32);
+    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 200, false, "CCC003", &TEST_SESS, 0.0, bb_c, BB_CAP, mid_c, 32);
     TR_CHECK(pc != 0);
     for (int i = 1; i <= 3; i++) {
         feed_pipe(&e, 200, (unsigned)i, 0, 900 + i, id++);
@@ -1180,7 +1180,7 @@ static void test_mixed_market_sessions(void) {
     static tr_candle_t bb_s[BB_CAP];
     static double mid_s[32];
     static const tr_session_policy_t stk_sess = {KST, 480, 1200, TR_SESSION_WEEKDAYS}; /* 주식: 08:00~20:00 */
-    tr_pipeline_t *ps = tr_engine_pipe_add(&e, 100, false, "005930", &stk_sess, bb_s, BB_CAP, mid_s, 32);
+    tr_pipeline_t *ps = tr_engine_pipe_add(&e, 100, false, "005930", &stk_sess, 0.0, bb_s, BB_CAP, mid_s, 32);
     TR_CHECK(ps != 0);
     TR_CHECK(ps->session.open_min == 480 && ps->session.close_min == 1200);
     TR_CHECK(e.pipe0.session.open_min == 525); /* 기동(선물) 세션 유지 */
@@ -1515,7 +1515,7 @@ static void test_snapshot_gaps(void) {
     static const tr_session_policy_t fut_sess = {KST, 525, 300, TR_SESSION_WEEKDAYS};
     static tr_candle_t bb_f[BB_CAP];
     static double mid_f[32];
-    TR_CHECK(tr_engine_pipe_add(&e, 100, true, "0100A0", &fut_sess, bb_f, BB_CAP, mid_f, 32) != 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 100, true, "0100A0", &fut_sess, 0.0, bb_f, BB_CAP, mid_f, 32) != 0);
     feed_at_day(&e, 100, 0, 23, 58, 300, id++);
     feed_at_day(&e, 100, 0, 23, 59, 301, id++);
     feed_at_day(&e, 100, 1, 0, 2, 302, id++);
