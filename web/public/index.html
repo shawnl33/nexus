@@ -47,6 +47,8 @@
   .pane .tools .chip.on { background: #14282c; }
   .pane .tools .chip:hover { background: #2a2e39; }
   #ws-state { margin-left: auto; }
+  #hts-body-wrap { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; color: #8a919c; cursor: pointer; user-select: none; }
+  #hts-body-wrap input { accent-color: #26a69a; margin: 0; }
   #hint { font-size: 12px; color: #7d8590; }
   .sym-picker { position: relative; display: inline-flex; gap: 4px; align-items: center; }
   .sym-picker input { padding: 1px 6px; font-size: 12px; width: 11ch; }
@@ -71,6 +73,7 @@
     <span class="badge" id="ob">호가: –</span>
   </span>
   <button id="pane-add" title="차트 칸을 추가한다">+ 차트</button>
+  <label id="hts-body-wrap" title="캔들 시가를 직전 봉 종가로 이어 몸통이 연속되게 그린다 (표시 전용 — 데이터는 바꾸지 않는다)"><input type="checkbox" id="hts-body"> HTS식 몸통</label>
   <span id="ws-state" class="badge err">연결 끊김</span>
   <span id="hint">화면틀:</span>
   <input id="ws-name" value="default" size="10">
@@ -84,6 +87,7 @@
 <script src="sma-layers.js"></script>
 <script src="feed.js"></script>
 <script src="gaps.js"></script>
+<script src="candle-display.js"></script>
 <script src="workspace.js"></script>
 <script src="indicator-tree.js"></script>
 <script src="pane-sync.js"></script>
