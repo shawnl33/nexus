@@ -70,7 +70,7 @@ test("SmaRenderer: applySeed가 캐시에서 복원하고 setLayers가 즉시 �
   assert.equal(s60.data.length, 11);
   assert.deepEqual(s5.data[0], { time: 1000 + 59 * 60, value: 159 });
 
-  // 레이어 칩: sma60만 끄면 그 선만 비고, 다시 켜면 캐시에서 복원
+  // 레이어 토글: sma60만 끄면 그 선만 비고, 다시 켜면 캐시에서 복원
   h.setLayers({ sma60: false });
   assert.deepEqual(s60.data, []);
   assert.equal(s5.data.length, 11);

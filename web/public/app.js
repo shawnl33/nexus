@@ -1,8 +1,9 @@
 // 대시보드 프론트엔드 (계획서 §18).
 // C가 계산한 값을 표시만 한다. 지표·점수를 재계산하지 않는다.
 // 칸(pane)마다 차트 1개 + 종목 1개를 두고, 종목별 데이터 캐시는 feed.js가 격리한다.
-// 지표는 렌더러(RENDERERS)를 칸에 활성화해 표시하고, 칸 도구줄의 지표 칩/레이어 칩은
-// 엔진 스냅샷의 indicators 매니페스트에서 만든다.
+// 지표는 렌더러(RENDERERS)를 칸에 활성화해 표시하고, 칸 왼쪽의 접이식 지표 패널
+// (카테고리 ▸ 지표 체크박스 ▸ 레이어 체크박스 트리)은 엔진 스냅샷의 indicators
+// 매니페스트에서 만든다 (트리 분류는 indicator-tree.js).
 // 기본 상태 = 칸 1개 + 종목 미선택(빈 차트에 종목 입력만). 단, 시딩 시 엔진이 관측 중인
 // 종목이 하나뿐이면 그 종목을 칸 1에 자동 설정한다 (기존 사용자 흐름 보호).
 
@@ -41,11 +42,13 @@ function sameSession(src, cur) {
 }
 
 // ---- 패널 매니저 ----
-// Pane: { id, el, toolsEl, pickerEl, chipsEl, chart, candleSeries, heightFrac, syncHandle,
+// Pane: { id, el, toolsEl, pickerEl, panelEl, chartEl, chart, candleSeries, heightFrac, syncHandle,
 //         symbol, symName, selSeq, selTarget, searchSeq, searchTimer,
-//         symInput, symNameEl, symResults,
+//         symInput, symNameEl, symResults, panelOpen, panelToggleEl, treeFold,
 //         active: Map<indId, { renderer, handle, layers: {layerId: bool} }> }
-// symbol이 ""이면 미선택: 빈 차트에 종목 입력만 보인다 (지표 칩 없음).
+// symbol이 ""이면 미선택: 빈 차트에 종목 입력만 보인다 (지표 패널은 안내 문구만).
+// panelOpen은 칸별 지표 패널 접기/펼치기(화면틀 직렬화 대상), treeFold는 트리
+// 카테고리의 접힘 상태로 칸 UI 로컬이다 (직렬화하지 않는다).
 // selTarget은 진행 중인 선택의 목표 종목 — 늦은 선택 완료를 폐기할 때 그 종목의
 // watch를 해지해도 되는지(WatchGuard.staleWatchLeaks) 판정에 쓴다.
 
@@ -138,26 +141,37 @@ function chartOptions(pane) {
 
 // 칸 높이는 #panes 대비 % (pane.heightFrac 0..1). 인접 칸 사이의 리사이즈바를
 // 드래그해 조절한다. 높이를 바꾼 뒤에는 차트 크기를 다시 맞춘다.
+// 차트 크기의 기준은 차트 호스트(.chart-host)다 — 지표 패널을 접으면 칸 폭은
+// 그대로여도 호스트 폭이 늘어나므로, 패널 접기/펼치기에서도 이 함수를 부른다.
 function syncPaneSize(pane) {
   pane.el.style.height = `${pane.heightFrac * 100}%`;
-  pane.chart.resize(pane.el.clientWidth, pane.el.clientHeight);
+  pane.chart.resize(pane.chartEl.clientWidth, pane.chartEl.clientHeight);
 }
 
 function createPane(heightFrac = 1) {
   const div = document.createElement("div");
   div.className = "pane";
   div.style.height = `${heightFrac * 100}%`;
+  // 칸 구조: 도구줄(종목 입력 + ☰ + ×) + 본문([지표 패널 | 차트] 수평 분할)
   const tools = document.createElement("div");
   tools.className = "tools";
-  div.append(tools);
+  const body = document.createElement("div");
+  body.className = "pane-body";
+  const panel = document.createElement("div");
+  panel.className = "ind-panel";
+  const chartHost = document.createElement("div");
+  chartHost.className = "chart-host";
+  body.append(panel, chartHost);
+  div.append(tools, body);
   panesEl.append(div);
   const pane = {
-    id: nextPaneId++, el: div, toolsEl: tools, heightFrac,
+    id: nextPaneId++, el: div, toolsEl: tools, panelEl: panel, chartEl: chartHost, heightFrac,
     symbol: "", symName: "", selSeq: 0, selTarget: "", searchSeq: 0, searchTimer: null,
     active: new Map(), chart: null, candleSeries: null, syncHandle: null,
-    pickerEl: null, chipsEl: null, symInput: null, symNameEl: null, symResults: null,
+    pickerEl: null, symInput: null, symNameEl: null, symResults: null,
+    panelOpen: true, panelToggleEl: null, treeFold: {},
   };
-  pane.chart = LightweightCharts.createChart(div, chartOptions(pane));
+  pane.chart = LightweightCharts.createChart(chartHost, chartOptions(pane));
   pane.candleSeries = pane.chart.addCandlestickSeries({
     upColor: "#ef5350", downColor: "#2962ff",
     borderUpColor: "#ef5350", borderDownColor: "#2962ff",
@@ -185,14 +199,42 @@ function createPane(heightFrac = 1) {
     // 구멍 수가 달라 논리 인덱스로 맞추면 칸마다 다른 시각을 보게 되므로 시각이 공통 기준이다.
     getTimes: () => feed.get(pane.symbol)?.seriesTimes,
   });
-  buildPanePicker(pane); // 종목 입력은 칸 도구줄 맨 앞에 1회 만든다 (칩 재구성과 무관)
-  const chips = document.createElement("span");
-  chips.className = "chips";
-  tools.append(chips);
-  pane.chipsEl = chips;
-  buildPaneTools(pane);
+  buildPanePicker(pane); // 종목 입력은 칸 도구줄 맨 앞에 1회 만든다 (트리 재구성과 무관)
+  buildPaneToolButtons(pane); // ☰(지표 패널 접기)·×(칸 삭제)도 1회 만든다 (상태만 동기화)
+  buildPaneTools(pane); // 지표 패널의 트리를 채운다
+  // 차트는 도구줄이 비어 있는 시점의 호스트 크기로 생성된다 — 도구줄이 자라며 호스트가
+  // 줄어들었으므로 생성 시점부터 정확한 크기로 맞춘다 (안 맞추면 첫 리사이즈 트리거
+  // 전까지 차트 하단의 시간축이 잘린다 — bootstrap의 첫 칸·addPane의 새 칸 모두)
+  syncPaneSize(pane);
   panes.push(pane);
   return pane;
+}
+
+// 도구줄 버튼: ☰(지표 패널 접기/펼치기) + ×(칸 삭제). 트리 재구성 때 다시 만들지 않는다
+function buildPaneToolButtons(pane) {
+  const toggle = document.createElement("button");
+  toggle.className = "chip panel-toggle on"; // 기본 열림(panelOpen: true)
+  toggle.textContent = "☰";
+  toggle.title = "지표 패널 접기/펼치기";
+  toggle.onclick = () => setPanelOpen(pane, !pane.panelOpen);
+  pane.toolsEl.append(toggle);
+  pane.panelToggleEl = toggle;
+
+  const del = document.createElement("button");
+  del.className = "chip del";
+  del.textContent = "×";
+  del.title = "이 차트 삭제";
+  del.onclick = () => removePane(pane);
+  pane.toolsEl.append(del);
+}
+
+// 칸별 지표 패널 접기/펼치기. 접으면 차트가 칸 전체 폭을 쓴다 — 호스트 폭이 바뀌므로
+// 차트 크기를 다시 맞춘다 (패널 DOM은 숨길 뿐, 트리 상태는 유지된다)
+function setPanelOpen(pane, open) {
+  pane.panelOpen = open;
+  pane.panelEl.hidden = !open;
+  pane.panelToggleEl.classList.toggle("on", open);
+  syncPaneSize(pane);
 }
 
 function removePane(pane, { release = true } = {}) {
@@ -449,7 +491,7 @@ async function selectPaneSymbol(pane, shcode, name) {
   if (typeof w.generation === "number") feed.noteGeneration(cache, w.generation);
   if (!engineWatches.includes(shcode)) engineWatches.push(shcode);
   syncPaneSymbolUi(pane);
-  buildPaneTools(pane); // 지표 칩이 보이기 시작한다
+  buildPaneTools(pane); // 지표 트리가 보이기 시작한다
   updateBadgeVisibility();
   // 이전 종목은 새 watch가 붙은 뒤에 해제한다 (엔진의 마지막-watch 해지 거부를 피한다)
   if (prev) releaseSymbol(prev);
@@ -467,65 +509,105 @@ function clearSymbolPanes(shcode) {
   }
 }
 
-// 칸 칩 줄: [없음] [지표 칩…] [활성 지표의 레이어 칩…] [×]
-// 종목 미선택 칸은 종목 입력과 [×]만 보인다 (빈 차트 원칙 — 지표 칩은 종목이 있어야 동작한다).
-// 지표 칩은 매니페스트에서 만들고, 레이어 칩은 켜진 지표의 layers(defaultOn 반영)에서 만든다.
+// 칸 지표 패널 트리: [없음] 버튼 + 카테고리 ▸ 지표 체크박스 ▸ 그 지표의 레이어 체크박스들.
+// 종목 미선택 칸은 안내 문구만 보인다 (빈 차트 원칙 — 지표는 종목이 있어야 동작한다).
+// 트리 구조(카테고리 분류)는 indicator-tree.js가 매니페스트에서 만들고,
+// 체크 상태는 항상 이 칸의 pane.active·layers를 그대로 반영한다 — 상태를 바꾸는 모든 경로
+// (토글·종목 변경·화면틀 복원·매니페스트 갱신)에서 이 함수를 다시 불러 트리를 재구성한다
+// (칩 시절 buildPaneTools의 호출 지점과 같은 계약).
 function buildPaneTools(pane) {
-  const chips = pane.chipsEl;
-  chips.replaceChildren();
+  const panel = pane.panelEl;
+  panel.replaceChildren();
 
-  if (pane.symbol) {
-    const noneChip = document.createElement("button");
-    noneChip.className = `chip${pane.active.size === 0 ? " on" : ""}`;
-    noneChip.textContent = "없음";
-    noneChip.title = "이 칸의 지표를 모두 끈다";
-    noneChip.onclick = () => {
-      for (const id of [...pane.active.keys()]) deactivateIndicator(pane, id);
-      buildPaneTools(pane);
-      updateBadgeVisibility();
-    };
-    chips.append(noneChip);
-
-    for (const meta of indicatorManifest) {
-      if (!RENDERERS[meta.id]) continue; // 이 프론트가 모르는 지표는 건너뛴다
-      const on = pane.active.has(meta.id);
-      const chip = document.createElement("button");
-      chip.className = `chip${on ? " on" : ""}`;
-      chip.textContent = meta.name ?? meta.id;
-      chip.onclick = () => {
-        if (pane.active.has(meta.id)) deactivateIndicator(pane, meta.id);
-        else activateIndicator(pane, meta.id);
-        buildPaneTools(pane);
-        updateBadgeVisibility();
-      };
-      chips.append(chip);
-    }
-
-    for (const [indId, entry] of pane.active) {
-      const meta = indicatorManifest.find((m) => m.id === indId);
-      for (const layer of meta?.layers ?? []) {
-        const on = entry.layers[layer.id] !== false;
-        const chip = document.createElement("button");
-        chip.className = `chip layer${on ? " on" : ""}`;
-        chip.textContent = layer.name ?? layer.id;
-        chip.title = `${meta.name ?? indId} 레이어`;
-        chip.onclick = () => {
-          const next = entry.layers[layer.id] === false;
-          entry.layers[layer.id] = next;
-          entry.handle.setLayers({ [layer.id]: next });
-          chip.classList.toggle("on", next);
-        };
-        chips.append(chip);
-      }
-    }
+  if (!pane.symbol) {
+    const hint = document.createElement("div");
+    hint.className = "ind-hint";
+    hint.textContent = "종목을 선택하면 지표를 고를 수 있습니다";
+    panel.append(hint);
+    return;
   }
 
-  const del = document.createElement("button");
-  del.className = "chip del";
-  del.textContent = "×";
-  del.title = "이 차트 삭제";
-  del.onclick = () => removePane(pane);
-  chips.append(del);
+  const noneBtn = document.createElement("button");
+  noneBtn.className = `chip ind-none${pane.active.size === 0 ? " on" : ""}`;
+  noneBtn.textContent = "없음";
+  noneBtn.title = "이 칸의 지표를 모두 끈다";
+  noneBtn.onclick = () => {
+    for (const id of [...pane.active.keys()]) deactivateIndicator(pane, id);
+    buildPaneTools(pane);
+    updateBadgeVisibility();
+  };
+  panel.append(noneBtn);
+
+  for (const cat of IndicatorTree.buildTree(indicatorManifest, (id) => id in RENDERERS)) {
+    panel.append(buildCatNode(pane, cat));
+  }
+}
+
+// 트리 카테고리 노드: 머리(접기/펼치기 + 이름) + 지표 목록.
+// 접힘 상태는 pane.treeFold에 칸 UI 로컬로 둔다 (직렬화하지 않는다).
+function buildCatNode(pane, cat) {
+  const node = document.createElement("div");
+  node.className = "ind-cat";
+  const folded = !!pane.treeFold[cat.id];
+  const head = document.createElement("div");
+  head.className = "ind-cat-head";
+  head.textContent = `${folded ? "▸" : "▾"} ${cat.name}`;
+  head.title = folded ? "펼치기" : "접기";
+  head.onclick = () => {
+    pane.treeFold[cat.id] = !folded;
+    buildPaneTools(pane);
+  };
+  node.append(head);
+  if (!folded) {
+    const body = document.createElement("div");
+    body.className = "ind-cat-body";
+    for (const meta of cat.indicators) body.append(buildIndNode(pane, meta));
+    node.append(body);
+  }
+  return node;
+}
+
+// 트리 지표 노드: 지표 체크박스 + (켜져 있으면) 그 지표의 레이어 체크박스들.
+// 지표 체크는 activateIndicator/deactivateIndicator를 그대로 부르고 트리를 재구성한다
+// (칩 시절과 같은 경로). 레이어 체크는 handle.setLayers만 반영한다 — 체크박스 자체가
+// 상태 표시라 트리 재구성은 필요 없다 (칩 시절 classList.toggle과 같은 계약).
+function buildIndNode(pane, meta) {
+  const node = document.createElement("div");
+  node.className = "ind-item";
+  const row = document.createElement("label");
+  row.className = "ind-row";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = pane.active.has(meta.id);
+  box.onchange = () => {
+    if (box.checked) activateIndicator(pane, meta.id);
+    else deactivateIndicator(pane, meta.id);
+    buildPaneTools(pane);
+    updateBadgeVisibility();
+  };
+  row.append(box, document.createTextNode(meta.name ?? meta.id));
+  node.append(row);
+
+  const entry = pane.active.get(meta.id);
+  if (entry) {
+    const layersBox = document.createElement("div");
+    layersBox.className = "ind-layers";
+    for (const layer of meta?.layers ?? []) {
+      const lrow = document.createElement("label");
+      lrow.className = "ind-row layer";
+      const lbox = document.createElement("input");
+      lbox.type = "checkbox";
+      lbox.checked = entry.layers[layer.id] !== false;
+      lbox.onchange = () => {
+        entry.layers[layer.id] = lbox.checked;
+        entry.handle.setLayers({ [layer.id]: lbox.checked });
+      };
+      lrow.append(lbox, document.createTextNode(layer.name ?? layer.id));
+      layersBox.append(lrow);
+    }
+    node.append(layersBox);
+  }
+  return node;
 }
 
 // 지표 렌더러를 칸에 활성화하고 종목 캐시로 백필한다.
@@ -901,7 +983,7 @@ async function seedSymbolNow(shcode) {
         const data = await res.json();
         const p = data.payload ?? {};
         feed.noteGeneration(cache, p.generation);
-        // 지표 매니페스트: 첫 페이지에서 한 번 받아 칸 도구줄을 구성한다
+        // 지표 매니페스트: 첫 페이지에서 한 번 받아 칸 지표 패널을 구성한다
         if (pages === 0 && Array.isArray(p.indicators)) setIndicatorManifest(p.indicators);
         const rows = p.bars ?? [];
         const inds = p.ind ?? [];
@@ -954,7 +1036,7 @@ async function seedSymbolNow(shcode) {
   }
 }
 
-// 지표 매니페스트를 저장하고 모든 칸의 도구줄을 다시 만든다.
+// 지표 매니페스트를 저장하고 모든 칸의 지표 패널 트리를 다시 만든다.
 // 내용이 같으면 건너뛴다 — 재구성이 다른 칸의 종목 입력 중 포커스를 뺏지 않게.
 function setIndicatorManifest(list) {
   const next = list.filter((m) => m && typeof m.id === "string");
@@ -1038,6 +1120,7 @@ function collectWorkspace() {
     panes.map((pane) => ({
       height: pane.heightFrac,
       symbol: pane.symbol,
+      panelOpen: pane.panelOpen, // 칸별 지표 패널 접기/펼치기
       indicators: [...pane.active.entries()].map(([id, entry]) => ({ id, layers: { ...entry.layers } })),
     })));
 }
@@ -1059,6 +1142,7 @@ async function applyWorkspace(parsed) {
   const jobs = [];
   for (const spec of parsed.panels) {
     const pane = createPane(spec.height);
+    setPanelOpen(pane, spec.panelOpen); // 구 화면틀은 parse가 기본값(열림)으로 정규화한다
     for (const ind of spec.indicators) activateIndicator(pane, ind.id, ind.layers);
     buildPaneTools(pane);
     if (spec.symbol) jobs.push(selectPaneSymbol(pane, spec.symbol).catch(() => {}));
@@ -1143,9 +1227,9 @@ document.getElementById("pane-add").onclick = addPane;
 document.getElementById("ws-save").onclick = saveWorkspace;
 document.getElementById("ws-load").onclick = loadWorkspace;
 
-// 창 크기가 바뀌면 각 칸의 차트 크기를 다시 맞춘다
+// 창 크기가 바뀌면 각 칸의 차트 크기를 다시 맞춘다 (기준은 차트 호스트 — syncPaneSize와 같다)
 addEventListener("resize", () => {
-  for (const pane of panes) pane.chart.resize(pane.el.clientWidth, pane.el.clientHeight);
+  for (const pane of panes) pane.chart.resize(pane.chartEl.clientWidth, pane.chartEl.clientHeight);
 });
 
 // 드롭다운 바깥 클릭은 열린 검색 결과를 닫는다

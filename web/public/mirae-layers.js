@@ -252,7 +252,7 @@ const MiraeLayers = (() => {
   }
 
   // ②+⑤ 회귀선·매매 상태 (Plot7 + Plot30/31, 2패스 덧선)
-  // layers를 넘기면 reg/state 칩으로 각 패스를 끈다 (생략 시 둘 다 그린다)
+  // layers를 넘기면 reg/state 레이어 토글로 각 패스를 끈다 (생략 시 둘 다 그린다)
   function createRegLinePaneView(layers) {
     return makeSegmentPaneView((ctx, priceConverter, a, b) => {
       const da = a.originalData, db = b.originalData;
@@ -554,7 +554,7 @@ const MiraeLayers = (() => {
         }
       }
 
-      // ①②⑤⑥⑦ 다시 그리기 — 레이어 칩 상태대로 캐시에서 전체 복원/제거
+      // ①②⑤⑥⑦ 다시 그리기 — 레이어 체크 상태대로 캐시에서 전체 복원/제거
       function rebuildCore() {
         const regData = [];
         const scoreData = [];

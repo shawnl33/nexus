@@ -50,6 +50,34 @@ test("serialize→parse 왕복: 칸 수·종목·지표·레이어·높이가 �
   assert.deepEqual(parsed.panels[1].indicators, []);
 });
 
+test("panelOpen: serialize는 접힘(false)만 남기고 기본은 열림(true)으로 저장한다", () => {
+  const ws = W.serialize("패널", [
+    { height: 0.5, symbol: "005930", panelOpen: false, indicators: [] },
+    { height: 0.5, symbol: "", indicators: [] }, // panelOpen 생략 → 열림
+  ]);
+  assert.equal(ws.panels[0].panelOpen, false);
+  assert.equal(ws.panels[1].panelOpen, true);
+
+  // 왕복: 접힌 칸은 접힌 채로 돌아온다
+  const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
+  assert.equal(parsed.panels[0].panelOpen, false);
+  assert.equal(parsed.panels[1].panelOpen, true);
+});
+
+test("panelOpen: 키가 없는 구 화면틀은 기본값(열림)으로 읽고, 명시 false만 접힘이다", () => {
+  const parsed = W.parse({
+    schema_version: 2,
+    panels: [
+      { height: 0.5, symbol: "005930", indicators: [] },              // panelOpen 키 없음 (구 저장본)
+      { height: 0.5, symbol: "", panelOpen: false, indicators: [] },  // 접힘
+      { height: 0.5, symbol: "", panelOpen: 0, indicators: [] },      // false 아닌 값은 열림 취급
+    ],
+  }, known);
+  assert.equal(parsed.panels[0].panelOpen, true);
+  assert.equal(parsed.panels[1].panelOpen, false);
+  assert.equal(parsed.panels[2].panelOpen, true);
+});
+
 test("parse: panels[i].symbol이 없는 구 v2 화면틀은 current_symbol로 폴백한다", () => {
   const parsed = W.parse({
     schema_version: 2,
@@ -107,7 +135,7 @@ test("parse: 높이는 0.1~1로 클램프하고, 칸이 없으면 맨 차트 1�
 
   // 빈 화면틀의 기본 1칸도 current_symbol 폴백을 받는다
   const empty = W.parse({ schema_version: 2, current_symbol: "005930", panels: [] }, known);
-  assert.deepEqual(empty.panels, [{ height: 1, symbol: "005930", indicators: [] }]);
+  assert.deepEqual(empty.panels, [{ height: 1, symbol: "005930", panelOpen: true, indicators: [] }]);
 
   const sym = W.parse({ schema_version: 2, panels: [] }, known);
   assert.equal(sym.symbol, ""); // current_symbol 누락/비문자 허용

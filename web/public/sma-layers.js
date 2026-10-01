@@ -32,7 +32,7 @@ const SmaLayers = (() => {
       }));
       let ctx = null; // 마지막 applyLive/applySeed의 ctx — setLayers 재구축에 사용
 
-      // 레이어 칩 상태대로 barInd 캐시에서 전체 복원/제거
+      // 레이어 체크 상태대로 barInd 캐시에서 전체 복원/제거
       function rebuild() {
         for (const ln of lines) {
           const data = [];

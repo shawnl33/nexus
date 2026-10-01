@@ -316,7 +316,7 @@ test("MiraeRenderer: applyLive가 봉별 갱신과 캐시된 ⑥⑦ 아이템을
   assert.equal(regLineSeries.updates[1].value, undefined);
 });
 
-test("MiraeRenderer: 매니페스트 8개 레이어 칩을 setLayers로 개별 토글한다", () => {
+test("MiraeRenderer: 매니페스트 8개 레이어를 setLayers로 개별 토글한다", () => {
   const chart = fakeChart();
   const candle = fakeCandleSeries();
   const h = M.MiraeRenderer.createHandle(chart, candle);

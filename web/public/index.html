@@ -16,12 +16,28 @@
   #mirae-badges { display: inline-flex; gap: 12px; align-items: baseline; }
   #mirae-badges[hidden] { display: none; }
   #panes { width: 100vw; height: calc(100vh - 110px); display: flex; flex-direction: column; overflow: hidden; }
-  #panes .pane { width: 100%; position: relative; flex: none; border-bottom: 1px solid #2a2e39; box-sizing: border-box; }
-  .pane .tools { position: absolute; top: 6px; left: 8px; right: 8px; z-index: 3; display: flex; gap: 5px; align-items: center; flex-wrap: wrap; background: rgba(19,23,34,.8); border-radius: 6px; padding: 3px 6px; width: fit-content; max-width: calc(100% - 16px); }
+  #panes .pane { width: 100%; position: relative; flex: none; display: flex; flex-direction: column; border-bottom: 1px solid #2a2e39; box-sizing: border-box; }
+  /* 도구줄: 종목 입력 + ☰(지표 패널 접기) + ×(삭제, 오른쪽 끝) — 칸 상단 고정 행 */
+  .pane .tools { flex: none; display: flex; gap: 5px; align-items: center; flex-wrap: wrap; background: #1c2330; border-bottom: 1px solid #2a2e39; padding: 3px 6px; }
+  .pane .tools .chip.del { margin-left: auto; }
+  /* 도구줄 아래 칸 본문: [지표 패널 | 차트] 수평 분할 */
+  .pane .pane-body { flex: 1 1 0; min-height: 0; display: flex; }
+  .pane .chart-host { flex: 1 1 0; min-width: 0; position: relative; }
+  /* 칸별 지표 패널 (트리) — ☰로 접으면 숨기고(hidden) 차트가 칸 전체 폭을 쓴다 */
+  .ind-panel { flex: none; width: 200px; overflow-y: auto; background: #161b26; border-right: 1px solid #2a2e39; padding: 6px 8px; box-sizing: border-box; font-size: 12px; }
+  .ind-panel[hidden] { display: none; }
+  .ind-panel .ind-hint { color: #7d8590; font-size: 11px; line-height: 1.5; }
+  .ind-panel .ind-none { margin-bottom: 6px; }
+  .ind-panel .ind-cat-head { cursor: pointer; color: #8a919c; font-weight: 700; padding: 3px 0; user-select: none; }
+  .ind-panel .ind-cat-head:hover { color: #d1d4dc; }
+  .ind-panel .ind-cat-body { padding-left: 12px; }
+  .ind-panel .ind-row { display: flex; align-items: center; padding: 2px 0; cursor: pointer; }
+  .ind-panel .ind-row.layer { color: #8a919c; font-size: 11px; }
+  .ind-panel .ind-layers { padding-left: 20px; }
+  .ind-panel input[type="checkbox"] { background: none; border: none; padding: 0; margin: 0 5px 0 0; accent-color: #26a69a; }
   .chip { border: 1.5px solid #434651; background: #1c2330; color: #8a919c; border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; font-family: inherit; }
   .chip.on { border-color: #26a69a; color: #26a69a; background: #14282c; font-weight: 700; }
   .chip:hover { border-color: #26a69a; }
-  .chip.layer { padding: 1px 8px; font-size: 11px; }
   .chip.del { color: #ef5350; }
   .resizebar { position: absolute; bottom: -3px; left: 0; right: 0; height: 6px; z-index: 4; cursor: ns-resize; text-align: center; color: #434651; font-size: 9px; line-height: 6px; user-select: none; }
   .resizebar:hover { color: #26a69a; }
@@ -33,7 +49,6 @@
   .pane .tools .chip:hover { background: #2a2e39; }
   #ws-state { margin-left: auto; }
   #hint { font-size: 12px; color: #7d8590; }
-  .pane .tools .chips { display: inline-flex; gap: 5px; align-items: center; flex-wrap: wrap; }
   .sym-picker { position: relative; display: inline-flex; gap: 4px; align-items: center; }
   .sym-picker input { padding: 1px 6px; font-size: 12px; width: 11ch; }
   .sym-picker .sym-name { font-size: 11px; padding: 1px 6px; }
@@ -71,6 +86,7 @@
 <script src="feed.js"></script>
 <script src="gaps.js"></script>
 <script src="workspace.js"></script>
+<script src="indicator-tree.js"></script>
 <script src="pane-sync.js"></script>
 <script src="watch-guard.js"></script>
 <script src="app.js"></script>

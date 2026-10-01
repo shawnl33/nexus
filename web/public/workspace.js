@@ -8,12 +8,13 @@ const Workspace = (() => {
   const SCHEMA_VERSION = 2;
   const MIN_HEIGHT = 0.1; // 칸 최소 높이 비율 (app.js MIN_PANE_FRAC와 동일하게 유지)
 
-  // panesState: [{ height, symbol, indicators: [{ id, layers: { layerId: bool } }] }]
+  // panesState: [{ height, symbol, panelOpen, indicators: [{ id, layers: { layerId: bool } }] }]
   // current_symbol은 구 독자 호환용으로 첫 칸의 종목을 적어 둔다 (읽기는 panels[i].symbol).
   function serialize(name, panesState) {
     const panels = (panesState ?? []).map((p) => ({
       height: p.height,
       symbol: typeof p.symbol === "string" ? p.symbol : "",
+      panelOpen: p.panelOpen !== false, // 지표 패널 접힘만 false로 남긴다 (기본 열림)
       indicators: (p.indicators ?? []).map((i) => ({
         id: i.id,
         layers: { ...(i.layers ?? {}) },
@@ -29,8 +30,9 @@ const Workspace = (() => {
 
   // v2 검증·정규화. 구 스키마(schema_version != 2)면 null을 돌려준다.
   // isKnownIndicator(id): 알 수 없는 지표는 걸러낸다 (엔진/프론트 버전 차이 흡수).
-  // 결과: { symbol, panels: [{ height, symbol, indicators: [{ id, layers }] }] } — panels는 최소 1칸.
+  // 결과: { symbol, panels: [{ height, symbol, panelOpen, indicators: [{ id, layers }] }] } — panels는 최소 1칸.
   // panels[i].symbol이 없는 구 화면틀은 current_symbol(구 v2의 단일 종목)로 폴백한다.
+  // panelOpen이 없는 구 화면틀은 기본값(열림, true)으로 읽는다.
   function parse(data, isKnownIndicator) {
     if (!data || data.schema_version !== SCHEMA_VERSION) return null;
     const fallbackSymbol = typeof data.current_symbol === "string" ? data.current_symbol : "";
@@ -47,9 +49,9 @@ const Workspace = (() => {
         for (const [k, v] of Object.entries(i.layers ?? {})) layers[k] = !!v;
         indicators.push({ id: i.id, layers });
       }
-      panels.push({ height, symbol, indicators });
+      panels.push({ height, symbol, panelOpen: p?.panelOpen !== false, indicators });
     }
-    if (panels.length === 0) panels.push({ height: 1, symbol: fallbackSymbol, indicators: [] }); // 빈 화면틀 = 맨 차트 1칸
+    if (panels.length === 0) panels.push({ height: 1, symbol: fallbackSymbol, panelOpen: true, indicators: [] }); // 빈 화면틀 = 맨 차트 1칸
     return { symbol: fallbackSymbol, panels };
   }
 
