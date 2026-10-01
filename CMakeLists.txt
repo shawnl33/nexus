@@ -25,6 +25,7 @@ add_library(core STATIC
     src/core/functions/atr.c
     src/core/functions/auto_session_adx_v1.c
     src/core/functions/daily_align_v2.c
+    src/core/functions/fx_session_key_v1.c
     src/core/functions/daily_linreg_trend_v1.c
     src/core/functions/daily_market_profile_v1.c
     src/core/functions/daily_trend_link_v1.c
@@ -173,7 +174,7 @@ endif()
 enable_testing()
 
 # 0개 테스트 실행을 통과로 간주하지 않는다(계획서 §25).
-foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma)
+foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE core)
     target_compile_options(test_${t} PRIVATE ${TR_WARNINGS})
