@@ -929,6 +929,10 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     /* 직전 RT 이벤트 수신 시각. 0이면 기동 후 첫 이벤트 전 — 기동 백필과 중복 캐치업하지 않는다 */
     int64_t last_rt_event_us = 0;
     bool need_catchup = false;
+    /* 마지막 빈 링 재백필 검사 시각. watch 백필이 연속 실패하면(HTTP 500 등) 링이 빈 채로
+     * 영구 방치되는 사고(2026-10-01 삼성전자 반나절 빈 차트)를 막기 위해 60초마다
+     * 빈 파이프를 다시 백필한다 */
+    time_t last_backfill_retry = time(0);
     while (!g_stop) {
         tr_ls_rt_service(rt, 20);
         ls_rt_event_t ev;
@@ -968,6 +972,34 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
             /* 캐치업은 블로킹이라 수백 초 걸릴 수 있다 — 경과 시간이 다음 이벤트의
              * 공백으로 재감지되어 재트리거되는 루프를 막는다 */
             last_rt_event_us = (int64_t)time(0) * TR_US_PER_SEC;
+        }
+        /* 빈 봉 링 재백필: 60초마다 한 번, 봉 링이 빈 관측 파이프를 watch 백필과 같은
+         * 경로로 다시 채운다. 주말·거래정지처럼 구조적으로 실패하는 경우도 60초 주기
+         * 로그 1줄이라 그대로 둔다 (조용한 실패 허용) */
+        time_t now_sec = time(0);
+        if (now_sec - last_backfill_retry >= 60) {
+            last_backfill_retry = now_sec;
+            bool retried = false;
+            for (int i = 0; i < engine.pipe_count; i++) {
+                tr_pipeline_t *pipe = engine.pipes[i];
+                if (tr_ring_count(&pipe->bb.bars) != 0) {
+                    continue;
+                }
+                int nb = backfill_minute_bars(&auth, &engine, pipe, pipe->shcode,
+                                              pipe->is_futures);
+                if (nb > 0) {
+                    fprintf(stderr, "backfill retry %s: %d bars\n", pipe->shcode, nb);
+                } else {
+                    fprintf(stderr, "backfill retry %s: still empty\n", pipe->shcode);
+                }
+                retried = true;
+            }
+            if (retried) {
+                /* 재백필도 블로킹이라 수 초 걸릴 수 있다 — 경과 시간이 다음 이벤트의
+                 * 공백으로 재감지되어 캐치업이 재트리거되는 루프를 막는다 (캐치업과 동일).
+                 * 실제 백필이 없을 때도 갱신하면 진짜 공백-재개 감지가 묻히므로 실행 때만 한다 */
+                last_rt_event_us = (int64_t)time(0) * TR_US_PER_SEC;
+            }
         }
         tr_ipc_poll(ipc, 0, 4, live_command_handler, 0);
         if (tr_ls_rt_state(rt) == LS_RT_FAILED) {
