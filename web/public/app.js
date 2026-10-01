@@ -62,14 +62,6 @@ const panes = [];
 let nextPaneId = 1;
 const MIN_PANE_FRAC = 0.1; // 드래그로 줄일 수 있는 칸 최소 높이 비율
 
-// ---- HTS식 몸통 표시 옵션 ----
-// 켜지면 캔들 시리즈에 넘기는 값만 표시용으로 변환한다 (candle-display.js:
-// 시가=직전 실제 봉 종가로 몸통을 잇는다). 캐시(feed의 bars/barSeq)·지표·
-// 크로스헤어 getPrice는 원래 값 유지 — 데이터는 건드리지 않는다.
-// 기본 꺼짐, 상태는 localStorage에 저장해 새로고침해도 유지한다.
-let htsBodyOn = false;
-try { htsBodyOn = localStorage.getItem("hts_body") === "1"; } catch { /* 저장소 접근 실패 시 기본값(꺼짐) */ }
-
 // shcode 없는 메시지(구 엔진·리플레이)의 행선지: 칸 1 종목 → 엔진 첫 관측 종목 → 기본("") 캐시.
 // 기본 캐시는 미선택 칸이 본다 — 리플레이처럼 종목을 고를 수 없는 엔진의 기존 동작(전 칸 표시)을 지킨다.
 function legacyShcode() {
@@ -761,19 +753,7 @@ function applyStatus(msg) {
             mutePaneRange(pane);
             for (const w of liveWs) pane.candleSeries.update(w);
           }
-          // HTS식 몸통: 라이브 꼬리도 같은 체인 규칙(시가=직전 실제 봉 종가)으로
-          // 표시용 변환한다. 직전 봉은 캐시 기준 — 꼬리 t가 barSeq 마지막이므로 그 앞
-          // 봉이다. 같은 봉 갱신(code 0)과 꼬리 추가(code 1) 모두 이 값이 정확하다:
-          // 표시 종가는 언제나 실제 종가와 같으므로(close는 변환하지 않는다) 별도
-          // 추적 없이 캐시의 직전 실제 봉 종가가 곧 직전 표시 종가다. 캐시는 읽기만
-          // 하고 원래 값을 유지한다.
-          let dispBar = cache.bars.get(t);
-          if (htsBodyOn) {
-            const prevT = cache.barSeq[cache.barSeq.length - 2];
-            const prevClose = prevT === undefined ? undefined : cache.bars.get(prevT)?.close;
-            dispBar = CandleDisplay.htsChainBar(prevClose, dispBar);
-          }
-          pane.candleSeries.update(dispBar);
+          pane.candleSeries.update(cache.bars.get(t));
         } else {
           // 늦은 정정/구멍 채움(과거 시각): candleSeries.update()는 시리즈 마지막보다
           // 과거 시각에 throw("Cannot update oldest data")하므로 캐시에서 다시 깐다.
@@ -895,10 +875,7 @@ const INITIAL_VISIBLE_BARS = 380;
 // renderSymbolPanes와 달리 스크롤 애니메이션이 없어 프레임 뮤트(mutePaneRange)로 충분하다.
 function rebuildPaneCandles(pane, cache) {
   const bars = cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean);
-  // HTS식 몸통: renderSymbolPanes와 같은 표시 전용 변환 — 정정(과거 봉) 재구성도
-  // 같은 경로를 타므로 시딩/정정/라이브의 표시가 저절로 일치한다
-  const dispBars = htsBodyOn ? CandleDisplay.htsChain(bars) : bars;
-  const rows = Gaps.withWhitespace(dispBars); // 균일 분 그리드 — renderSymbolPanes와 같은 계약
+  const rows = Gaps.withWhitespace(bars); // 균일 분 그리드 — renderSymbolPanes와 같은 계약
   const range = pane.chart.timeScale().getVisibleRange(); // 시각 창 (데이터 없으면 null)
   mutePaneRange(pane);
   pane.candleSeries.setData(rows);
@@ -926,11 +903,7 @@ function renderSymbolPanes(shcode) {
   // 구멍 채움 정책 차이로 1칸의 시간이 구간마다 달라 칸 간 x가 어긋났기 때문이다
   // (gaps.js 헤더의 2026-10-01 실측 참조). 라이브 꼬리는 noteBar/applyStatus가 같은
   // 규칙으로 채운다 (applyStatus 주석 참조).
-  // HTS식 몸통: 표시 전용 체인 변환(시가=직전 봉 종가) — 캐시 원본은 그대로 두고
-  // 시리즈에 넘길 값만 바꾼다. 길이·시각 목록이 변환 전후로 같아 아래 wsCount/
-  // seriesTimes 계약(rows 기준)에는 영향이 없다.
-  const dispBars = htsBodyOn ? CandleDisplay.htsChain(bars) : bars;
-  const rows = Gaps.withWhitespace(dispBars);
+  const rows = Gaps.withWhitespace(bars);
   // pane-sync getLength의 시리즈 길이(봉 + whitespace)와 같은 기준 — 반드시 여기서 갱신한다
   cache.wsCount = rows.length - bars.length;
   // pane-sync getTimes의 시각 기준 — 시리즈(봉 + whitespace)의 인덱스와 1:1로 맞닿아야 하므로
@@ -1256,27 +1229,6 @@ function addPane() {
 document.getElementById("pane-add").onclick = addPane;
 document.getElementById("ws-save").onclick = saveWorkspace;
 document.getElementById("ws-load").onclick = loadWorkspace;
-
-// HTS식 몸통 토글: 상태를 저장하고 모든 칸의 캔들을 다시 그린다.
-// 재구성은 rebuildPaneCandles를 쓴다 — 캐시에서 같은 체인 변환을 타고, 보이는 시계
-// 창을 그대로 유지한다 (renderSymbolPanes는 초기 범위로 돌리므로 토글에는 맞지 않는다).
-// 지표·크로스헤어·캐시는 원래 값 기준이라 건드릴 필요가 없다.
-const htsBodyBox = document.getElementById("hts-body");
-function setHtsBody(on) {
-  htsBodyOn = on;
-  try { localStorage.setItem("hts_body", on ? "1" : "0"); } catch { /* 저장에 실패해도 표시는 바꾼다 */ }
-  for (const pane of panes) {
-    const cache = pane.symbol ? feed.get(pane.symbol) : undefined;
-    if (!cache) continue; // 미선택 칸은 빈 차트라 다시 깔 게 없다
-    try {
-      rebuildPaneCandles(pane, cache);
-    } catch (err) {
-      console.error(`[${pane.symbol}] HTS식 몸통 토글 반영 실패`, err);
-    }
-  }
-}
-htsBodyBox.checked = htsBodyOn;
-htsBodyBox.onchange = () => setHtsBody(htsBodyBox.checked);
 
 // 창 크기가 바뀌면 각 칸의 차트 크기를 다시 맞춘다 (기준은 차트 호스트 — syncPaneSize와 같다)
 addEventListener("resize", () => {
