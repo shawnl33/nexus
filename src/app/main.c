@@ -6,14 +6,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <process.h>
 static void sleep_ms(int ms) {
     Sleep((DWORD)ms);
 }
 #else
-#include <time.h>
 #include <unistd.h>
 static void sleep_ms(int ms) {
     struct timespec ts;
@@ -35,6 +36,59 @@ static void sleep_ms(int ms) {
 #include "yyjson.h"
 
 #include <signal.h>
+
+/* status 페이로드에 싣는 자기 pid — traderctl engine restart가 소멸을 확인하는 기준이다 */
+static long self_pid(void) {
+#ifdef _WIN32
+    return (long)_getpid();
+#else
+    return (long)getpid();
+#endif
+}
+
+/* pid 파일: status 미응답(백필·replay 묵병 구간)에도 traderctl이 생사를 판별할 수 있게
+ * ipc bind 성공 직후에 자기 pid를 기록한다(bind 실패 엔진은 파일을 만들지 않는다).
+ * 기본 경로는 명령 엔드포인트 포트에서 유도(/tmp/trading-engine-<port>.pid)해
+ * 다른 포트의 replay/테스트 엔진과 파일이 갈린다. 삭제는 내용이 자기 pid일 때만 —
+ * 어떤 경로로든 자기 것이 아닌 파일을 지우지 않는다. status의 pid와 같은 소스(getpid)다. */
+static const char *g_pidfile_path = 0;
+
+/* 명령 엔드포인트("tcp://host:port")의 포트. 파싱 실패 시 5555. */
+static int cmd_port_of(const char *ep) {
+    const char *colon = strrchr(ep, ':');
+    if (colon == 0 || colon[1] == '\0') {
+        return 5555;
+    }
+    int p = atoi(colon + 1);
+    return p > 0 ? p : 5555;
+}
+
+static void pidfile_write(const char *path) {
+    FILE *f = fopen(path, "w");
+    if (f == 0) {
+        fprintf(stderr, "warning: pid 파일 쓰기 실패: %s\n", path);
+        return;
+    }
+    fprintf(f, "%ld", self_pid());
+    fclose(f);
+    g_pidfile_path = path; /* 쓰기에 성공한 것만 삭제 대상으로 기억 */
+}
+
+static void pidfile_remove(void) {
+    if (g_pidfile_path == 0) {
+        return;
+    }
+    FILE *f = fopen(g_pidfile_path, "r");
+    if (f != 0) {
+        long v = -1;
+        int mine = fscanf(f, "%ld", &v) == 1 && v == self_pid();
+        fclose(f);
+        if (mine) {
+            remove(g_pidfile_path);
+        }
+    }
+    g_pidfile_path = 0;
+}
 
 /* 실행마다 고유한 엔진 실행 ID. 재시작을 구독자가 식별하는 값이다 (계획서 §16). */
 static uint64_t make_engine_instance_id(void) {
@@ -807,8 +861,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     }
 
     {
-        int off = snprintf(payload, sizeof(payload), "{\"mode\":\"live\",\"running\":%d,\"shcode\":\"%s\",\"watches\":[",
-                           (int)g_running,
+        int off = snprintf(payload, sizeof(payload), "{\"mode\":\"live\",\"running\":%d,\"pid\":%ld,\"shcode\":\"%s\",\"watches\":[",
+                           (int)g_running, self_pid(),
                            g_live_ctx.engine != 0 ? g_live_ctx.engine->pipes[0]->shcode : "");
         SNAP_CLAMP(payload, off);
         for (int i = 0; i < g_live_ctx.watch_count && off < (int)sizeof(payload) - 20; i++) {
@@ -823,7 +877,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     cmd->payload_json = payload;
 }
 
-static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const char *pub_ep) {
+static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const char *pub_ep,
+                    const char *pidfile) {
     /* 1) 인증 */
     ls_auth_t auth;
     ls_auth_init(&auth, 0);
@@ -860,6 +915,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         fprintf(stderr, "error: ipc open failed: %s\n", err);
         return 3;
     }
+    /* bind 성공 직후에 쓴다 — bind 실패 엔진은 실행 중 엔진의 파일을 덮어쓰지 않는다.
+     * 백필 묵병 구간은 이 이후라 여전히 커버된다 */
+    pidfile_write(pidfile);
 
     /* 3) 엔진 */
     tr_engine_config_t ecfg;
@@ -1057,6 +1115,7 @@ static void print_usage(const char *prog) {
     printf("      --live-fut SHCODE   Live mode: subscribe realtime ticks for futures SHCODE\n");
     printf("      --cmd-endpoint EP   Command endpoint (default tcp://127.0.0.1:5555)\n");
     printf("      --pub-endpoint EP   Status stream endpoint (default tcp://127.0.0.1:5556)\n");
+    printf("      --pidfile PATH      Write own pid to PATH (default /tmp/trading-engine-<cmdport>.pid)\n");
     printf("\n");
     printf("Replay mode requires no API credentials.\n");
 }
@@ -1065,7 +1124,8 @@ static void print_version(void) {
     printf("trading-engine %s\n", TRADING_ENGINE_VERSION);
 }
 
-static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep, int delay_ms) {
+static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep, int delay_ms,
+                      const char *pidfile) {
     size_t n = 0;
     tr_replay_tick_t *ticks = tr_csv_ticks_load(path, 1, &n);
     if (ticks == 0) {
@@ -1092,6 +1152,7 @@ static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep, 
         tr_csv_ticks_free(ticks);
         return 3;
     }
+    pidfile_write(pidfile); /* live와 같게 bind 성공 직후 */
 
     tr_engine_config_t ecfg;
     memset(&ecfg, 0, sizeof(ecfg));
@@ -1171,6 +1232,7 @@ int main(int argc, char **argv) {
     bool live_fut = false;
     const char *cmd_ep = "tcp://127.0.0.1:5555";
     const char *pub_ep = "tcp://127.0.0.1:5556";
+    const char *pidfile = 0; /* 미지정 시 명령 엔드포인트 포트에서 유도 */
     int replay_delay_ms = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -1211,6 +1273,10 @@ int main(int argc, char **argv) {
             pub_ep = argv[++i];
             continue;
         }
+        if (strcmp(argv[i], "--pidfile") == 0 && i + 1 < argc) {
+            pidfile = argv[++i];
+            continue;
+        }
         if (strcmp(argv[i], "--data-dir") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: --data-dir requires a value\n");
@@ -1223,13 +1289,19 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    if (replay_file != 0) {
-        return run_replay(replay_file, cmd_ep, pub_ep, replay_delay_ms);
-    }
-    if (live_shcode != 0) {
-        return run_live(live_shcode, live_fut, cmd_ep, pub_ep);
+    if (replay_file == 0 && live_shcode == 0) {
+        fprintf(stderr, "error: no mode specified; see --help\n");
+        return 1;
     }
 
-    fprintf(stderr, "error: no mode specified; see --help\n");
-    return 1;
+    /* 기본 pid 파일은 명령 엔드포인트 포트로 유도 — 다른 포트의 엔진과 파일이 갈린다 */
+    char pidfile_buf[64];
+    if (pidfile == 0) {
+        snprintf(pidfile_buf, sizeof(pidfile_buf), "/tmp/trading-engine-%d.pid", cmd_port_of(cmd_ep));
+        pidfile = pidfile_buf;
+    }
+    int rc = replay_file != 0 ? run_replay(replay_file, cmd_ep, pub_ep, replay_delay_ms, pidfile)
+                              : run_live(live_shcode, live_fut, cmd_ep, pub_ep, pidfile);
+    pidfile_remove(); /* 내용이 자기 pid일 때만 지운다. SIGKILL 등은 stale로 남아 traderctl이 정리 */
+    return rc;
 }

@@ -35,6 +35,12 @@ tr_ipc_client_t *tr_ipc_client_connect_ctx(void *shared_ctx, const char *cmd_end
         tr_ipc_client_close(c);
         return 0;
     }
+    /* 기본 LINGER(-1)에서는 peer 없이 본낸 메시지가 남아 있으면 close가 무한 블록된다.
+     * CLI 클라이언트는 타임아웃 후 미전송분을 버리는 게 맞다 (2026-10-01 status 행 사건). */
+    {
+        int linger = 0;
+        zmq_setsockopt(c->dealer, ZMQ_LINGER, &linger, sizeof(linger));
+    }
     return c;
 }
 

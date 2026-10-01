@@ -3,14 +3,34 @@
  * 별도 프로세스로 동작하며 IPC 클라이언트로 엔진에 명령을 본낸다.
  * CLI 종료가 엔진 종료로 이어지지 않는다.
  *
- * 종료 코드: 0 성공(applied/accepted), 2 사용법 오류, 3 연결 오류, 4 타임아웃, 5 엔진 거절.
+ * 종료 코드: 0 성공(applied/accepted), 2 사용법 오류, 3 연결 오류, 4 타임아웃, 5 엔진 거절,
+ *           6 재기동 실패(정지·기동 불가).
  */
+
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601 /* QueryFullProcessImageName (pid 신원 확인) 때문에 Vista+ */
+#include <windows.h>
+#else
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+#endif
+
 #include "adapters/ipc/ipc_client.h"
+#include "yyjson.h"
 
 #define TRADERCTL_VERSION "0.1.0"
 
@@ -26,6 +46,9 @@ static void print_usage(const char *prog) {
     printf("\nCommands:\n");
     printf("  status                  엔진 모드·연결·복구·제한 상태\n");
     printf("  engine stop             엔진 정상 종료 요청\n");
+    printf("  engine restart          엔진 재기동 (소멸 확인 후 기동)\n");
+    printf("                          --symbol X (기본 A016C000) --log PATH (기본 /tmp/engine-lived2.log)\n");
+    printf("                          --wait SEC (기본 240) --pidfile PATH (기본 /tmp/trading-engine-<endpoint port>.pid)\n");
     printf("  market                  종목·데이터 조회\n");
     printf("  indicator               지표 인스턴스·설정 조회\n");
     printf("  strategy list           전략 목록\n");
@@ -36,7 +59,7 @@ static void print_usage(const char *prog) {
     printf("  orders cancel <id>      주문 취소\n");
     printf("  positions               계좌·포지션 조회\n");
     printf("  shell                   대화형 관리 프롬프트\n");
-    printf("\nExit codes: 0 성공, 2 사용법 오류, 3 연결 오류, 4 타임아웃, 5 엔진 거절\n");
+    printf("\nExit codes: 0 성공, 2 사용법 오류, 3 연결 오류, 4 타임아웃, 5 엔진 거절, 6 재기동 실패\n");
 }
 
 typedef struct {
@@ -207,6 +230,461 @@ static int run_shell(const opts_t *opts) {
     return 0;
 }
 
+/* ---------- engine restart ----------
+ * 2026-10-01 stop 타임아웃 시 구 프로세스가 남아 새 엔진이 포트 충돌로 즉사한 사건 때문에
+ * 프로세스 소멸을 확인한 뒤에만 기동한다. OS 분기는 이 블록 안의 #ifdef에 모은다. */
+
+#define RESTART_STOP_WAIT_SEC 8 /* 정상/강제 종료 각 단계의 소멸 대기 */
+#define RESTART_KILL_WAIT_SEC 3 /* SIGKILL 이후 소멸 대기 */
+
+typedef struct {
+    const char *symbol;
+    const char *log_path;
+    const char *pidfile;
+    int wait_sec;
+} restart_opts_t;
+
+static void sleep_ms(int ms) {
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    nanosleep(&ts, 0);
+#endif
+}
+
+static unsigned long now_ms(void) {
+#ifdef _WIN32
+    return (unsigned long)GetTickCount(); /* 49일 랩은 부호 없는 뺄셈으로 흡수 */
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long)ts.tv_sec * 1000UL + (unsigned long)ts.tv_nsec / 1000000UL;
+#endif
+}
+
+/* status 응답의 pid를 읽는다. 반환: 1 응답+pid, -1 응답은 왔으나 pid 없음(구버전 엔진), 0 응답 없음. */
+static int query_status_pid(const char *endpoint, int timeout_ms, const char *cmd_id, long *pid_out) {
+    tr_ipc_client_t *c = tr_ipc_client_connect(endpoint, timeout_ms);
+    if (c == 0) {
+        return 0;
+    }
+    tr_ipc_msg_t reply;
+    tr_ipc_call_rc_t rc = tr_ipc_client_call(c, cmd_id, "status", 0, &reply);
+    tr_ipc_client_close(c);
+    if (rc != TR_IPC_CALL_OK && rc != TR_IPC_CALL_ACCEPTED) {
+        return 0;
+    }
+    int result = -1;
+    yyjson_doc *doc = yyjson_read(reply.payload, strlen(reply.payload), 0);
+    if (doc != 0) {
+        yyjson_val *pv = yyjson_obj_get(yyjson_doc_get_root(doc), "pid");
+        if (yyjson_is_int(pv)) {
+            *pid_out = (long)yyjson_get_sint(pv);
+            result = 1;
+        }
+        yyjson_doc_free(doc);
+    }
+    return result;
+}
+
+static bool pid_alive(long pid) {
+#ifdef _WIN32
+    HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid);
+    if (h == NULL) {
+        return GetLastError() == ERROR_ACCESS_DENIED; /* 못 열 뿐 존재하는 경우도 살아 있는 것 */
+    }
+    DWORD code = 0;
+    BOOL ok = GetExitCodeProcess(h, &code);
+    CloseHandle(h);
+    return ok && code == STILL_ACTIVE;
+#else
+    if (kill((pid_t)pid, 0) == 0) {
+        return true;
+    }
+    return errno != ESRCH; /* EPERM 등은 프로세스가 존재한다는 뜻 */
+#endif
+}
+
+static bool wait_gone(long pid, int seconds) {
+    for (int i = 0; i < seconds * 10; i++) {
+        if (!pid_alive(pid)) {
+            return true;
+        }
+        sleep_ms(100);
+    }
+    return !pid_alive(pid);
+}
+
+/* 강제 종료: SIGTERM → 대기 → SIGKILL → 대기 (Windows: TerminateProcess → 대기). 죽었으면 true. */
+static bool force_kill(long pid) {
+#ifdef _WIN32
+    HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
+    if (h != NULL) {
+        TerminateProcess(h, 1);
+        CloseHandle(h);
+    }
+    return wait_gone(pid, RESTART_STOP_WAIT_SEC);
+#else
+    kill((pid_t)pid, SIGTERM);
+    if (wait_gone(pid, RESTART_STOP_WAIT_SEC)) {
+        return true;
+    }
+    kill((pid_t)pid, SIGKILL);
+    return wait_gone(pid, RESTART_KILL_WAIT_SEC);
+#endif
+}
+
+/* pid 파일을 읽는다. 반환: 1 유효한 pid 기록, 0 파일 없음/형식 오류. existed에 파일 존재 여부. */
+static int read_pid_file(const char *path, long *pid_out, int *existed) {
+    *existed = 0;
+    FILE *f = fopen(path, "r");
+    if (f == 0) {
+        return 0;
+    }
+    *existed = 1;
+    long v = -1;
+    int ok = fscanf(f, "%ld", &v) == 1 && v > 0;
+    fclose(f);
+    if (!ok) {
+        return 0;
+    }
+    *pid_out = v;
+    return 1;
+}
+
+/* 내용이 기대 pid와 같을 때만 지운다 (그 사이 다른 엔진이 다시 쓴 파일을 지우지 않게) */
+static void remove_pid_file_if(const char *path, long pid) {
+    long v = -1;
+    int existed = 0;
+    if (read_pid_file(path, &v, &existed) == 1 && v == pid) {
+        remove(path);
+    }
+}
+
+/* 명령 엔드포인트("tcp://host:port")의 포트. 파싱 실패 시 5555. */
+static int cmd_port_of(const char *ep) {
+    const char *colon = strrchr(ep, ':');
+    if (colon == 0 || colon[1] == '\0') {
+        return 5555;
+    }
+    int p = atoi(colon + 1);
+    return p > 0 ? p : 5555;
+}
+
+/* cmd endpoint의 port+1을 pub endpoint로 유도한다 (엔진 기본 5555/5556 관례) */
+static void derive_pub_endpoint(const char *cmd_ep, char *out, size_t cap) {
+    snprintf(out, cap, "%s", cmd_ep);
+    char *colon = strrchr(out, ':');
+    int port = colon != 0 ? atoi(colon + 1) : 0;
+    if (colon == 0 || port <= 0 || port >= 65535) {
+        snprintf(out, cap, "tcp://127.0.0.1:5556"); /* 형식이 이상하면 기본 */
+        return;
+    }
+    snprintf(colon + 1, cap - (size_t)(colon + 1 - out), "%d", port + 1);
+}
+
+/* traderctl 자기 exe와 같은 디렉터리의 trading-engine 경로 */
+static bool engine_path(char *out, size_t cap) {
+    char dir[1024];
+#ifdef _WIN32
+    DWORD n = GetModuleFileNameA(NULL, dir, (DWORD)sizeof(dir));
+    if (n == 0 || n >= sizeof(dir)) {
+        return false;
+    }
+    while (n > 0 && dir[n - 1] != '\\' && dir[n - 1] != '/') {
+        n--;
+    }
+    dir[n] = '\0';
+    return snprintf(out, cap, "%strading-engine.exe", dir) < (int)cap;
+#else
+    ssize_t n = readlink("/proc/self/exe", dir, sizeof(dir) - 1);
+    if (n <= 0 || (size_t)n >= sizeof(dir) - 1) {
+        return false;
+    }
+    dir[n] = '\0';
+    while (n > 0 && dir[n - 1] != '/') {
+        n--;
+    }
+    dir[n] = '\0';
+    return snprintf(out, cap, "%strading-engine", dir) < (int)cap;
+#endif
+}
+
+/* stale pid 재사용 방어: pid 파일의 프로세스가 우리 엔진 바이너리와 같은 이미지인지 본다.
+ * 반환: 1 일치(신호 가능), 0 불일치(신호 금지), -1 프로세스는 있는데 확인 불가(신호 금지). */
+static int pid_is_our_engine(long pid, const char *exe_path) {
+#ifdef _WIN32
+    HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid);
+    if (h == NULL) {
+        return pid_alive(pid) ? -1 : 0;
+    }
+    char img[1100];
+    DWORD n = (DWORD)sizeof(img);
+    BOOL ok = QueryFullProcessImageNameA(h, 0, img, &n);
+    CloseHandle(h);
+    if (!ok) {
+        return -1;
+    }
+    return _stricmp(img, exe_path) == 0 ? 1 : 0;
+#else
+    char linkpath[64];
+    snprintf(linkpath, sizeof(linkpath), "/proc/%ld/exe", pid);
+    char img[1100];
+    ssize_t n = readlink(linkpath, img, sizeof(img) - 1);
+    if (n <= 0) {
+        return pid_alive(pid) ? -1 : 0; /* 막 사라진 것과 확인 불가를 구분 */
+    }
+    img[n] = '\0';
+    return strcmp(img, exe_path) == 0 ? 1 : 0;
+#endif
+}
+
+#ifdef _WIN32
+static HANDLE g_child_proc; /* 기동한 자식의 조기 종료 감지용 */
+#endif
+
+static long spawn_engine(const char *exe, const char *symbol, const char *log_path, const char *pidfile,
+                         const char *cmd_ep, const char *pub_ep, char *err, size_t errcap) {
+#ifdef _WIN32
+    SECURITY_ATTRIBUTES sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE hlog = CreateFileA(log_path, GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hlog == INVALID_HANDLE_VALUE) {
+        snprintf(err, errcap, "로그 파일 열기 실패: %s", log_path);
+        return -1;
+    }
+    char cmdline[2000]; /* CreateProcess가 덮어쓸 수 있어 쓰기 가능 배열이어야 한다 */
+    snprintf(cmdline, sizeof(cmdline), "\"%s\" --live-fut %s --pidfile \"%s\" --cmd-endpoint %s --pub-endpoint %s",
+             exe, symbol, pidfile, cmd_ep, pub_ep);
+    STARTUPINFOA si;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = hlog; /* 엔진은 stdin을 읽지 않는다 */
+    si.hStdOutput = hlog;
+    si.hStdError = hlog;
+    PROCESS_INFORMATION pi;
+    memset(&pi, 0, sizeof(pi));
+    BOOL ok = CreateProcessA(exe, cmdline, NULL, NULL, TRUE,
+                             DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                             NULL, NULL, &si, &pi);
+    CloseHandle(hlog);
+    if (!ok) {
+        snprintf(err, errcap, "CreateProcess 실패: %lu", (unsigned long)GetLastError());
+        return -1;
+    }
+    CloseHandle(pi.hThread);
+    g_child_proc = pi.hProcess;
+    return (long)pi.dwProcessId;
+#else
+    pid_t pid = fork();
+    if (pid < 0) {
+        snprintf(err, errcap, "fork 실패: %s", strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        setsid(); /* 부모(터미널)에서 분리 */
+        int fd = open(log_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+        }
+        int nullfd = open("/dev/null", O_RDONLY);
+        if (nullfd >= 0) {
+            dup2(nullfd, STDIN_FILENO);
+            close(nullfd);
+        }
+        execl(exe, exe, "--live-fut", symbol, "--pidfile", pidfile,
+              "--cmd-endpoint", cmd_ep, "--pub-endpoint", pub_ep, (char *)0);
+        fprintf(stderr, "exec 실패: %s\n", strerror(errno)); /* stderr는 로그로 리다이렉트됨 */
+        _exit(127);
+    }
+    return (long)pid;
+#endif
+}
+
+static bool child_exited(long pid) {
+#ifdef _WIN32
+    (void)pid;
+    DWORD code = 0;
+    if (g_child_proc == NULL || !GetExitCodeProcess(g_child_proc, &code)) {
+        return false;
+    }
+    return code != STILL_ACTIVE;
+#else
+    int st = 0;
+    return waitpid((pid_t)pid, &st, WNOHANG) == (pid_t)pid;
+#endif
+}
+
+static void print_log_tail(const char *log_path) {
+    FILE *f = fopen(log_path, "rb");
+    if (f == 0) {
+        return;
+    }
+    static char buf[4097];
+    long from = 0;
+    if (fseek(f, 0, SEEK_END) == 0) {
+        long size = ftell(f);
+        if (size > (long)sizeof(buf) - 1) {
+            from = size - ((long)sizeof(buf) - 1);
+        }
+    }
+    fseek(f, from, SEEK_SET);
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    /* 마지막 5줄만 보여 준다 */
+    int lines = 0;
+    char *start = buf + n;
+    while (start > buf && lines < 5) {
+        start--;
+        if (*start == '\n') {
+            lines++;
+        }
+    }
+    if (lines == 5) {
+        start++; /* 여는 개행 다음부터 */
+    }
+    fprintf(stderr, "--- %s tail ---\n%s\n", log_path, start);
+}
+
+static int run_engine_restart(const opts_t *opts, const restart_opts_t *ro) {
+    char cmd_id[64];
+
+    /* traderctl과 같은 디렉터리의 trading-engine — 신원 확인과 기동 양쪽에서 쓴다 */
+    char exe[1100];
+    if (!engine_path(exe, sizeof(exe))) {
+        fprintf(stderr, "error: 엔진 경로 확인 실패\n");
+        return 6;
+    }
+
+    /* 1) status로 실행 중 엔진의 pid를 얻는다 */
+    snprintf(cmd_id, sizeof(cmd_id), "traderctl-%llu", (unsigned long long)g_cmd_seq++);
+    long old_pid = -1;
+    int st = query_status_pid(opts->endpoint, opts->timeout_ms, cmd_id, &old_pid);
+    if (st < 0) {
+        /* pid 없는 구 바이너리가 살아 있으면 소멸 확인이 불가 — 이 상태에서 기동하면 포트 충돌 */
+        fprintf(stderr, "error: 실행 중 엔진이 pid를 보고하지 않음 (구버전 바이너리) — 수동 정지 후 재시도\n");
+        return 6;
+    }
+    if (st > 0 && old_pid > 0) {
+        printf("정지 요청: pid %ld\n", old_pid);
+        fflush(stdout);
+        /* engine.stop 응답 타임아웃은 흔하므로 결과는 프로세스 소멸로만 판정한다 */
+        snprintf(cmd_id, sizeof(cmd_id), "traderctl-%llu", (unsigned long long)g_cmd_seq++);
+        tr_ipc_client_t *c = tr_ipc_client_connect(opts->endpoint, opts->timeout_ms);
+        if (c != 0) {
+            tr_ipc_msg_t reply;
+            tr_ipc_client_call(c, cmd_id, "engine.stop", 0, &reply);
+            tr_ipc_client_close(c);
+        }
+        if (wait_gone(old_pid, RESTART_STOP_WAIT_SEC)) {
+            printf("정상 정지됨\n");
+        } else {
+            printf("응답 없음 — 강제 종료: pid %ld\n", old_pid);
+            fflush(stdout);
+            if (!force_kill(old_pid)) {
+                fprintf(stderr, "error: 엔진을 죽일 수 없음: pid %ld\n", old_pid);
+                return 6;
+            }
+            printf("강제 정지됨\n");
+        }
+        fflush(stdout);
+        remove_pid_file_if(ro->pidfile, old_pid); /* 강제 종료된 엔진은 pid 파일을 못 지운다 */
+    } else {
+        /* status 미응답 — 백필 구간(bind 후 첫 poll 전)이나 replay 모드는 포트를 잡은 채
+         * 묵병이므로, pid 파일로 "정말 없음"과 "살아 있지만 미응답"을 구분한다 */
+        long fpid = -1;
+        int existed = 0;
+        if (read_pid_file(ro->pidfile, &fpid, &existed) == 1 && pid_alive(fpid)) {
+            if (pid_is_our_engine(fpid, exe) != 1) {
+                /* pid 재사용 의심 — 무관 프로세스를 쏘지 않기 위해 신호도 기동도 하지 않는다 */
+                fprintf(stderr, "error: pid 파일의 pid %ld가 엔진 바이너리(%s)로 확인되지 않음 — 수동 확인\n",
+                        fpid, exe);
+                return 6;
+            }
+            printf("status 미응답이지만 pid 파일의 엔진 생존 — 정지: pid %ld\n", fpid);
+            fflush(stdout);
+            if (!force_kill(fpid)) {
+                fprintf(stderr, "error: 엔진을 죽일 수 없음: pid %ld\n", fpid);
+                return 6;
+            }
+            printf("강제 정지됨\n");
+            fflush(stdout);
+            remove_pid_file_if(ro->pidfile, fpid);
+        } else if (existed) {
+            printf("stale pid 파일 삭제: %s\n", ro->pidfile);
+            fflush(stdout);
+            remove(ro->pidfile);
+        } else {
+            printf("실행 중인 엔진 없음 — 바로 기동\n");
+            fflush(stdout);
+        }
+    }
+
+    /* 2) 기동 — .env는 엔진이 스스로 읽는다 */
+    FILE *probe = fopen(exe, "rb");
+    if (probe == 0) {
+        fprintf(stderr, "error: 엔진 바이너 없음: %s (cmake --build build 먼저)\n", exe);
+        return 6;
+    }
+    fclose(probe);
+
+    char pub_ep[256];
+    derive_pub_endpoint(opts->endpoint, pub_ep, sizeof(pub_ep));
+    char err[256] = {0};
+    long child = spawn_engine(exe, ro->symbol, ro->log_path, ro->pidfile,
+                              opts->endpoint, pub_ep, err, sizeof(err));
+    if (child < 0) {
+        fprintf(stderr, "error: %s\n", err);
+        return 6;
+    }
+    printf("기동 중: pid %ld (%s, 로그 %s)\n", child, ro->symbol, ro->log_path);
+    fflush(stdout);
+
+    /* 3) 준비 확인 — 백필을 끝내고 명령 루프에 들어가야 status가 응답한다 */
+    int rc = 0;
+    unsigned long start = now_ms();
+    unsigned long budget = (unsigned long)ro->wait_sec * 1000UL;
+    for (;;) {
+        snprintf(cmd_id, sizeof(cmd_id), "traderctl-%llu", (unsigned long long)g_cmd_seq++);
+        long new_pid = -1;
+        if (query_status_pid(opts->endpoint, 500, cmd_id, &new_pid) != 0) {
+            printf("기동 완료: pid %ld\n", new_pid > 0 ? new_pid : child);
+            fflush(stdout);
+            rc = 0;
+            break;
+        }
+        if (child_exited(child)) {
+            fprintf(stderr, "error: 엔진이 기동 중 종료됨\n");
+            print_log_tail(ro->log_path);
+            rc = 6;
+            break;
+        }
+        if (now_ms() - start >= budget) { /* 부호 없는 경과 비교 (랩 안전) */
+            fprintf(stderr, "error: %d초 내 준비 확인 못함 — %s 확인 요망\n", ro->wait_sec, ro->log_path);
+            rc = 4;
+            break;
+        }
+        sleep_ms(1000);
+    }
+#ifdef _WIN32
+    if (g_child_proc != NULL) { /* 조기 종료 감지용 핸들은 여기서 닫는다 */
+        CloseHandle(g_child_proc);
+        g_child_proc = NULL;
+    }
+#endif
+    return rc;
+}
+
 int main(int argc, char **argv) {
     opts_t opts = {"tcp://127.0.0.1:5555", 3000, false};
     int i = 1;
@@ -233,6 +711,38 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[i], "shell") == 0) {
         return run_shell(&opts);
+    }
+    if (strcmp(argv[i], "engine") == 0 && i + 1 < argc && strcmp(argv[i + 1], "restart") == 0) {
+        restart_opts_t ro = {"A016C000", "/tmp/engine-lived2.log", 0, 240};
+        for (int j = i + 2; j < argc; j++) {
+            if (strcmp(argv[j], "--symbol") == 0 && j + 1 < argc) {
+                ro.symbol = argv[++j];
+            } else if (strcmp(argv[j], "--log") == 0 && j + 1 < argc) {
+                ro.log_path = argv[++j];
+            } else if (strcmp(argv[j], "--pidfile") == 0 && j + 1 < argc) {
+                ro.pidfile = argv[++j];
+            } else if (strcmp(argv[j], "--wait") == 0 && j + 1 < argc) {
+                ro.wait_sec = atoi(argv[++j]);
+            } else {
+                fprintf(stderr, "error: engine restart 인자 오류: %s\n", argv[j]);
+                return 2;
+            }
+        }
+        if (ro.wait_sec < 1) {
+            fprintf(stderr, "error: --wait는 1초 이상이어야 합니다\n");
+            return 2;
+        }
+        if (ro.wait_sec > 86400) {
+            ro.wait_sec = 86400; /* Win32 GetTickCount(49일 랩)·32비트 unsigned long 곱셈 안전 상한 */
+        }
+        /* 엔진과 같은 규칙: 기본 pid 파일은 --endpoint 포트로 유도 */
+        char pidfile_buf[64];
+        if (ro.pidfile == 0) {
+            snprintf(pidfile_buf, sizeof(pidfile_buf), "/tmp/trading-engine-%d.pid",
+                     cmd_port_of(opts.endpoint));
+            ro.pidfile = pidfile_buf;
+        }
+        return run_engine_restart(&opts, &ro);
     }
 
     int consumed = 0;
