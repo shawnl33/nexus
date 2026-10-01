@@ -29,8 +29,10 @@ add_library(core STATIC
     src/core/functions/daily_linreg_trend_v1.c
     src/core/functions/daily_market_profile_v1.c
     src/core/functions/daily_trend_link_v1.c
+    src/core/functions/fx_curve_v1.c
     src/core/functions/fx_predict_v2.c
     src/core/functions/fx_reg_v1.c
+    src/core/functions/fx_swing_v1.c
     src/core/functions/gap_regime_v1.c
     src/core/functions/htf_curve_predict.c
     src/core/functions/linreg.c
@@ -176,7 +178,7 @@ endif()
 enable_testing()
 
 # 0개 테스트 실행을 통과로 간주하지 않는다(계획서 §25).
-foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict)
+foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict fx_curve fx_swing)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE core)
     target_compile_options(test_${t} PRIVATE ${TR_WARNINGS})
