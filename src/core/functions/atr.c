@@ -22,9 +22,11 @@ static double true_range(const tr_atr_t *a, double high, double low, double clos
 static double sma_estimate(const tr_atr_t *a, double new_tr) {
     /* 진행 봉 포함 추정: 가장 오래된 값이 밀려나는 것을 반영 */
     double sum = a->sma_sum + new_tr;
-    uint32_t count = a->sma_count + 1;
-    if (a->sma_count >= a->period) {
-        sum -= a->sma_hist[0];
+    uint32_t count = (uint32_t)yls_count(&a->sma_hist) + 1;
+    if (yls_count(&a->sma_hist) >= a->period) {
+        double oldest = 0.0;
+        yls_at(&a->sma_hist, a->period - 1, &oldest); /* 가장 오래된 TR */
+        sum -= oldest;
         count = a->period;
     }
     return count > 0 ? sum / (double)count : 0.0;
@@ -47,7 +49,8 @@ bool tr_atr_init_ex(tr_atr_t *a, uint32_t period, tr_atr_mode_t mode) {
     memset(a, 0, sizeof(*a));
     a->mode = mode;
     a->period = period;
-    return true;
+    /* memset 다음에 시계열 저장소를 연결한다 (순서 고정). 유효 용량은 period개. */
+    return yls_init(&a->sma_hist, a->sma_hist_buf, period);
 }
 
 bool tr_atr_init(tr_atr_t *a, uint32_t period) {
@@ -57,12 +60,12 @@ bool tr_atr_init(tr_atr_t *a, uint32_t period) {
 double tr_atr_on_bar(tr_atr_t *a, double high, double low, double close) {
     double tr = true_range(a, high, low, close);
     if (a->mode == TR_ATR_SMA) {
-        if (a->sma_count >= a->period) {
-            a->sma_sum -= a->sma_hist[0];
-            memmove(&a->sma_hist[0], &a->sma_hist[1], (a->period - 1) * sizeof(double));
-            a->sma_count = a->period - 1;
+        if (yls_count(&a->sma_hist) >= a->period) {
+            double oldest = 0.0;
+            yls_at(&a->sma_hist, a->period - 1, &oldest); /* 가장 오래된 TR */
+            a->sma_sum -= oldest;
         }
-        a->sma_hist[a->sma_count++] = tr;
+        yls_push(&a->sma_hist, tr);
         a->sma_sum += tr;
     } else {
         if (a->wilder_seeded) {
@@ -97,10 +100,18 @@ double tr_atr_value(const tr_atr_t *a) {
         return 0.0;
     }
     if (a->mode == TR_ATR_SMA) {
-        return a->sma_count > 0 ? a->sma_sum / (double)a->sma_count : 0.0;
+        size_t n = yls_count(&a->sma_hist);
+        return n > 0 ? a->sma_sum / (double)n : 0.0;
     }
     if (a->wilder_seeded) {
         return a->wilder_atr;
     }
     return a->wilder_count > 0 ? a->wilder_seed_sum / (double)a->wilder_count : 0.0;
+}
+
+bool tr_atr_relink(tr_atr_t *a) {
+    if (a == 0) {
+        return false;
+    }
+    return yls_relink(&a->sma_hist, a->sma_hist_buf);
 }

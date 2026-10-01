@@ -34,7 +34,19 @@
 
 ## 암묵 시계열 원칙
 
-예스랭귀지의 변수는 모두 시계열이다(봉마다 값이 쌓이고 `[n]` 참조가 가능). C에서는 변수마다 시계열 저장소(ring 등)를 두어 이를 재현한다. 현재는 모듈별 상태가 자체 ring으로 구현되어 있으며, 통일 시계열 타입(`yl_series`)은 후속 컴포넌트로 둔다.
+예스랭귀지의 변수는 모두 시계열이다(봉마다 값이 쌓이고 `[n]` 참조가 가능). C에서는 통일 시계열 타입 `yl_series`(src/core/market/series.h — 검증된 `tr_ring`의 double 전용 얇은 래퍼)로 이를 재현한다. 인덱스는 최신 기준 상대값([0]=현재)이고, 가득 차면 가장 오래된 값을 덮어쓴다. 저장소는 호출자 소유이며 상태 구조체 안에 버퍼를 둔다.
+
+| 예스랭귀지 | C (yl_series) |
+|---|---|
+| 변수 선언 `var x;` | `YL_SERIES_STORAGE(x, cap);` + `yls_init(&x, x_buf, cap);` |
+| 대입 `x = expr;` (매 봉 1회) | `yls_push(&x, expr);` |
+| 같은 봉 내 재대입 | `yls_set_current(&x, expr);` (과거를 밀어내지 않고 [0] 제자리 교체) |
+| 참조 `x[N]` ([0]=현재) | `yls_at(&x, N, &out)` — 범위 초과 시 false |
+
+- 살아있는 규약 예시: `tests/test_series.c`의 `test_yeslanguage_1to1_example` (예스랭귀지 스니펫과 같은 값을 냄)
+- 파일럿 전환: `src/core/functions/atr.c`의 SMA 이력(`sma_hist`)이 yl_series로 구현되어 있다
+
+**값 복사 불안전 제약**: 저장소 버퍼를 상태 구조체 안에 두는 이 규약은 값 복사 불안전 타입을 만든다 — yl_series를 포함한 구조체를 통째로 값 복사(이식 등)하면 사본의 `ring.storage`가 원본의 버퍼를 가리키는 채로 남아, 원본 슬롯이 재사용될 때 두 상태가 버퍼를 공유하며 조용히 깨진다. 통째 복사 후에는 반드시 재연결 헬퍼로 사본 자신의 버퍼로 저장소 포인터를 복구한다: 범용 `yls_relink(&s, new_buf)` 또는 모듈별 래퍼(예: `tr_atr_relink(&a)`). 적용 사례: `tr_engine_pipe_remove`의 파이프라인 이식(src/runtime/engine.c)과 회귀 테스트 `tests/test_engine.c`의 `test_pipe_transplant_atr_relink`. 후속 yl_series 전환에서도 같은 검토가 필요하다.
 
 ## HTS 고유 동작
 

@@ -22,6 +22,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "core/market/series.h"
+
 typedef enum {
     TR_ATR_SMA = 0,   /* 예스랭귀지 내장 산식 (기본) */
     TR_ATR_WILDER = 1 /* 비교용 Wilder 평활 */
@@ -34,9 +36,10 @@ typedef struct {
     uint32_t period;
     double prev_close;
     bool has_prev_close;
-    /* SMA 모드: 최근 period개 TR의 링 */
-    double sma_hist[TR_ATR_MAX_PERIOD];
-    uint32_t sma_count;   /* <= period */
+    /* SMA 모드: 최근 period개 TR의 시계열 ([0]=최신 TR).
+     * yl_series 파일럿 전환 (docs/PORTING.md): 저장소는 이 구조체 안에 둔다. */
+    double sma_hist_buf[TR_ATR_MAX_PERIOD];
+    yl_series sma_hist;
     double sma_sum;
     /* Wilder 모드 */
     double wilder_atr;
@@ -59,5 +62,10 @@ double tr_atr_candidate(const tr_atr_t *a, double high, double low, double close
 
 /* 현재 ATR. 시딩 전이면 가용 봉 평균, 데이터 없으면 0. */
 double tr_atr_value(const tr_atr_t *a);
+
+/* tr_atr_t를 포함한 구조체의 통째 값 복사(이식) 후 호출: SMA 시계열의 저장소
+ * 포인터를 이 인스턴스 자신의 sma_hist_buf로 다시 연결한다 (yl_series 값 복사
+ * 불안전 — series.h, docs/PORTING.md 참조). */
+bool tr_atr_relink(tr_atr_t *a);
 
 #endif

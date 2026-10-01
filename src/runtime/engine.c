@@ -201,8 +201,11 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
     if (e->pipes[0]->instrument_id == instrument_id) {
         tr_pipeline_t *victim = e->pipes[e->pipe_count - 1];
         e->pipe0 = *victim;
+        /* 자기참조 복구: 통째 복사로 따라온 포인터가 기증 슬롯을 가리키지 않게
+         * pipe0 자신을/자신의 버퍼를 가리키게 다시 연결한다 */
         e->pipe0.engine = e;
         e->pipe0.bb.cfg.on_event_ctx = &e->pipe0;
+        tr_atr_relink(&e->pipe0.lr3.v4.atr); /* yl_series ring.storage (series.h 값 복사 불안전) */
         e->cfg.instrument_id = e->pipe0.instrument_id;
         e->cfg.is_futures = e->pipe0.is_futures;
         e->cfg.session = e->pipe0.session;

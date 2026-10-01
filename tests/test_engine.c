@@ -903,6 +903,71 @@ static void test_two_pipes_independent(void) {
     TR_CHECK(!tr_engine_pipe_remove(&e, 100));
 }
 
+/* pipes[0] 제거 이식(transplant) 후 ATR 시계열 자기참조 회귀 테스트.
+ * 이식은 pipe0 = *victim 통째 복사인데, atr의 yl_series ring.storage는 구조체 안
+ * 버퍼(sma_hist_buf)를 가리키는 자기참조라 복구 없이는 기증 슬롯의 버퍼를 계속
+ * 가리킨다. 그 슬롯이 pipe_add로 재사용되면(memset + 자기 링 재연결) pipe0의 ATR
+ * 링이 새 파이프라인과 버퍼를 공유해 생존 파이프라인의 ATR이 깨진다 (engine.h의
+ * "생존 파이프라인은 끊기지 않는다" 불변식). */
+static double tp_low(int i)  { return 500.0 + 2.0 * i; }
+static double tp_high(int i) { return 503.0 + 2.0 * i + (double)(i % 3); }
+
+static void feed_tp_bar(tr_engine_t *e, uint64_t instrument_id, int i, uint64_t *id) {
+    feed_pipe(e, instrument_id, (unsigned)i, 0, (tr_price_t)tp_low(i), (*id)++);
+    feed_pipe(e, instrument_id, (unsigned)i, 30, (tr_price_t)tp_high(i), (*id)++);
+}
+
+static void test_pipe_transplant_atr_relink(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap); /* pipe0 = instrument 1, 세션 TEST_SESS와 동일 */
+    tr_engine_attach_status_cb(&e, 0, 0); /* 페이로드는 검사하지 않는다 (캡처 용량 초과 방지) */
+
+    static tr_candle_t bb_b[BB_CAP], bb_c[BB_CAP];
+    static double mid_b[32], mid_c[32];
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &TEST_SESS, bb_b, BB_CAP, mid_b, 32);
+    TR_CHECK(pb != 0);
+
+    /* B에 20봉 공급 (봉 1~19 확정 → ATR(14) 가득 참). 독립 참조 ATR에 같은 H/L/C를 준다 */
+    tr_atr_t ref;
+    TR_CHECK(tr_atr_init(&ref, 14));
+    uint64_t id = 1;
+    for (int i = 1; i <= 20; i++) {
+        feed_tp_bar(&e, 100, i, &id);
+    }
+    for (int i = 1; i <= 19; i++) {
+        tr_atr_on_bar(&ref, tp_high(i), tp_low(i), tp_high(i));
+    }
+    /* 참조 모델이 엔진 경로와 정확히 일치함을 먼저 고정한다 (이식 전) */
+    TR_CHECK(tr_atr_value(&pb->lr3.v4.atr) == tr_atr_value(&ref));
+
+    /* pipes[0](id=1) 제거 → B가 고정 주소 pipe0으로 이식된다 */
+    TR_CHECK(tr_engine_pipe_remove(&e, 1));
+    TR_CHECK(e.pipe0.instrument_id == 100);
+
+    /* 기증 슬롯 재사용: 새 파이프라인 C가 그 슬롯에 들어가 memset + 자기 링 재연결 */
+    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 200, false, "CCC003", &TEST_SESS, bb_c, BB_CAP, mid_c, 32);
+    TR_CHECK(pc != 0);
+    for (int i = 1; i <= 3; i++) {
+        feed_pipe(&e, 200, (unsigned)i, 0, 900 + i, id++);
+        feed_pipe(&e, 200, (unsigned)i, 30, 910 + i, id++);
+    }
+
+    /* 이식된 pipe0(id=100)에 봉 21~25 공급 → 봉 20~24 확정, 참조도 동기화.
+     * ATR 창이 가득 차 있으므로 매 확정이 최구값 축출을 일으켜 버퍼 공유 시 즉시 드러난다 */
+    for (int i = 21; i <= 25; i++) {
+        feed_tp_bar(&e, 100, i, &id);
+    }
+    for (int i = 20; i <= 24; i++) {
+        tr_atr_on_bar(&ref, tp_high(i), tp_low(i), tp_high(i));
+    }
+
+    TR_CHECK(tr_atr_value(&e.pipe0.lr3.v4.atr) == tr_atr_value(&ref));
+    /* C도 독립적으로 정상이어야 한다 (버퍼 공유의 역방향 오염 없음) */
+    TR_CHECK(yls_count(&pc->lr3.v4.atr.sma_hist) == 2);
+    TR_CHECK(yls_count(&e.pipe0.lr3.v4.atr.sma_hist) == 14);
+}
+
 /* 혼합 시장: 파이프라인은 종목별 세션을 갖는다 — 기동 종목 세션을 상속하지 않는다.
  * 선물 세션(08:45~익일 05:00) 엔진에 주식 세션(08:00~20:00) 파이프라인을 add하면
  * 08:15 틱은 주식 파이프만 받고, 20:30 틱은 선물 파이프만 받는다 (그 역도 성립). */
@@ -1313,6 +1378,7 @@ int main(void) {
     test_mem_event_format();
     test_pipe_slot_reuse();
     test_two_pipes_independent();
+    test_pipe_transplant_atr_relink();
     test_mixed_market_sessions();
     TR_TEST_SUMMARY();
 }
