@@ -42,7 +42,8 @@ typedef struct {
     double minclose_buf[19]; /* MinClose 저장소 (yl_var 규약: 상태 구조체 안) */
     yl_var minclose;         /* MinClose[N] ([0]=최신, 유효 용량 19 = 표본수 상한) */
     int64_t x;               /* X (세션 상대 봉 카운터 — 리셋 시 0) */
-    double prev_minlrl;      /* MinLRL[1] ([1] 깊이 — 스칼라) */
+    double prev_minlrl;      /* MinLRL[1] — 직전 봉 말 회귀선 값 (새 봉에서 갱신) */
+    double last_minlrl;      /* 이번 봉의 최신 회귀선 값 (다음 봉의 [1] 후보) */
     double slope;            /* MinLRS — 원본 Var (출력 미해당) */
     double intercept;        /* MinB — 원본 Var (출력 미해당) */
     /* 출력 (원본 NumericRef 대응) */

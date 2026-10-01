@@ -28,9 +28,14 @@ void tr_fxp2_eval(tr_fxp2_t *s, const tr_fxp2_input_t *in) {
         return;
     }
 
-    /* 회귀기울기입력 이력 갱신 (lp4와 같은 계약: 새 봉이면 push, 같은 봉이면 [0] 갱신) */
+    /* 회귀기울기입력 이력 갱신 (lp4와 같은 계약: 새 봉이면 push, 같은 봉이면 [0] 갱신).
+     * 세션ATR[1]·C[1]은 봉 상대 시리즈다: 새 봉에서 직전 봉 말 값으로 갱신한다 */
     if (in->is_new_bar || ylv_count(&s->slope_hist) == 0) {
         ylv_push(&s->slope_hist, in->slope);
+        s->prev_atr = s->session_atr;
+        s->prev_close = s->last_close;
+        s->has_prev_close = s->has_bar;
+        s->has_bar = true;
     } else {
         ylv_set_current(&s->slope_hist, in->slope);
     }
@@ -46,13 +51,12 @@ void tr_fxp2_eval(tr_fxp2_t *s, const tr_fxp2_input_t *in) {
     if (in->session_reset) {
         s->session_atr = sess_tr;
     } else if (in->session_bars <= 14) {
-        s->session_atr = (s->session_atr * (double)(in->session_bars - 1) + sess_tr) /
+        s->session_atr = (s->prev_atr * (double)(in->session_bars - 1) + sess_tr) /
                          (double)in->session_bars;
     } else {
-        s->session_atr = (s->session_atr * 13.0 + sess_tr) / 14.0;
+        s->session_atr = (s->prev_atr * 13.0 + sess_tr) / 14.0;
     }
-    s->prev_close = in->close;
-    s->has_prev_close = true;
+    s->last_close = in->close;
 
     /* 예측봉수 (원본 42~46줄: Max(0,입력)) */
     double n[5];

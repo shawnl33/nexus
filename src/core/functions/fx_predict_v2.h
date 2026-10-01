@@ -15,10 +15,10 @@
  *
  * 세션봉수 계약: 1기반 (세션 첫 봉=세션초기화 1, 다음 봉부터 2,3,...). 세션초기화==0인데
  * 세션봉수<=14 분기에서 나눗셈에 쓰이므로 0은 계약 위반이다 (원본 그대로, 가드 없음).
- * C[1](차트 이전 종가)은 포팅에서 prev_close로 추적한다 — 원본은 세션초기화==0이면 항상
- * C[1]을 쓰지만(차트 이전 봉 존재 가정), 포팅의 첫 평가에는 이전 종가가 없어 H−L만 쓴다
- * (atr.c true_range의 has_prev_close 패턴과 같은 적응. 실전 체인은 첫 세션 봉이
- * 세션초기화==1이라 이 경로에 도달하지 않는다).
+ * C[1](차트 이전 종가)과 세션ATR[1]은 봉 상대 시리즈다 — 포팅은 새 봉에서 직전 봉 말 값으로
+ * 갱신해 같은 봉 재평가에서 이번 봉 값을 [1]으로 읽는 오류를 막는다. 첫 평가에는 이전
+ * 종가가 없어 H−L만 쓴다 (atr.c true_range의 has_prev_close 패턴과 같은 적응.
+ * 실전 체인은 첫 세션 봉이 세션초기화==1이라 이 경로에 도달하지 않는다).
  */
 
 #include <stdbool.h>
@@ -42,9 +42,12 @@ typedef struct {
     /* 상태 */
     double slope_hist_buf[4]; /* slope_hist 저장소 (yl_var 규약: 상태 구조체 안) */
     yl_var slope_hist;      /* 회귀기울기입력[N] ([0]=현재 봉) */
-    double session_atr;     /* 세션ATR (원본 Var — [1] 깊이 재귀라 스칼라) */
-    double prev_close;      /* C[1] 대응 */
+    double session_atr;     /* 세션ATR (원본 Var — 현재 봉까지의 값) */
+    double prev_atr;        /* 세션ATR[1] — 직전 봉 말 값 (새 봉에서 갱신) */
+    double prev_close;      /* C[1] — 직전 봉 종가 (새 봉에서 갱신) */
+    double last_close;      /* 이번 봉의 최신 종가 (다음 봉의 C[1] 후보) */
     bool has_prev_close;
+    bool has_bar;
     /* 출력 (원본 NumericRef 대응) */
     double pred_price[5];   /* 예측가격1~5 (무효 시 현재회귀선입력 평탄) */
     int pred_dir[5];        /* 예측방향1~5 (−1/0/+1) */

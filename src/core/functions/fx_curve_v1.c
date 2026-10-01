@@ -19,6 +19,9 @@ void tr_fxc_eval(tr_fxc_t *s, const tr_fxc_input_t *in) {
 
     /* 배열 이동은 봉변화에서만 (원본 15~25줄: Index != 최근봉) */
     if (in->is_new_bar || ylv_count(&s->minclose) == 0) {
+        /* MinLRL[1]은 봉 상대 시리즈다: 새 봉에서 직전 봉 말 값으로 갱신한다.
+         * (같은 봉 재평가에서 이번 봉 값을 [1]으로 읽는 오류를 막는다) */
+        s->prev_minlrl = s->last_minlrl;
         if (in->session_reset) { /* 원본 17~21줄: 배열·표본수·X 리셋 */
             ylv_clear(&s->minclose);
             s->x = 0;
@@ -66,7 +69,7 @@ void tr_fxc_eval(tr_fxc_t *s, const tr_fxc_input_t *in) {
     s->change = fabs(s->pred_price - s->low_curve);
     s->direction = s->pred_price - s->low_curve;
 
-    s->prev_minlrl = minlrl;
+    s->last_minlrl = minlrl; /* 다음 봉의 MinLRL[1] 후보 */
 }
 
 bool tr_fxc_relink(tr_fxc_t *s) {
