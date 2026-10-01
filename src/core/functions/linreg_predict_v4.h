@@ -23,6 +23,7 @@
 #include <stdint.h>
 
 #include "core/functions/atr.h"
+#include "core/market/var.h"
 #include "core/model/units.h"
 
 typedef struct {
@@ -38,9 +39,11 @@ typedef struct {
 
 typedef struct {
     int32_t n[3];             /* 예측봉수1~3 */
-    /* 봉 인덱스 기준 입력 이력 ([0]=현재 봉) */
-    double slope_hist[4];
-    size_t slope_len;
+    /* 봉 인덱스 기준 입력 이력 ([0]=현재 봉). 회귀기울기입력[N]은 yl_var 대응
+     * (저장소는 이 구조체 안). 일자 이력은 값의 시계열이 아니라 일자 경계 비교 키이고
+     * yyyymmdd 정수라 int64 배열 그대로 둔다 (double 전용 yl_var와 타입 마찰 회피) */
+    double slope_hist_buf[4];
+    yl_var slope_hist;
     int64_t day_hist[4];
     size_t day_len;
     tr_atr_t atr;
@@ -60,5 +63,9 @@ void tr_lp4_on_bar_closed(tr_lp4_t *s, double high, double low, double close);
 
 /* 매 평가 호출. */
 void tr_lp4_eval(tr_lp4_t *s, const tr_lp4_input_t *in);
+
+/* tr_lp4_t를 포함한 구조체의 통째 값 복사(이식) 후 호출: slope_hist와 내장 ATR의
+ * 저장소 포인터를 이 인스턴스 자신의 버퍼로 다시 연결한다 (yl_var 값 복사 불안전). */
+bool tr_lp4_relink(tr_lp4_t *s);
 
 #endif

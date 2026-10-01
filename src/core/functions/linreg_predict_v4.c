@@ -31,6 +31,8 @@ bool tr_lp4_init(tr_lp4_t *s, int32_t n1, int32_t n2, int32_t n3) {
     s->n[0] = n1;
     s->n[1] = n2;
     s->n[2] = n3;
+    /* memset 다음에 시계열 저장소를 연결한다 (순서 고정) */
+    ylv_init(&s->slope_hist, s->slope_hist_buf, 4);
     return tr_atr_init(&s->atr, 14);
 }
 
@@ -45,23 +47,23 @@ void tr_lp4_eval(tr_lp4_t *s, const tr_lp4_input_t *in) {
     if (s == 0 || in == 0) {
         return;
     }
-    /* 봉 인덱스 기준 입력 이력 갱신: 새 봉이면 시프트, 같은 봉이면 [0] 갱신 */
-    if (in->is_new_bar || s->slope_len == 0) {
-        if (s->slope_len < 4) {
-            for (size_t i = s->slope_len; i > 0; i--) {
-                s->slope_hist[i] = s->slope_hist[i - 1];
+    /* 봉 인덱스 기준 입력 이력 갱신: 새 봉이면 push, 같은 봉이면 [0] 갱신 */
+    if (in->is_new_bar || ylv_count(&s->slope_hist) == 0) {
+        ylv_push(&s->slope_hist, in->slope);
+        /* 일자 이력 시프트 (day_len == slope_hist count와 항상 같게 유지된다) */
+        if (s->day_len < 4) {
+            for (size_t i = s->day_len; i > 0; i--) {
                 s->day_hist[i] = s->day_hist[i - 1];
             }
-            s->slope_len++;
             s->day_len++;
         } else {
             for (size_t i = 3; i > 0; i--) {
-                s->slope_hist[i] = s->slope_hist[i - 1];
                 s->day_hist[i] = s->day_hist[i - 1];
             }
         }
+    } else {
+        ylv_set_current(&s->slope_hist, in->slope);
     }
-    s->slope_hist[0] = in->slope;
     s->day_hist[0] = in->trading_day;
 
     /* 예측변동성은 원본과 같이 항상 ATR(14) (진행 봉 포함 추정) */
@@ -84,8 +86,10 @@ void tr_lp4_eval(tr_lp4_t *s, const tr_lp4_input_t *in) {
     s->adj_slope = clamp_abs(in->slope * coef, atr * 0.50);
 
     double raw_accel = 0.0;
-    if (s->slope_len >= 4) {
-        raw_accel = (in->slope - s->slope_hist[3]) / 3.0;
+    if (ylv_count(&s->slope_hist) >= 4) {
+        double slope3 = 0.0;
+        ylv_at(&s->slope_hist, 3, &slope3);
+        raw_accel = (in->slope - slope3) / 3.0;
     }
     double accel = clamp_abs(raw_accel * coef, atr * 0.08);
     if (s->adj_slope * accel >= 0.0) {
@@ -105,4 +109,12 @@ void tr_lp4_eval(tr_lp4_t *s, const tr_lp4_input_t *in) {
         s->pred_dir[k] = (move > 0.0) - (move < 0.0);
     }
     s->valid_out = true;
+}
+
+bool tr_lp4_relink(tr_lp4_t *s) {
+    if (s == 0) {
+        return false;
+    }
+    bool ok = ylv_relink(&s->slope_hist, s->slope_hist_buf);
+    return tr_atr_relink(&s->atr) && ok;
 }

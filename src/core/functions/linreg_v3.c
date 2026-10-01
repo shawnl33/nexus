@@ -47,6 +47,8 @@ bool tr_lr3_init(tr_lr3_t *s, tr_compress_t compress, uint32_t bar_interval,
     s->predict_bars[1] = n2;
     s->predict_bars[2] = n3;
     s->n = select_n(compress, bar_interval);
+    /* memset 다음에 시계열 저장소를 연결한다 (순서 고정). 유효 용량은 회귀기간 n개 */
+    ylv_init(&s->prices, s->prices_buf, s->n);
     if (!tr_lp4_init(&s->v4, n1, n2, n3)) {
         return false;
     }
@@ -65,25 +67,20 @@ void tr_lr3_eval(tr_lr3_t *s, const tr_ind_eval_t *ev) {
         bool session_reset = (s->compress == TR_COMPRESS_MIN && s->bar_interval <= 30 &&
                               ev->is_session_first);
         if (session_reset) {
-            memset(s->prices, 0, sizeof(s->prices));
-            s->valid_count = 0;
+            ylv_clear(&s->prices);
         }
-        for (int i = 98; i >= 0; i--) {
-            s->prices[i + 1] = s->prices[i];
-        }
-        if (s->valid_count < s->n) {
-            s->valid_count++;
-        }
+        ylv_push(&s->prices, price); /* 유효개수 상한 n은 링 용량(n)이 보장한다 */
         s->last_bar_open = ev->bar->open_time_us;
         s->has_bar = true;
+    } else {
+        ylv_set_current(&s->prices, price);
     }
-    s->prices[0] = price;
 
-    uint32_t calc = s->valid_count < s->n ? s->valid_count : s->n;
+    uint32_t calc = (uint32_t)ylv_count(&s->prices); /* <= n (링 용량) */
     if (calc >= TR_LR3_MIN_SAMPLES) {
         double y[100];
         for (uint32_t i = 0; i < calc; i++) {
-            y[i] = s->prices[calc - 1 - i]; /* 오래된 순, x = 0..calc-1 */
+            ylv_at(&s->prices, calc - 1 - i, &y[i]); /* 오래된 순, x = 0..calc-1 */
         }
         tr_ols_result_t r;
         tr_ols_fit(y, calc, 0.0, TR_LR3_MIN_SAMPLES, &r);
@@ -117,4 +114,12 @@ void tr_lr3_eval(tr_lr3_t *s, const tr_ind_eval_t *ev) {
     in.is_new_bar = is_new_bar;
     in.compress_min_le30 = (s->compress == TR_COMPRESS_MIN && s->bar_interval <= 30);
     tr_lp4_eval(&s->v4, &in);
+}
+
+bool tr_lr3_relink(tr_lr3_t *s) {
+    if (s == 0) {
+        return false;
+    }
+    bool ok = ylv_relink(&s->prices, s->prices_buf);
+    return tr_lp4_relink(&s->v4) && ok;
 }

@@ -13,21 +13,12 @@ static double clamp_abs(double v, double limit) {
     return v;
 }
 
-static void push(double *hist, size_t cap, size_t *len, double v) {
-    size_t n = *len < cap ? *len + 1 : cap;
-    for (size_t i = n - 1; i > 0; i--) {
-        hist[i] = hist[i - 1];
-    }
-    hist[0] = v;
-    *len = n;
-}
-
 static void reset_daily(tr_obd2_t *s) {
     s->started = false;
     s->quote_no = 0;
     s->cum_total = 0.0;
-    s->core_len = 0;
-    s->dir_len = 0;
+    ylv_clear(&s->core_hist);
+    ylv_clear(&s->dir_hist);
     s->score = 0.0;
     s->slope3 = 0.0;
     s->state = 0;
@@ -44,7 +35,9 @@ bool tr_obd2_init(tr_obd2_t *s, double interest_level, double strong_level,
     s->strong_level = fmax(fabs(strong_level), s->interest_level);
     s->sign_reverse = sign_reverse;
     s->is_futures = is_futures;
-    s->last_day = -1;
+    /* memset 다음에 시계열 저장소를 연결한다 (순서 고정) */
+    ylv_init(&s->core_hist, s->core_hist_buf, 5);
+    ylv_init(&s->dir_hist, s->dir_hist_buf, 4);
     reset_daily(s);
     s->last_day = -1;
     return true;
@@ -89,18 +82,28 @@ void tr_obd2_eval(tr_obd2_t *s, double bids, double asks, int64_t trading_day) {
         ratio_score = -ratio_score;
     }
     double core = (diff_score * 60.0 + ratio_score * 40.0) / 100.0;
-    push(s->core_hist, 5, &s->core_len, core);
+    ylv_push(&s->core_hist, core);
+    size_t core_len = ylv_count(&s->core_hist);
 
-    /* 방향평균3: 유효 평가 3회 미만이면 핵심점수 (원본 132줄) */
+    /* 방향평균3: 유효 평가 3회 미만이면 핵심점수 (원본 132줄). 합산은 최신→과거 순서 유지 */
     double ma3 = core;
-    if (s->core_len >= 3) {
-        ma3 = (s->core_hist[0] + s->core_hist[1] + s->core_hist[2]) / 3.0;
+    if (core_len >= 3) {
+        double c0, c1, c2;
+        ylv_at(&s->core_hist, 0, &c0);
+        ylv_at(&s->core_hist, 1, &c1);
+        ylv_at(&s->core_hist, 2, &c2);
+        ma3 = (c0 + c1 + c2) / 3.0;
     }
     /* 방향평균5: 유효 평가 5회 미만이면 방향평균3 (원본 141줄) */
     double ma5 = ma3;
-    if (s->core_len >= 5) {
-        ma5 = (s->core_hist[0] + s->core_hist[1] + s->core_hist[2] +
-               s->core_hist[3] + s->core_hist[4]) / 5.0;
+    if (core_len >= 5) {
+        double c0, c1, c2, c3, c4;
+        ylv_at(&s->core_hist, 0, &c0);
+        ylv_at(&s->core_hist, 1, &c1);
+        ylv_at(&s->core_hist, 2, &c2);
+        ylv_at(&s->core_hist, 3, &c3);
+        ylv_at(&s->core_hist, 4, &c4);
+        ma5 = (c0 + c1 + c2 + c3 + c4) / 5.0;
     }
 
     double dir;
@@ -109,11 +112,13 @@ void tr_obd2_eval(tr_obd2_t *s, double bids, double asks, int64_t trading_day) {
     } else {
         dir = (core * 60.0 + ma3 * 25.0 + ma5 * 15.0) / 100.0;
     }
-    push(s->dir_hist, 4, &s->dir_len, dir);
+    ylv_push(&s->dir_hist, dir);
 
     double slope3 = 0.0;
-    if (s->dir_len >= 4) {
-        slope3 = clamp_abs(dir - s->dir_hist[3], 100.0);
+    if (ylv_count(&s->dir_hist) >= 4) {
+        double d3 = 0.0;
+        ylv_at(&s->dir_hist, 3, &d3);
+        slope3 = clamp_abs(dir - d3, 100.0);
     }
 
     int state = 0;
@@ -131,4 +136,12 @@ void tr_obd2_eval(tr_obd2_t *s, double bids, double asks, int64_t trading_day) {
     s->slope3 = slope3;
     s->state = state;
     s->validity = TR_VALIDITY_VALID;
+}
+
+bool tr_obd2_relink(tr_obd2_t *s) {
+    if (s == 0) {
+        return false;
+    }
+    bool ok = ylv_relink(&s->core_hist, s->core_hist_buf);
+    return ylv_relink(&s->dir_hist, s->dir_hist_buf) && ok;
 }

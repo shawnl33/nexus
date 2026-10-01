@@ -25,6 +25,7 @@
 #include <stdint.h>
 
 #include "core/model/units.h"
+#include "core/market/var.h"
 
 typedef struct {
     /* 설정 */
@@ -37,10 +38,12 @@ typedef struct {
     int64_t last_day;
     uint64_t quote_no;     /* 호가번호 (당일 유효 평가 횟수, 0부터) */
     double cum_total;      /* 누적잔량 */
-    double core_hist[5];   /* 핵심점수[0..4] (유효 평가만) */
-    size_t core_len;
-    double dir_hist[4];    /* 계산호가방향[0..3] (유효 평가만) */
-    size_t dir_len;
+    /* 핵심점수·계산호가방향: 원본 Var의 암묵 시계열 대응 (유효 평가만 push, [0]=최신).
+     * yl_var 전환 (docs/PORTING.md): 저장소는 이 구조체 안에 둔다 */
+    double core_hist_buf[5];
+    yl_var core_hist;      /* 핵심점수[0..4] (유효 평가만) */
+    double dir_hist_buf[4];
+    yl_var dir_hist;       /* 계산호가방향[0..3] (유효 평가만) */
     /* 출력 */
     double score;          /* 호가방향점수 */
     double slope3;         /* 호가기울기3 */
@@ -53,5 +56,9 @@ bool tr_obd2_init(tr_obd2_t *s, double interest_level, double strong_level,
 
 /* 매 평가 호출. bids/asks는 총잔량, trading_day는 BDate 대응. */
 void tr_obd2_eval(tr_obd2_t *s, double bids, double asks, int64_t trading_day);
+
+/* tr_obd2_t를 포함한 구조체의 통째 값 복사(이식) 후 호출: 시계열 저장소 포인터를
+ * 이 인스턴스 자신의 버퍼로 다시 연결한다 (yl_var 값 복사 불안전 — var.h 참조). */
+bool tr_obd2_relink(tr_obd2_t *s);
 
 #endif

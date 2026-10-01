@@ -55,9 +55,62 @@ static void test_eval_always_shifts(void) {
     TR_CHECK(fabs(s.direction) < 1e-9);
 }
 
+static void test_warmup_zero_fill_outputs(void) {
+    /* 워밍업(count<19) 구간은 원본의 0 채움 배열을 읽어 계산한다 — yl_var 링은
+     * 빈 슬롯을 주지 않으므로 없는 인덱스를 0으로 읽어 같은 값을 재현해야 한다.
+     * 기대값은 전환 전 현행 코드로 기록한 실측치 (yl_var 전환 후 비트 동일 확인) */
+    tr_htf_curve_t s;
+    tr_htf_curve_init(&s, 7);
+    for (int i = 1; i <= 19; i++) {
+        double mid = 100.0 + 0.5 * i + (i % 3) * 0.25;
+        double spread = 1.0 + (i % 2) * 0.5;
+        tr_htf_curve_eval(&s, mid + spread, mid - spread);
+        if (i == 1) {
+            TR_CHECK(s.slope == 1.5907894736842105);
+            TR_CHECK(s.intercept == 18.028947368421054);
+            TR_CHECK(s.high_curve == 19.619736842105265);
+            TR_CHECK(s.low_curve == 0.0); /* 첫 평가는 직전 회귀선 없음 */
+            TR_CHECK(s.pred_price == 30.755263157894738);
+            TR_CHECK(s.direction == 30.755263157894738);
+            TR_CHECK(s.change == 30.755263157894738);
+        }
+        if (i == 2) {
+            TR_CHECK(s.slope == 3.0166666666666666);
+            TR_CHECK(s.intercept == 31.761403508771931);
+            TR_CHECK(s.high_curve == 37.794736842105266);
+            TR_CHECK(s.low_curve == 19.619736842105265);
+            TR_CHECK(s.pred_price == 58.911403508771926);
+            TR_CHECK(s.direction == 39.291666666666657);
+        }
+        if (i == 5) {
+            TR_CHECK(s.slope == 6.2600877192982454);
+            TR_CHECK(s.high_curve == 83.130263157894731);
+            TR_CHECK(s.low_curve == 69.482894736842098);
+            TR_CHECK(s.pred_price == 126.95087719298246);
+            TR_CHECK(s.direction == 57.467982456140362);
+        }
+        if (i == 18) {
+            TR_CHECK(s.slope == 2.0802631578947368);
+            TR_CHECK(s.high_curve == 118.19605263157897);
+            TR_CHECK(s.low_curve == 125.09078947368423);
+            TR_CHECK(s.pred_price == 132.7578947368421);
+            TR_CHECK(s.direction == 7.6671052631578789);
+        }
+        if (i == 19) {
+            TR_CHECK(s.slope == 0.49736842105263157);
+            TR_CHECK(s.high_curve == 109.72631578947369);
+            TR_CHECK(s.low_curve == 118.19605263157897);
+            TR_CHECK(s.pred_price == 113.20789473684211);
+            TR_CHECK(s.direction == -4.9881578947368581);
+            TR_CHECK(s.change == 4.9881578947368581);
+        }
+    }
+}
+
 int main(void) {
     test_perfect_line();
     test_warmup_validity();
     test_eval_always_shifts();
+    test_warmup_zero_fill_outputs();
     TR_TEST_SUMMARY();
 }

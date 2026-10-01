@@ -23,6 +23,7 @@
 
 #include "core/indicators/indicator.h"
 #include "core/functions/linreg_predict_v4.h"
+#include "core/market/var.h"
 #include "core/model/units.h"
 
 typedef struct {
@@ -32,8 +33,10 @@ typedef struct {
     int32_t predict_bars[3]; /* 예측봉수1~3 */
     /* 상태 */
     uint32_t n;              /* 자동 선택된 회귀기간 */
-    double prices[100];      /* [0]=최신 시프트 배열 (원본 회귀가격) */
-    uint32_t valid_count;    /* 유효개수 */
+    /* 회귀가격: 원본 회귀가격[N] 대응 변수 ([0]=최신, 유효 용량 n개).
+     * yl_var 전환 (docs/PORTING.md): 저장소는 이 구조체 안에 둔다 */
+    double prices_buf[100];
+    yl_var prices;
     tr_time_us_t last_bar_open;
     bool has_bar;
     tr_lp4_t v4;
@@ -52,5 +55,9 @@ bool tr_lr3_init(tr_lr3_t *s, tr_compress_t compress, uint32_t bar_interval,
 
 /* 매 평가 호출. ev->bar는 현재 봉. */
 void tr_lr3_eval(tr_lr3_t *s, const tr_ind_eval_t *ev);
+
+/* tr_lr3_t를 포함한 구조체의 통째 값 복사(이식) 후 호출: prices와 내장 v4(→ ATR)의
+ * 저장소 포인터를 이 인스턴스 자신의 버퍼로 다시 연결한다 (yl_var 값 복사 불안전). */
+bool tr_lr3_relink(tr_lr3_t *s);
 
 #endif

@@ -205,7 +205,10 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
          * pipe0 자신을/자신의 버퍼를 가리키게 다시 연결한다 */
         e->pipe0.engine = e;
         e->pipe0.bb.cfg.on_event_ctx = &e->pipe0;
-        tr_atr_relink(&e->pipe0.lr3.v4.atr); /* yl_var ring.storage (var.h 값 복사 불안전) */
+        /* yl_var ring.storage 복구 (var.h 값 복사 불안전). lr3는 v4(→ATR)까지 cascade */
+        tr_lr3_relink(&e->pipe0.lr3);
+        tr_obd2_relink(&e->pipe0.obd2);
+        tr_htf_curve_relink(&e->pipe0.htf);
         e->cfg.instrument_id = e->pipe0.instrument_id;
         e->cfg.is_futures = e->pipe0.is_futures;
         e->cfg.session = e->pipe0.session;

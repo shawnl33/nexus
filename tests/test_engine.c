@@ -917,6 +917,36 @@ static void feed_tp_bar(tr_engine_t *e, uint64_t instrument_id, int i, uint64_t 
     feed_pipe(e, instrument_id, (unsigned)i, 30, (tr_price_t)tp_high(i), (*id)++);
 }
 
+/* 이식된 파이프라인과 미러 엔진의 같은 종목 파이프라인: 모든 yl_var 기반 지표 출력이
+ * 비트 단위로 같아야 한다 (같은 틱 스트림, 이식 유묧만 다름) */
+static void check_pipe_eq(const tr_pipeline_t *a, const tr_pipeline_t *b) {
+    /* lr3 회귀 출력 (prices yl_var) */
+    TR_CHECK(a->lr3.line == b->lr3.line);
+    TR_CHECK(a->lr3.slope == b->lr3.slope);
+    TR_CHECK(a->lr3.r2 == b->lr3.r2);
+    TR_CHECK(a->lr3.residual == b->lr3.residual);
+    TR_CHECK(a->lr3.reg_valid == b->lr3.reg_valid);
+    /* v4 예측 출력 (slope_hist + atr yl_var) */
+    TR_CHECK(a->lr3.v4.pred_price[0] == b->lr3.v4.pred_price[0]);
+    TR_CHECK(a->lr3.v4.pred_price[1] == b->lr3.v4.pred_price[1]);
+    TR_CHECK(a->lr3.v4.adj_slope == b->lr3.v4.adj_slope);
+    TR_CHECK(a->lr3.v4.accel == b->lr3.v4.accel);
+    TR_CHECK(a->lr3.v4.volatility == b->lr3.v4.volatility);
+    /* htf 곡선 출력 (minclose yl_var) */
+    TR_CHECK(a->htf.slope == b->htf.slope);
+    TR_CHECK(a->htf.intercept == b->htf.intercept);
+    TR_CHECK(a->htf.high_curve == b->htf.high_curve);
+    TR_CHECK(a->htf.low_curve == b->htf.low_curve);
+    TR_CHECK(a->htf.pred_price == b->htf.pred_price);
+    TR_CHECK(a->htf.direction == b->htf.direction);
+    TR_CHECK(a->htf.change == b->htf.change);
+    /* obd2 호가 출력 (core_hist/dir_hist yl_var) */
+    TR_CHECK(a->obd2.score == b->obd2.score);
+    TR_CHECK(a->obd2.slope3 == b->obd2.slope3);
+    TR_CHECK(a->obd2.state == b->obd2.state);
+    TR_CHECK(a->obd2.validity == b->obd2.validity);
+}
+
 static void test_pipe_transplant_atr_relink(void) {
     tr_engine_t e;
     capture_t cap;
@@ -928,18 +958,48 @@ static void test_pipe_transplant_atr_relink(void) {
     tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &TEST_SESS, bb_b, BB_CAP, mid_b, 32);
     TR_CHECK(pb != 0);
 
-    /* B에 20봉 공급 (봉 1~19 확정 → ATR(14) 가득 참). 독립 참조 ATR에 같은 H/L/C를 준다 */
+    /* 미러 엔진: 같은 종목(100)을 이식 없이 운영하는 독립 참조 */
+    tr_engine_t m;
+    static tr_candle_t m_bb0[BB_CAP], m_bbb[BB_CAP];
+    static double m_mid0[32], m_midb[32];
+    tr_engine_config_t mcfg;
+    memset(&mcfg, 0, sizeof(mcfg));
+    mcfg.engine_instance_id = 1;
+    mcfg.instrument_id = 1;
+    mcfg.session = (tr_session_policy_t){KST, 540, 930, TR_SESSION_WEEKDAYS};
+    mcfg.timeframe_sec = 60;
+    mcfg.no_trade = TR_NO_TRADE_SKIP;
+    mcfg.predict_bars[0] = 5;
+    mcfg.predict_bars[1] = 10;
+    mcfg.predict_bars[2] = 15;
+    mcfg.htf_ticks = 10;
+    mcfg.min_r2 = 0.40;
+    mcfg.market_period = 20;
+    mcfg.is_futures = true;
+    TR_CHECK(tr_engine_init(&m, &mcfg, m_bb0, BB_CAP, m_mid0, 32));
+    tr_pipeline_t *mb = tr_engine_pipe_add(&m, 100, false, "BBB002", &TEST_SESS, m_bbb, BB_CAP, m_midb, 32);
+    TR_CHECK(mb != 0);
+
+    /* B에 20봉 공급 (봉 1~19 확정 → ATR(14) 가득 참). 독립 참조 ATR에 같은 H/L/C를 주고,
+     * 미러 엔진에도 같은 틱 스트림을 준다 */
     tr_atr_t ref;
     TR_CHECK(tr_atr_init(&ref, 14));
-    uint64_t id = 1;
+    uint64_t id = 1, mid_id = 1;
     for (int i = 1; i <= 20; i++) {
         feed_tp_bar(&e, 100, i, &id);
+        feed_tp_bar(&m, 100, i, &mid_id);
     }
     for (int i = 1; i <= 19; i++) {
         tr_atr_on_bar(&ref, tp_high(i), tp_low(i), tp_high(i));
     }
     /* 참조 모델이 엔진 경로와 정확히 일치함을 먼저 고정한다 (이식 전) */
     TR_CHECK(tr_atr_value(&pb->lr3.v4.atr) == tr_atr_value(&ref));
+
+    /* 호가도 100에 공급한다 (obd2 시계열 채우기, 미러 동기화) */
+    for (int k = 0; k < 4; k++) {
+        tr_engine_on_orderbook(&e, 100, kst(9, 2, (unsigned)(40 + k)), 3000.0 + 100 * k, 2700.0 + 50 * k);
+        tr_engine_on_orderbook(&m, 100, kst(9, 2, (unsigned)(40 + k)), 3000.0 + 100 * k, 2700.0 + 50 * k);
+    }
 
     /* pipes[0](id=1) 제거 → B가 고정 주소 pipe0으로 이식된다 */
     TR_CHECK(tr_engine_pipe_remove(&e, 1));
@@ -952,20 +1012,33 @@ static void test_pipe_transplant_atr_relink(void) {
         feed_pipe(&e, 200, (unsigned)i, 0, 900 + i, id++);
         feed_pipe(&e, 200, (unsigned)i, 30, 910 + i, id++);
     }
+    /* C에 호가도 공급해 슬롯 버퍼를 더럽힌다 (버퍼 공유 시 생존 파이프라인 오염 극대화) */
+    for (int k = 0; k < 2; k++) {
+        tr_engine_on_orderbook(&e, 200, kst(9, 3, (unsigned)(10 + k)), 5000.0, 4000.0);
+    }
 
     /* 이식된 pipe0(id=100)에 봉 21~25 공급 → 봉 20~24 확정, 참조도 동기화.
      * ATR 창이 가득 차 있으므로 매 확정이 최구값 축출을 일으켜 버퍼 공유 시 즉시 드러난다 */
     for (int i = 21; i <= 25; i++) {
         feed_tp_bar(&e, 100, i, &id);
+        feed_tp_bar(&m, 100, i, &mid_id);
     }
     for (int i = 20; i <= 24; i++) {
         tr_atr_on_bar(&ref, tp_high(i), tp_low(i), tp_high(i));
+    }
+    /* 이식 후에도 호가를 더 공급한다 (obd2 링 축출 유발, 미러 동기화) */
+    for (int k = 0; k < 3; k++) {
+        tr_engine_on_orderbook(&e, 100, kst(9, 22, (unsigned)(k * 10)), 3100.0 + 100 * k, 2600.0 + 50 * k);
+        tr_engine_on_orderbook(&m, 100, kst(9, 22, (unsigned)(k * 10)), 3100.0 + 100 * k, 2600.0 + 50 * k);
     }
 
     TR_CHECK(tr_atr_value(&e.pipe0.lr3.v4.atr) == tr_atr_value(&ref));
     /* C도 독립적으로 정상이어야 한다 (버퍼 공유의 역방향 오염 없음) */
     TR_CHECK(ylv_count(&pc->lr3.v4.atr.sma_hist) == 2);
     TR_CHECK(ylv_count(&e.pipe0.lr3.v4.atr.sma_hist) == 14);
+
+    /* 이식된 pipe0의 모든 yl_var 지표 출력(lr3/v4/htf/obd2)이 미러와 비트 동일해야 한다 */
+    check_pipe_eq(&e.pipe0, mb);
 }
 
 /* 혼합 시장: 파이프라인은 종목별 세션을 갖는다 — 기동 종목 세션을 상속하지 않는다.

@@ -17,12 +17,17 @@
 #include <stdint.h>
 
 #include "core/model/units.h"
+#include "core/market/var.h"
 
 #define TR_HTF_SAMPLES 19
 
 typedef struct {
     int32_t ticks;          /* 곡선예측틱수 */
-    double minclose[100];   /* [0]=최신, 원본과 같은 시프트 배열·0 초기 채움 */
+    /* (L+H)/2 이력 ([0]=최신). 원본은 100 슬롯 시프트 배열이지만 읽는 구간은
+     * 최근 TR_HTF_SAMPLES개뿐이라 유효 용량 19로 출력이 동일하다.
+     * 원본의 0 초기 채움(워밍업)은 count 미만 인덱스를 0으로 읽어 재현한다 */
+    double minclose_buf[TR_HTF_SAMPLES];
+    yl_var minclose;
     int64_t x;              /* 누적 평가 카운터 (원본 X) */
     double prev_minlrl;     /* MinLRL[1] */
     bool has_prev;
@@ -43,5 +48,9 @@ bool tr_htf_curve_init(tr_htf_curve_t *s, int32_t predict_ticks);
 void tr_htf_curve_eval(tr_htf_curve_t *s, double high, double low);
 
 tr_validity_t tr_htf_curve_validity(const tr_htf_curve_t *s);
+
+/* tr_htf_curve_t를 포함한 구조체의 통째 값 복사(이식) 후 호출: 시계열 저장소
+ * 포인터를 이 인스턴스 자신의 버퍼로 다시 연결한다 (yl_var 값 복사 불안전). */
+bool tr_htf_curve_relink(tr_htf_curve_t *s);
 
 #endif

@@ -67,13 +67,14 @@ static void test_same_bar_update_no_shift(void) {
     for (int i = 1; i <= 5; i++) {
         feed_bar(&s, &ev, &bar, i, false);
     }
-    uint32_t before = s.valid_count;
+    size_t before = ylv_count(&s.prices);
 
     /* 같은 봉(open_time 동일) 재평가: 시프트 없이 [0]만 갱신 */
     make_eval(&ev, &bar, 5 * 60000000, 200.0, 190.0, 195.0, false);
     tr_lr3_eval(&s, &ev);
-    TR_CHECK(s.valid_count == before);
-    TR_CHECK(fabs(s.prices[0] - 195.0) < 1e-9);
+    TR_CHECK(ylv_count(&s.prices) == before);
+    double p0 = 0.0;
+    TR_CHECK(ylv_at(&s.prices, 0, &p0) && fabs(p0 - 195.0) < 1e-9);
 }
 
 static void test_session_reset(void) {
@@ -89,7 +90,7 @@ static void test_session_reset(void) {
     /* 당일 첫 봉: 배열·유효개수 리셋 → 다시 워밍업 */
     feed_bar(&s, &ev, &bar, 7, true);
     TR_CHECK(!s.reg_valid);
-    TR_CHECK(s.valid_count == 1);
+    TR_CHECK(ylv_count(&s.prices) == 1);
     for (int i = 8; i <= 10; i++) {
         feed_bar(&s, &ev, &bar, i, false);
         TR_CHECK(!s.reg_valid); /* 유효개수 2~4 */
