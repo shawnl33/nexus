@@ -21,6 +21,18 @@ double tr_engine_pipe_tick_scale(const tr_pipeline_t *p) {
     return p != 0 ? tick_scale(p) : 100.0;
 }
 
+/* 봉 시작 시각 → 예스랭귀지 sDate(yyyymmdd) / sTime(hhmmss). 세션 오프셋의 현지 시각. */
+static void civil_stamp(tr_time_us_t t, int32_t utc_offset_min, int64_t *date, int64_t *tod) {
+    tr_civil_t c;
+    if (!tr_civil_from_time_us(t, utc_offset_min, &c)) {
+        *date = 0;
+        *tod = 0;
+        return;
+    }
+    *date = (int64_t)c.year * 10000 + (int64_t)c.month * 100 + (int64_t)c.day;
+    *tod = (int64_t)c.hour * 10000 + (int64_t)c.min * 100 + (int64_t)c.sec;
+}
+
 /* shcode를 JSON 안전 문자(영숫자)만 남겨 복사한다. 페이로드에 그대로 실리므로
  * 따옴표·역슬래시 같은 문자는 걸러낸다 (LS 종목코드는 영숫자). */
 static void sanitize_shcode(char dst[16], const char *src) {
@@ -114,6 +126,30 @@ static bool pipe_init(tr_engine_t *e, tr_pipeline_t *p, const tr_engine_config_t
     tr_sma_init(&p->sma5, 5);
     tr_sma_init(&p->sma20, 20);
     tr_sma_init(&p->sma60, 60);
+    /* 해외선물 미래곡선 V1. price_scale은 raw 틱 (국내 엔진의 tick_scale과 같은 단위) */
+    p->is_ovs = cfg->is_ovs;
+    if (cfg->is_ovs) {
+        tr_fxmirae_config_t fcfg;
+        tr_fxmirae_default_config(&fcfg, tick_scale(p));
+        if (!tr_fxmirae_init(&p->fx, &fcfg)) {
+            return false;
+        }
+        if (!tr_fxv3_run_init(&p->fx3, tick_scale(p))) {
+            return false;
+        }
+        tr_fxpgap_init(&p->pgap3, 3, 25);
+        tr_fxpgap_init(&p->pgap5, 5, 25);
+        tr_fxpgap_init(&p->rgap, 4, 25);
+        tr_fxpgap_init(&p->mgap, 4, 25);
+        tr_fxymae_config_t ycfg;
+        tr_fxymae_default_config(&ycfg, tick_scale(p));
+        tr_fxymae_init(&p->ymae, &ycfg);
+        tr_fxsniper_config_t scfg;
+        tr_fxsniper_default_config(&scfg, tick_scale(p));
+        tr_fxsniper_init(&p->sniper, &scfg);
+        /* 호가 모듈과 같은 관심 10 / 강세 35. 흐름 기간 20은 호출 원본이 없어 엔진 기본값. */
+        tr_osf_combo_init(&p->osf, 10.0, 35.0, 0, 20);
+    }
     return true;
 }
 
@@ -130,6 +166,8 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
     e->status_cb_ctx = 0;
     e->stream_id = "display";
     e->status_seq = 1;
+    e->candle_fn = 0;
+    e->candle_fn_ctx = 0;
     /* 단일 종목 호환 경로: 파이프라인 1개(내장 pipe0)를 만들어 부착한다 */
     e->pipes[0] = &e->pipe0;
     e->pipe_count = 1;
@@ -169,7 +207,7 @@ static tr_pipeline_t *pipe_free_slot(tr_engine_t *e) {
 
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
                                   const char *shcode, const tr_session_policy_t *session,
-                                  double tick_raw,
+                                  double tick_raw, bool is_ovs,
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity) {
     if (e == 0 || instrument_id == 0 || session == 0) {
@@ -188,6 +226,7 @@ tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool i
     cfg.is_futures = is_futures;
     cfg.session = *session; /* 기동 종목 세션을 상속하지 않고 이 종목의 세션을 쓴다 */
     cfg.tick_raw = tick_raw;  /* 틱 크기도 종목별로 넘긴다 (해외선물은 자동 규칙이 다르다) */
+    cfg.is_ovs = is_ovs;
     tr_pipeline_t *p = pipe_free_slot(e);
     if (p == 0) {
         return 0;
@@ -224,11 +263,17 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
         tr_sma_relink(&e->pipe0.sma60);
         tr_gap1_relink(&e->pipe0.gap1);
         tr_dtl1_relink(&e->pipe0.dtl1);
+        if (e->pipe0.is_ovs) {
+            tr_fxmirae_relink(&e->pipe0.fx);
+            tr_fxv3_run_relink(&e->pipe0.fx3);
+        }
         /* score의 mid_hist(yl_var)는 relink 불필요: 저장소가 기증 슬롯 남부가 아니라
          * 호출자 소유 외부 버퍼(score_mid_storage)라 복사된 포인터가 그대로 올바르고,
          * 슬롯 재사용(add)도 새 파이프라인 자신의 저장소 인자를 쓴다 (score_1m.h 참조) */
         e->cfg.instrument_id = e->pipe0.instrument_id;
         e->cfg.is_futures = e->pipe0.is_futures;
+        e->cfg.is_ovs = e->pipe0.is_ovs;
+        e->cfg.tick_raw = e->pipe0.tick_raw;
         e->cfg.session = e->pipe0.session;
         snprintf(e->cfg.shcode, sizeof(e->cfg.shcode), "%s", e->pipe0.shcode);
         e->pipe_count--;
@@ -353,7 +398,16 @@ bool tr_engine_attach_market(tr_engine_t *e, tr_candle_t *storage, size_t capaci
 }
 
 static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *bar,
-                           bool closed, int64_t trading_day) {
+                           bool closed, int64_t trading_day,
+                           int fx_on, uint32_t fx_mask, const double fx_plot[TR_FXMIRAE_PLOTS],
+                           int fx3_on, int fx3_n, const uint16_t *fx3_id, const double *fx3_v,
+                           const uint32_t *fx3_rgb, const uint8_t *fx3_w,
+                           const tr_fxpgap_out_t *pg3, const tr_fxpgap_out_t *pg5,
+                           const tr_fxpgap_out_t *rg, const tr_fxpgap_out_t *mg,
+                           const tr_fxymae_out_t *ym, const tr_fxsniper_out_t *sn,
+                           int ray_on, int ray_sign, const double *ray_px, const double *ray_up,
+                           const double *ray_dn, const int8_t *ray_dir,
+                           int ob_valid, double ob_score, const tr_bar_status_t *frozen) {
     const tr_lr3_t *r = &p->lr3;
     const tr_score1m_t *sc = &p->score;
     const tr_market_t *m = &p->mkt;
@@ -362,9 +416,212 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
     const tr_dalign2_output_t *fa = &p->dalign;
     /* 곡선회귀선_평탄: 회귀선을 틱 단위로 반올림 (tick_scale 헬퍼 참조) */
     double pscale = tick_scale(p);
-    double reg_flat = floor(p->lr3.line / pscale + 0.5) * pscale;
+    bool reg_valid_v = r->reg_valid;
+    double line_v = r->line;
+    double slope_v = r->slope;
+    double r2_v = r->r2;
+    double pred_v[3] = {r->v4.pred_price[0], r->v4.pred_price[1], r->v4.pred_price[2]};
+    int pred_dir_v[3] = {r->v4.pred_dir[0], r->v4.pred_dir[1], r->v4.pred_dir[2]};
+    double resid_v = r->residual;
+    double pvol_v = r->v4.volatility;
+    int score_v = sc->score;
+    int ob_dir_v = sc->ob_dir;
+    int mkt_valid_v = (p->mkt_on && m->valid) ? 1 : 0;
+    double mkt_c = m->center, mkt_u1 = m->upper1, mkt_l1 = m->lower1, mkt_u2 = m->upper2, mkt_l2 = m->lower2;
+    int mem_valid_v = rm->mem_valid ? 1 : 0;
+    int mem_updated_v = rm->updated ? 1 : 0;
+    int mem_dir_v = rm->mem_dir;
+    double mem_price_v = rm->mem_price;
+    double mem_t[3], mem_u[3], mem_l[3];
+    memcpy(mem_t, rm->mem_target, sizeof(mem_t));
+    memcpy(mem_u, rm->mem_upper, sizeof(mem_u));
+    memcpy(mem_l, rm->mem_lower, sizeof(mem_l));
+    int pst_saved_v = ps->streak == ps->cfg.persist_bars && ps->saved_valid ? 1 : 0;
+    int pst_valid_v = ps->saved_valid ? 1 : 0;
+    int pst_dir_v = ps->saved_dir;
+    double pst_t[3], pst_u[3], pst_l[3];
+    memcpy(pst_t, ps->target, sizeof(pst_t));
+    memcpy(pst_u, ps->upper, sizeof(pst_u));
+    memcpy(pst_l, ps->lower, sizeof(pst_l));
+    int final_valid_v = fa->final_valid ? 1 : 0;
+    int final_dir_v = fa->final_dir;
+    int final_state_v = fa->final_state;
+    int final_strength_v = (int)fa->final_strength;
     int sma_ok = (p->sma5.valid && p->sma20.valid && p->sma60.valid) ? 1 : 0;
-    char payload[1792];
+    double sma_v[3] = {p->sma5.value, p->sma20.value, p->sma60.value};
+    int64_t day_v = trading_day;
+    int closed_v = closed ? 1 : 0;
+    if (frozen != 0) {
+        reg_valid_v = frozen->reg_valid;
+        line_v = frozen->reg_line;
+        slope_v = frozen->reg_slope;
+        r2_v = frozen->reg_r2;
+        memcpy(pred_v, frozen->pred, sizeof(pred_v));
+        pred_dir_v[0] = frozen->pred_dir[0];
+        pred_dir_v[1] = frozen->pred_dir[1];
+        pred_dir_v[2] = frozen->pred_dir[2];
+        resid_v = frozen->residual;
+        pvol_v = frozen->pvol;
+        score_v = frozen->score;
+        ob_dir_v = (ob_score > 0.0) - (ob_score < 0.0);
+        mkt_valid_v = frozen->mkt_valid ? 1 : 0;
+        mkt_c = frozen->mkt_center;
+        mkt_u1 = frozen->mkt_u1;
+        mkt_l1 = frozen->mkt_l1;
+        mkt_u2 = frozen->mkt_u2;
+        mkt_l2 = frozen->mkt_l2;
+        mem_valid_v = frozen->mem_valid ? 1 : 0;
+        mem_updated_v = frozen->mem_updated ? 1 : 0;
+        mem_dir_v = frozen->mem_dir;
+        mem_price_v = frozen->mem_price;
+        memcpy(mem_t, frozen->mem_target, sizeof(mem_t));
+        memcpy(mem_u, frozen->mem_upper, sizeof(mem_u));
+        memcpy(mem_l, frozen->mem_lower, sizeof(mem_l));
+        pst_saved_v = frozen->pst_saved ? 1 : 0;
+        pst_valid_v = frozen->pst_valid ? 1 : 0;
+        pst_dir_v = frozen->pst_dir;
+        memcpy(pst_t, frozen->pst_target, sizeof(pst_t));
+        memcpy(pst_u, frozen->pst_upper, sizeof(pst_u));
+        memcpy(pst_l, frozen->pst_lower, sizeof(pst_l));
+        final_valid_v = frozen->final_valid;
+        final_dir_v = frozen->final_dir;
+        final_state_v = frozen->final_state;
+        final_strength_v = frozen->final_strength;
+        sma_ok = frozen->sma_valid;
+        sma_v[0] = frozen->sma[0];
+        sma_v[1] = frozen->sma[1];
+        sma_v[2] = frozen->sma[2];
+        day_v = frozen->trading_day;
+        closed_v = frozen->closed ? 1 : closed_v;
+    }
+    double reg_flat = floor(line_v / pscale + 0.5) * pscale;
+    /* fx는 shcode 앞에만 붙인다. 국내 봉은 빈 문자열이라 기존 키 순서가 그대로다 */
+    char fxbuf[1024];
+    fxbuf[0] = '\0';
+    if (fx_on) {
+        int m = snprintf(fxbuf, sizeof(fxbuf), "\"fx\":[%u", fx_mask);
+        for (int k = 0; k < TR_FXMIRAE_PLOTS && m > 0 && (size_t)m < sizeof(fxbuf); k++) {
+            m += snprintf(fxbuf + m, sizeof(fxbuf) - (size_t)m, ",%.10g", fx_plot[k]);
+        }
+        if (m > 0 && (size_t)m < sizeof(fxbuf)) {
+            m += snprintf(fxbuf + m, sizeof(fxbuf) - (size_t)m, "],");
+        }
+        if (m < 0 || (size_t)m >= sizeof(fxbuf)) {
+            return; /* 잘린 fx는 발행하지 않는다 */
+        }
+    }
+    char fx3buf[3072];
+    fx3buf[0] = '\0';
+    if (fx3_on && fx3_n > 0 && fx3_id != 0 && fx3_v != 0 && fx3_rgb != 0 && fx3_w != 0) {
+        int m = snprintf(fx3buf, sizeof(fx3buf), "\"fx3\":[");
+        int nuse = fx3_n < TR_FX3_WIRE ? fx3_n : TR_FX3_WIRE;
+        for (int i = 0; i < nuse && m > 0 && (size_t)m < sizeof(fx3buf); i++) {
+            m += snprintf(fx3buf + m, sizeof(fx3buf) - (size_t)m, "%s[%u,%.10g,%u,%u]",
+                          i > 0 ? "," : "", (unsigned)fx3_id[i], fx3_v[i], fx3_rgb[i],
+                          (unsigned)fx3_w[i]);
+        }
+        if (m > 0 && (size_t)m < sizeof(fx3buf)) {
+            m += snprintf(fx3buf + m, sizeof(fx3buf) - (size_t)m, "],");
+        }
+        if (m < 0 || (size_t)m >= sizeof(fx3buf)) {
+            fx3buf[0] = '\0';
+        }
+    }
+    char pgbuf[700];
+    pgbuf[0] = '\0';
+    if (pg3 != 0 && pg5 != 0) {
+        const tr_fxpgap_out_t *pg[2] = {pg3, pg5};
+        int m = snprintf(pgbuf, sizeof(pgbuf), "\"pgap\":[");
+        for (int i = 0; i < 2 && m > 0 && (size_t)m < sizeof(pgbuf); i++) {
+            const tr_fxpgap_out_t *o = pg[i];
+            m += snprintf(pgbuf + m, sizeof(pgbuf) - (size_t)m,
+                          "%s[%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%u,%d,%u,%d,%d,%u,%d]",
+                          i > 0 ? "," : "", o->ready, o->gap, o->peak, o->prev_peak, o->ratio,
+                          o->prev_ratio, o->cnt, o->rgb4, o->width4, o->rgb5, o->plot3, o->plot5,
+                          o->union_rgb, o->union_w);
+        }
+        if (m > 0 && (size_t)m < sizeof(pgbuf)) {
+            m += snprintf(pgbuf + m, sizeof(pgbuf) - (size_t)m, "],");
+        }
+        if (m < 0 || (size_t)m >= sizeof(pgbuf)) {
+            pgbuf[0] = '\0';
+        }
+    }
+    char rgbuf[360];
+    rgbuf[0] = '\0';
+    if (rg != 0) {
+        int m = snprintf(rgbuf, sizeof(rgbuf),
+                         "\"rgap\":[%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%u,%d,%u,%d,%d],",
+                         rg->ready, rg->gap, rg->peak, rg->prev_peak, rg->ratio, rg->prev_ratio,
+                         rg->cnt, rg->rgb4, rg->width4, rg->rgb5, rg->plot3, rg->plot5);
+        if (m < 0 || (size_t)m >= sizeof(rgbuf)) {
+            rgbuf[0] = '\0';
+        }
+    }
+    char mgbuf[360];
+    mgbuf[0] = '\0';
+    if (mg != 0) {
+        int m = snprintf(mgbuf, sizeof(mgbuf),
+                         "\"mgap\":[%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%u,%d,%u,%d,%d],",
+                         mg->ready, mg->gap, mg->peak, mg->prev_peak, mg->ratio, mg->prev_ratio,
+                         mg->cnt, mg->rgb4, mg->width4, mg->rgb5, mg->plot3, mg->plot5);
+        if (m < 0 || (size_t)m >= sizeof(mgbuf)) {
+            mgbuf[0] = '\0';
+        }
+    }
+    char ymbuf[420];
+    ymbuf[0] = '\0';
+    if (ym != 0) {
+        int m = snprintf(ymbuf, sizeof(ymbuf),
+                         "\"ymae\":[%d,%d,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%d],",
+                         ym->pos, ym->prev_valid, ym->prev_hi, ym->prev_lo, ym->two_hi, ym->two_lo,
+                         ym->show_h1, ym->show_h2, ym->show_h3, ym->show_h4, ym->mark_h1, ym->mark_h2,
+                         ym->mark_h3, ym->mark_h4, ym->show_first);
+        if (m < 0 || (size_t)m >= sizeof(ymbuf)) {
+            ymbuf[0] = '\0';
+        }
+    }
+    char snbuf[280];
+    snbuf[0] = '\0';
+    if (sn != 0) {
+        int m = snprintf(snbuf, sizeof(snbuf),
+                         "\"sniper\":[%d,%d,%d,%d,%d,%.10g,%.10g,%u,%d,%d,%d,%d],",
+                         sn->score, sn->score_ex, sn->ratio_score, sn->stage, sn->compound,
+                         sn->target_ratio, sn->price_ratio, sn->rgb, sn->px_exit, sn->below,
+                         sn->above, sn->session_reset);
+        if (m < 0 || (size_t)m >= sizeof(snbuf)) {
+            snbuf[0] = '\0';
+        }
+    }
+    char pvcbuf[160];
+    pvcbuf[0] = '\0';
+    if (ym != 0) {
+        int m = snprintf(pvcbuf, sizeof(pvcbuf),
+                         "\"pvc\":[%d,%.10g,%d,%.10g,%d],",
+                         ym->show_price, ym->show_price_ratio, ym->show_vol, ym->show_vol_ratio,
+                         ym->show_both);
+        if (m < 0 || (size_t)m >= sizeof(pvcbuf)) {
+            pvcbuf[0] = '\0';
+        }
+    }
+    char raybuf[700];
+    raybuf[0] = '\0';
+    if (ray_on && ray_px != 0 && ray_up != 0 && ray_dn != 0 && ray_dir != 0) {
+        int m = snprintf(raybuf, sizeof(raybuf), "\"rays\":[%d", ray_sign);
+        for (int i = 0; i < 5 && m > 0 && (size_t)m < sizeof(raybuf); i++) {
+            m += snprintf(raybuf + m, sizeof(raybuf) - (size_t)m, ",[%.10g,%.10g,%.10g,%d]",
+                          ray_px[i], ray_up[i], ray_dn[i], (int)ray_dir[i]);
+        }
+        if (m > 0 && (size_t)m < sizeof(raybuf)) {
+            m += snprintf(raybuf + m, sizeof(raybuf) - (size_t)m, "],");
+        }
+        if (m < 0 || (size_t)m >= sizeof(raybuf)) {
+            raybuf[0] = '\0';
+        }
+    } else if (ray_px != 0) {
+        snprintf(raybuf, sizeof(raybuf), "\"rays\":[],");
+    }
+    char payload[8192];
     int n = snprintf(payload, sizeof(payload),
         "{\"bar_open_time\":\"%lld\",\"closed\":%d,"
         "\"ohlc\":[%lld,%lld,%lld,%lld],"
@@ -377,28 +634,28 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
         "\"mem\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"pst\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g,\"tick\":%g,\"day\":%lld,"
-        "\"sma\":[%d,%.10g,%.10g,%.10g],\"shcode\":\"%s\"}",
-        (long long)bar->open_time_us, closed ? 1 : 0,
+        "\"sma\":[%d,%.10g,%.10g,%.10g],%s%s%s%s%s%s%s%s%s\"shcode\":\"%s\"}",
+        (long long)bar->open_time_us, closed_v,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
-        r->reg_valid ? 1 : 0, r->line, r->slope, r->r2,
-        r->v4.pred_price[0], r->v4.pred_price[1], r->v4.pred_price[2],
-        r->v4.pred_dir[0], r->v4.pred_dir[1], r->v4.pred_dir[2],
-        r->residual, r->v4.volatility,
-        sc->score, sc->future_dir, sc->market_dir, sc->reg_dir, sc->ob_dir,
-        p->obd2.validity == TR_VALIDITY_VALID ? 1 : 0, p->obd2.score, p->generation,
-        (p->mkt_on && m->valid) ? 1 : 0, m->center, m->upper1, m->lower1, m->upper2, m->lower2,
-        rm->mem_valid ? 1 : 0, rm->updated ? 1 : 0, rm->mem_dir, rm->mem_price,
-        rm->mem_target[0], rm->mem_target[1], rm->mem_target[2],
-        rm->mem_upper[0], rm->mem_upper[1], rm->mem_upper[2],
-        rm->mem_lower[0], rm->mem_lower[1], rm->mem_lower[2],
-        ps->streak == ps->cfg.persist_bars && ps->saved_valid ? 1 : 0,
-        ps->saved_valid ? 1 : 0, ps->saved_dir,
-        ps->target[0], ps->target[1], ps->target[2],
-        ps->upper[0], ps->upper[1], ps->upper[2],
-        ps->lower[0], ps->lower[1], ps->lower[2],
-        fa->final_valid ? 1 : 0, fa->final_dir, fa->final_state, (int)fa->final_strength,
-        reg_flat, tick_scale(p), (long long)trading_day,
-        sma_ok, p->sma5.value, p->sma20.value, p->sma60.value, p->shcode);
+        reg_valid_v ? 1 : 0, line_v, slope_v, r2_v,
+        pred_v[0], pred_v[1], pred_v[2],
+        pred_dir_v[0], pred_dir_v[1], pred_dir_v[2],
+        resid_v, pvol_v,
+        score_v, sc->future_dir, sc->market_dir, sc->reg_dir, ob_dir_v,
+        ob_valid, ob_score,
+        p->generation,
+        mkt_valid_v, mkt_c, mkt_u1, mkt_l1, mkt_u2, mkt_l2,
+        mem_valid_v, mem_updated_v, mem_dir_v, mem_price_v,
+        mem_t[0], mem_t[1], mem_t[2],
+        mem_u[0], mem_u[1], mem_u[2],
+        mem_l[0], mem_l[1], mem_l[2],
+        pst_saved_v, pst_valid_v, pst_dir_v,
+        pst_t[0], pst_t[1], pst_t[2],
+        pst_u[0], pst_u[1], pst_u[2],
+        pst_l[0], pst_l[1], pst_l[2],
+        final_valid_v, final_dir_v, final_state_v, final_strength_v,
+        reg_flat, tick_scale(p), (long long)day_v,
+        sma_ok, sma_v[0], sma_v[1], sma_v[2], fxbuf, fx3buf, pgbuf, rgbuf, mgbuf, ymbuf, snbuf, pvcbuf, raybuf, p->shcode);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -416,21 +673,57 @@ int tr_bar_status_format_ind(const tr_bar_status_t *st, double ps_flat, bool fir
     if (st == 0 || buf == 0 || cap == 0) {
         return 0;
     }
-    return snprintf(buf, cap,
-                    "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d,"
-                    "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%d,%lld,%d,%.10g,%.10g,%.10g]",
-                    first ? "" : ",",
-                    st->closed ? 1 : 0, st->reg_valid ? 1 : 0, st->reg_line, st->reg_r2,
-                    st->pred[0], st->pred[1], st->pred[2],
-                    st->score, st->ob_valid ? 1 : 0, st->ob_score,
-                    st->residual, st->pvol,
-                    st->pred_dir[0], st->pred_dir[1], st->pred_dir[2],
-                    st->mkt_valid ? 1 : 0, st->mkt_center, st->mkt_u1, st->mkt_l1,
-                    st->mkt_u2, st->mkt_l2,
-                    st->final_valid, st->final_dir, st->final_state, st->final_strength,
-                    floor(st->reg_line / ps_flat + 0.5) * ps_flat,
-                    (int)ps_flat, (long long)st->trading_day,
-                    st->sma_valid, st->sma[0], st->sma[1], st->sma[2]);
+    int n = snprintf(buf, cap,
+                     "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%.10g,%.10g,%.10g,%d,%d,%d,"
+                     "%d,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%d,%lld,%d,%.10g,%.10g,%.10g",
+                     first ? "" : ",",
+                     st->closed ? 1 : 0, st->reg_valid ? 1 : 0, st->reg_line, st->reg_r2,
+                     st->pred[0], st->pred[1], st->pred[2],
+                     st->score, st->ob_valid ? 1 : 0, st->ob_score,
+                     st->residual, st->pvol,
+                     st->pred_dir[0], st->pred_dir[1], st->pred_dir[2],
+                     st->mkt_valid ? 1 : 0, st->mkt_center, st->mkt_u1, st->mkt_l1,
+                     st->mkt_u2, st->mkt_l2,
+                     st->final_valid, st->final_dir, st->final_state, st->final_strength,
+                     floor(st->reg_line / ps_flat + 0.5) * ps_flat,
+                     (int)ps_flat, (long long)st->trading_day,
+                     st->sma_valid, st->sma[0], st->sma[1], st->sma[2]);
+    if (n < 0) {
+        return n;
+    }
+    if (st->fx_on) {
+        int m = 0;
+        if ((size_t)n < cap) {
+            m = snprintf(buf + n, cap - (size_t)n, ",%u", st->fx_mask);
+        } else {
+            m = snprintf(0, 0, ",%u", st->fx_mask);
+        }
+        if (m < 0) {
+            return m;
+        }
+        n += m;
+        for (int k = 0; k < TR_FXMIRAE_PLOTS; k++) {
+            if ((size_t)n < cap) {
+                m = snprintf(buf + n, cap - (size_t)n, ",%.10g", st->fx_plot[k]);
+            } else {
+                m = snprintf(0, 0, ",%.10g", st->fx_plot[k]);
+            }
+            if (m < 0) {
+                return m;
+            }
+            n += m;
+        }
+    }
+    if ((size_t)n < cap) {
+        int m = snprintf(buf + n, cap - (size_t)n, "]");
+        if (m < 0) {
+            return m;
+        }
+        n += m;
+    } else {
+        n += 1; /* 닫는 괄호 */
+    }
+    return n;
 }
 
 int tr_bar_status_format_mem(const tr_bar_status_t *st, bool first, char *buf, size_t cap) {
@@ -452,11 +745,75 @@ int tr_bar_status_format_mem(const tr_bar_status_t *st, bool first, char *buf, s
                     st->mem_show_lower ? 1 : 0, st->mem_reset ? 1 : 0);
 }
 
+int tr_bar_status_format_fx3(const tr_bar_status_t *st, bool first, char *buf, size_t cap) {
+    if (st == 0 || buf == 0 || cap == 0) {
+        return 0;
+    }
+    int n = snprintf(buf, cap, "%s[", first ? "" : ",");
+    if (n < 0) {
+        return n;
+    }
+    int nuse = st->fx3_on ? st->fx3_n : 0;
+    if (nuse > TR_FX3_WIRE) {
+        nuse = TR_FX3_WIRE;
+    }
+    for (int i = 0; i < nuse; i++) {
+        int m;
+        if ((size_t)n < cap) {
+            m = snprintf(buf + n, cap - (size_t)n, "%s[%u,%.10g,%u,%u]",
+                         i > 0 ? "," : "", (unsigned)st->fx3_id[i], st->fx3_v[i],
+                         st->fx3_rgb[i], (unsigned)st->fx3_w[i]);
+        } else {
+            m = snprintf(0, 0, "%s[%u,%.10g,%u,%u]",
+                         i > 0 ? "," : "", (unsigned)st->fx3_id[i], st->fx3_v[i],
+                         st->fx3_rgb[i], (unsigned)st->fx3_w[i]);
+        }
+        if (m < 0) {
+            return m;
+        }
+        n += m;
+    }
+    if ((size_t)n < cap) {
+        int m = snprintf(buf + n, cap - (size_t)n, "]");
+        if (m < 0) {
+            return m;
+        }
+        n += m;
+    } else {
+        n += 1;
+    }
+    return n;
+}
+
+/* 상태 링에서 이 봉의 슬롯을 찾는다. 최신→과거 순이고, 목표보다 과거로 내려가면 없다. */
+static bool find_bar_status(const tr_pipeline_t *p, tr_time_us_t open, tr_bar_status_t *out) {
+    if (p == 0 || out == 0 || !p->status_ring_on) {
+        return false;
+    }
+    size_t nslot = tr_ring_count(&p->status_ring);
+    for (size_t i = 0; i < nslot; i++) {
+        tr_bar_status_t old;
+        if (!tr_ring_at(&p->status_ring, i, &old) || old.open_time_us < open) {
+            break;
+        }
+        if (old.open_time_us == open) {
+            *out = old;
+            return true;
+        }
+    }
+    return false;
+}
+
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar) {
     tr_pipeline_t *p = (tr_pipeline_t *)ctx;
     tr_engine_t *e = p->engine;
     if (bar->timeframe_sec != e->cfg.timeframe_sec) {
         return;
+    }
+    if (e->candle_fn != 0 && bar->state == TR_CANDLE_CLOSED &&
+        (bar->quality & TR_QUALITY_FILLED_EMPTY) == 0 &&
+        (env->kind == TR_EVENT_CANDLE_CLOSED || env->kind == TR_EVENT_CANDLE_UPDATE)) {
+        e->candle_fn(e->candle_fn_ctx, bar);
     }
 
     /* 지표용 내장 컨텍스트 계산: trading day / 당일 첫 봉 / 새 봉 여부
@@ -466,9 +823,13 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     bool session_first = !p->has_prev_day || day != p->prev_trading_day;
     bool is_new_bar = !p->has_prev_bar || bar->open_time_us != p->prev_bar_open;
     /* 과거 봉 정정(늦은 틱): open_time이 스트림 위치보다 과거인 이벤트. 정정은 누적
-     * 상태(이평선 창·⑤ 체인·위치 마커)를 전진시키지 않는다 (⑤ 체인 게이트와 동일) */
+     * 상태(회귀·이평·점수·마켓·기억·지속·⑤ 체인·위치 마커)를 전진시키지 않는다.
+     * 그 봉에 이미 적어 둔 지표는 슬롯에 그대로 둔다. */
     bool is_correction = p->has_prev_bar && bar->open_time_us < p->prev_bar_open;
     bool closed = env->kind == TR_EVENT_CANDLE_CLOSED;
+    tr_bar_status_t frozen;
+    memset(&frozen, 0, sizeof(frozen));
+    bool have_frozen = is_correction && find_bar_status(p, bar->open_time_us, &frozen);
 
     tr_ind_eval_t ev;
     memset(&ev, 0, sizeof(ev));
@@ -480,12 +841,14 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     ev.compress = TR_COMPRESS_MIN;
     ev.bar_interval = e->cfg.timeframe_sec / 60;
 
-    tr_lr3_eval(&p->lr3, &ev);
-    if (closed) {
-        /* 확정 봉의 H/L/C를 V4의 ATR에 반영 (증분 계약) */
-        tr_lp4_on_bar_closed(&p->lr3.v4, (double)bar->high, (double)bar->low, (double)bar->close);
+    if (!is_correction) {
+        tr_lr3_eval(&p->lr3, &ev);
+        if (closed) {
+            /* 확정 봉의 H/L/C를 V4의 ATR에 반영 (증분 계약) */
+            tr_lp4_on_bar_closed(&p->lr3.v4, (double)bar->high, (double)bar->low, (double)bar->close);
+        }
+        tr_htf_curve_eval(&p->htf, (double)bar->high, (double)bar->low);
     }
-    tr_htf_curve_eval(&p->htf, (double)bar->high, (double)bar->low);
 
     /* 이평선 5/20/60: 진행 봉 재호출은 현재 슬롯 덮어쓰기 (tr_sma_on_bar 계약).
      * 과거 봉 정정 이벤트는 창에서 제외한다 — 정정 봉은 is_new_bar=true로 보여
@@ -507,9 +870,46 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     sin.reg_valid = p->lr3.reg_valid;
     sin.reg_r2 = p->lr3.r2;
     sin.reg_flat_line = p->lr3.line;
-    /* 호가 유효할 때만 점수를 사용한다. 없는 경로(파일 재생)에서는 0 (유효로 위장하지 않음) */
-    sin.ob_score = p->obd2.validity == TR_VALIDITY_VALID ? p->obd2.score : 0.0;
-    tr_score1m_on_bar(&p->score, &sin);
+    /* 국내: 호가 유효할 때만. 해외선물 1분봉: 호가 자리에 OSF 결합 점수.
+     * 정정 봉은 흐름을 밀지 않고, 그 봉 슬롯에 적어 둔 점수를 다시 쓴다. */
+    int bar_ob_valid = 0;
+    double bar_ob_score = 0.0;
+    if (p->is_ovs && e->cfg.timeframe_sec == 60 && !is_correction) {
+        tr_osf_flow_input_t oin = {
+            .high = (double)bar->high,
+            .low = (double)bar->low,
+            .close = (double)bar->close,
+            .volume = (double)bar->volume,
+            .bar_open = bar->open_time_us,
+        };
+        tr_osf_combo_eval(&p->osf, &oin);
+        bar_ob_valid = p->osf.valid ? 1 : 0;
+        bar_ob_score = bar_ob_valid ? p->osf.score : 0.0;
+    } else if (p->is_ovs && e->cfg.timeframe_sec == 60 && is_correction && p->status_ring_on) {
+        size_t nslot = tr_ring_count(&p->status_ring);
+        for (size_t i = 0; i < nslot; i++) {
+            tr_bar_status_t old;
+            if (!tr_ring_at(&p->status_ring, i, &old) || old.open_time_us < bar->open_time_us) {
+                break;
+            }
+            if (old.open_time_us == bar->open_time_us) {
+                bar_ob_valid = old.ob_valid ? 1 : 0;
+                bar_ob_score = bar_ob_valid ? old.ob_score : 0.0;
+                break;
+            }
+        }
+    } else if (!p->is_ovs && p->obd2.validity == TR_VALIDITY_VALID) {
+        bar_ob_valid = 1;
+        bar_ob_score = p->obd2.score;
+    }
+    sin.ob_score = bar_ob_score;
+    /* 정정은 점수 창에 과거 고저를 넣지 않는다. 그 봉의 점수는 슬롯 값을 유지한다. */
+    if (!is_correction) {
+        tr_score1m_on_bar(&p->score, &sin);
+    } else if (have_frozen) {
+        bar_ob_valid = frozen.ob_valid ? 1 : 0;
+        bar_ob_score = frozen.ob_valid ? frozen.ob_score : 0.0;
+    }
 
     /* ⑤ 매매 상태 체인 (원본: DataCompress==2 && BarInterval==1 게이트).
      * 봉당 1회 상태 진행: bar_index는 새 봉에서만 증가하고, 모듈은 세션 경계를
@@ -568,8 +968,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     double ps = tick_scale(p);
     double line_flat = floor(p->lr3.line / ps + 0.5) * ps;
 
-    /* ⑧ 마켓 밴드 */
-    if (p->mkt_on) {
+    /* ⑧ 마켓 밴드. 정정 봉은 창을 밀지 않는다. */
+    if (!is_correction && p->mkt_on) {
         tr_market_on_bar(&p->mkt, bar, session_first, line_flat);
     }
 
@@ -591,8 +991,9 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         }
     }
 
-    /* ⑥ 방향 기억 (운영최종방향 = ⑤ 일봉 체인 결과, 무효 시 회귀선_구분 부호 폴백) */
-    {
+    /* ⑥ 방향 기억 (운영최종방향 = ⑤ 일봉 체인 결과, 무효 시 회귀선_구분 부호 폴백).
+     * 정정은 기억 세션을 밀지 않는다. */
+    if (!is_correction) {
         tr_regmem_input_t rin;
         memset(&rin, 0, sizeof(rin));
         rin.reg_valid = p->lr3.reg_valid;
@@ -617,8 +1018,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         tr_regmem_on_bar(&p->regmem, &rin);
     }
 
-    /* ⑦ 지속 사진 */
-    {
+    /* ⑦ 지속 사진. 정정은 유지 봉수를 세지 않는다. */
+    if (!is_correction) {
         tr_persist_input_t pin;
         memset(&pin, 0, sizeof(pin));
         pin.reg_valid = p->lr3.reg_valid;
@@ -635,6 +1036,303 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         tr_persist_on_bar(&p->persist, &pin);
     }
 
+    /* 해외선물 미래곡선 V1. 1분봉만, 과거 봉 정정은 세션 상태를 밀지 않는다.
+     * 직전 완료 봉은 링 [1] (콜백 시점에 현재 봉이 [0]이다). */
+    int fx_on = 0;
+    uint32_t fx_mask = 0;
+    double fx_plot[TR_FXMIRAE_PLOTS];
+    memset(fx_plot, 0, sizeof(fx_plot));
+    int fx3_on = 0;
+    int fx3_n = 0;
+    uint16_t fx3_id[TR_FX3_WIRE];
+    double fx3_v[TR_FX3_WIRE];
+    uint32_t fx3_rgb[TR_FX3_WIRE];
+    uint8_t fx3_w[TR_FX3_WIRE];
+    memset(fx3_id, 0, sizeof(fx3_id));
+    memset(fx3_v, 0, sizeof(fx3_v));
+    memset(fx3_rgb, 0, sizeof(fx3_rgb));
+    memset(fx3_w, 0, sizeof(fx3_w));
+    tr_fxpgap_out_t pgout[2];
+    tr_fxpgap_out_t rgout;
+    tr_fxpgap_out_t mgout;
+    tr_fxymae_out_t ymout;
+    tr_fxsniper_out_t snout;
+    int ray_on = 0;
+    int ray_sign = 0;
+    double ray_px[5], ray_up[5], ray_dn[5];
+    int8_t ray_dir[5];
+    memset(ray_px, 0, sizeof(ray_px));
+    memset(ray_up, 0, sizeof(ray_up));
+    memset(ray_dn, 0, sizeof(ray_dn));
+    memset(ray_dir, 0, sizeof(ray_dir));
+    memset(pgout, 0, sizeof(pgout));
+    memset(&rgout, 0, sizeof(rgout));
+    memset(&mgout, 0, sizeof(mgout));
+    memset(&ymout, 0, sizeof(ymout));
+    memset(&snout, 0, sizeof(snout));
+    if (p->is_ovs && e->cfg.timeframe_sec == 60 && !is_correction) {
+        tr_fxmirae_input_t fin;
+        memset(&fin, 0, sizeof(fin));
+        civil_stamp(bar->open_time_us, p->session.utc_offset_min, &fin.bar.date, &fin.bar.time);
+        fin.bar.bar_open = bar->open_time_us;
+        fin.bar.high = (double)bar->high;
+        fin.bar.low = (double)bar->low;
+        fin.bar.close = (double)bar->close;
+        fin.bar.volume = (double)bar->volume;
+        tr_candle_t prev;
+        if (tr_ring_count(&p->bb.bars) >= 2 && tr_ring_at(&p->bb.bars, 1, &prev)) {
+            fin.has_prev = true;
+            civil_stamp(prev.open_time_us, p->session.utc_offset_min, &fin.prev_date, &fin.prev_time);
+            fin.prev_h = (double)prev.high;
+            fin.prev_l = (double)prev.low;
+            fin.prev_c = (double)prev.close;
+            fin.prev_v = (double)prev.volume;
+        }
+        tr_fxmirae_eval(&p->fx, &fin);
+        fx_on = 1;
+        for (int k = 0; k < TR_FXMIRAE_PLOTS; k++) {
+            if (p->fx.plots[k].on) {
+                fx_mask |= 1u << k;
+            }
+            fx_plot[k] = p->fx.plots[k].value;
+        }
+        int64_t ymd = 0, tod = 0;
+        civil_stamp(bar->open_time_us, p->session.utc_offset_min, &ymd, &tod);
+        tr_fxv3_run_eval(&p->fx3, ymd, tod, (double)bar->open, (double)bar->high,
+                         (double)bar->low, (double)bar->close, (double)bar->volume,
+                         bar->open_time_us);
+        const tr_fxv3_t *v3 = tr_fxv3_run_view(&p->fx3);
+        fx3_on = 1;
+        if (v3 != 0) {
+            for (int k = 1; k < TR_FXV3_PLOT_N && fx3_n < TR_FX3_WIRE; k++) {
+                if (!v3->plots[k].on) {
+                    continue;
+                }
+                fx3_id[fx3_n] = (uint16_t)k;
+                fx3_v[fx3_n] = v3->plots[k].value;
+                fx3_rgb[fx3_n] = v3->plots[k].rgb;
+                fx3_w[fx3_n] = (uint8_t)v3->plots[k].width;
+                fx3_n++;
+            }
+        }
+        int64_t key = tr_fx_session_key_v1(ymd, tod);
+        bool reset = !p->pgap_has_key || key != p->pgap_key;
+        tr_fxpgap_input_t gin;
+        memset(&gin, 0, sizeof(gin));
+        gin.session_reset = reset;
+        gin.bar_open = bar->open_time_us;
+        gin.high = (double)bar->high;
+        gin.low = (double)bar->low;
+        gin.close = (double)bar->close;
+        for (int k = 0; k < 5; k++) {
+            gin.target[k] = p->fx.fv.out.persist_target[k];
+        }
+        tr_fxpgap_eval(&p->pgap3, &gin);
+        tr_fxpgap_eval(&p->pgap5, &gin);
+        p->pgap_key = key;
+        p->pgap_has_key = true;
+        pgout[0] = p->pgap3.out;
+        pgout[1] = p->pgap5.out;
+        tr_fxpgap_input_t rin;
+        memset(&rin, 0, sizeof(rin));
+        rin.session_reset = reset;
+        rin.bar_open = bar->open_time_us;
+        rin.high = (double)bar->high;
+        rin.low = (double)bar->low;
+        rin.target[0] = p->fx.fv.out.reg_flat;
+        rin.target[1] = p->fx.syn5.out_reg_valid ? p->fx.syn5.out_reg : 0.0;
+        rin.target[2] = p->fx.syn15.out_reg_valid ? p->fx.syn15.out_reg : 0.0;
+        rin.target[3] = p->fx.syn30.out_reg_valid ? p->fx.syn30.out_reg : 0.0;
+        tr_fxpgap_eval(&p->rgap, &rin);
+        rgout = p->rgap.out;
+        tr_fxpgap_input_t min;
+        memset(&min, 0, sizeof(min));
+        min.session_reset = reset;
+        min.bar_open = bar->open_time_us;
+        min.high = (double)bar->high;
+        min.low = (double)bar->low;
+        min.close = (double)bar->close;
+        min.target[0] = p->fx.fv.out.market_center;
+        min.target[1] = p->fx.syn5.out_mkt_valid ? p->fx.syn5.out_mkt : 0.0;
+        min.target[2] = p->fx.syn15.out_mkt_valid ? p->fx.syn15.out_mkt : 0.0;
+        min.target[3] = p->fx.syn30.out_mkt_valid ? p->fx.syn30.out_mkt : 0.0;
+        tr_fxpgap_eval(&p->mgap, &min);
+        tr_fxunion_paint(&p->pgap3, 1, p->rgap.out.ready, p->rgap.out.ratio, p->mgap.out.ready,
+                         p->mgap.out.ratio, (double)bar->high, (double)bar->low);
+        tr_fxunion_paint(&p->pgap5, 0, 0, 0, 0, 0, (double)bar->high, (double)bar->low);
+        pgout[0] = p->pgap3.out;
+        pgout[1] = p->pgap5.out;
+        mgout = p->mgap.out;
+        tr_fxymae_input_t yin;
+        memset(&yin, 0, sizeof(yin));
+        yin.session_reset = reset;
+        yin.targets_ready = gin.target[0] != 0.0 && gin.target[1] != 0.0 && gin.target[2] != 0.0;
+        yin.bar_open = bar->open_time_us;
+        yin.high = (double)bar->high;
+        yin.low = (double)bar->low;
+        yin.close = (double)bar->close;
+        yin.volume = (double)bar->volume;
+        yin.t1 = gin.target[0];
+        yin.t2 = gin.target[1];
+        yin.t3 = gin.target[2];
+        yin.union_w = p->pgap3.out.union_w;
+        yin.reg_ready = p->rgap.out.ready;
+        yin.mkt_ready = p->mgap.out.ready;
+        yin.reg_ratio = p->rgap.out.ratio;
+        yin.mkt_ratio = p->mgap.out.ratio;
+        tr_fxymae_eval(&p->ymae, &yin);
+        ymout = p->ymae.out;
+        tr_fxsniper_input_t snin;
+        memset(&snin, 0, sizeof(snin));
+        snin.session_reset = reset;
+        snin.bar_open = bar->open_time_us;
+        snin.high = (double)bar->high;
+        snin.low = (double)bar->low;
+        snin.close = (double)bar->close;
+        for (int k = 0; k < 5; k++) {
+            snin.target[k] = gin.target[k];
+        }
+        snin.break_ready = ymout.ready && p->ymae.two_max > 0.0;
+        snin.prev_range_valid = ymout.prev_valid;
+        snin.pos = ymout.pos;
+        snin.first_break = ymout.first_break;
+        snin.price_ratio = 100.0;
+        if (p->ymae.two_max > 0.0) {
+            double span = ymout.two_hi - ymout.two_lo;
+            snin.price_ratio = span / p->ymae.two_max * 100.0;
+        }
+        snin.three_ready = pgout[0].ready;
+        snin.reg_ready = rgout.ready;
+        snin.mkt_ready = mgout.ready;
+        snin.three_ratio = pgout[0].ratio;
+        snin.reg_ratio = rgout.ratio;
+        snin.mkt_ratio = mgout.ratio;
+        snin.below = p->pgap3.below;
+        snin.above = p->pgap3.above;
+        tr_fxsniper_eval(&p->sniper, &snin);
+        snout = p->sniper.out;
+        if (!reset && p->fx3.reg.reg_valid) {
+            double base = p->fx3.reg.residual;
+            if (p->fx3.pred.volatility * 0.25 > base) {
+                base = p->fx3.pred.volatility * 0.25;
+            }
+            ray_on = 1;
+            ray_sign = p->fx3.reg.line_sign;
+            for (int k = 0; k < 5; k++) {
+                double horizon = (double)p->fx3.view.cfg.predict_bars[k];
+                if (horizon < 1.0) {
+                    horizon = 1.0;
+                }
+                double span = base * sqrt(horizon);
+                ray_px[k] = p->fx3.pred.pred_price[k];
+                ray_up[k] = ray_px[k] + span;
+                ray_dn[k] = ray_px[k] - span;
+                ray_dir[k] = (int8_t)p->fx3.pred.pred_dir[k];
+            }
+        }
+    } else if (is_correction && p->status_ring_on) {
+        /* 정정 봉은 모듈을 다시 돌리지 않는다. 그 슬롯에 이미 있던 fx를 유지한다 */
+        size_t nslot = tr_ring_count(&p->status_ring);
+        for (size_t i = 0; i < nslot; i++) {
+            tr_bar_status_t old;
+            if (!tr_ring_at(&p->status_ring, i, &old) || old.open_time_us < bar->open_time_us) {
+                break;
+            }
+            if (old.open_time_us == bar->open_time_us) {
+                fx_on = old.fx_on;
+                fx_mask = old.fx_mask;
+                memcpy(fx_plot, old.fx_plot, sizeof(fx_plot));
+                fx3_on = old.fx3_on;
+                fx3_n = old.fx3_n;
+                memcpy(fx3_id, old.fx3_id, sizeof(fx3_id));
+                memcpy(fx3_v, old.fx3_v, sizeof(fx3_v));
+                memcpy(fx3_rgb, old.fx3_rgb, sizeof(fx3_rgb));
+                memcpy(fx3_w, old.fx3_w, sizeof(fx3_w));
+                for (int pi = 0; pi < 2; pi++) {
+                    pgout[pi].ready = old.pg_ready[pi];
+                    pgout[pi].gap = old.pg_v[pi][0];
+                    pgout[pi].peak = old.pg_v[pi][1];
+                    pgout[pi].prev_peak = old.pg_v[pi][2];
+                    pgout[pi].ratio = old.pg_v[pi][3];
+                    pgout[pi].prev_ratio = old.pg_v[pi][4];
+                    pgout[pi].cnt = old.pg_v[pi][5];
+                    pgout[pi].rgb4 = old.pg_c4[pi];
+                    pgout[pi].rgb5 = old.pg_c5[pi];
+                    pgout[pi].width4 = old.pg_w4[pi];
+                    pgout[pi].plot3 = old.pg_plot3[pi];
+                    pgout[pi].plot5 = old.pg_plot5[pi];
+                }
+                rgout.ready = old.rg_ready;
+                rgout.gap = old.rg_v[0];
+                rgout.peak = old.rg_v[1];
+                rgout.prev_peak = old.rg_v[2];
+                rgout.ratio = old.rg_v[3];
+                rgout.prev_ratio = old.rg_v[4];
+                rgout.cnt = old.rg_v[5];
+                rgout.rgb4 = old.rg_c4;
+                rgout.rgb5 = old.rg_c5;
+                rgout.width4 = old.rg_w4;
+                rgout.plot3 = old.rg_plot3;
+                rgout.plot5 = old.rg_plot5;
+                mgout.ready = old.mg_ready;
+                mgout.gap = old.mg_v[0];
+                mgout.peak = old.mg_v[1];
+                mgout.prev_peak = old.mg_v[2];
+                mgout.ratio = old.mg_v[3];
+                mgout.prev_ratio = old.mg_v[4];
+                mgout.cnt = old.mg_v[5];
+                mgout.rgb4 = old.mg_c4;
+                mgout.rgb5 = old.mg_c5;
+                mgout.width4 = old.mg_w4;
+                mgout.plot3 = old.mg_plot3;
+                mgout.plot5 = old.mg_plot5;
+                pgout[0].union_rgb = old.pg_union_rgb[0];
+                pgout[1].union_rgb = old.pg_union_rgb[1];
+                pgout[0].union_w = old.pg_union_w[0];
+                pgout[1].union_w = old.pg_union_w[1];
+                ymout.pos = old.ym_pos;
+                ymout.prev_valid = old.ym_prev_valid;
+                ymout.prev_hi = old.ym_prev_hi;
+                ymout.prev_lo = old.ym_prev_lo;
+                ymout.two_hi = old.ym_two_hi;
+                ymout.two_lo = old.ym_two_lo;
+                ymout.show_h1 = old.ym_show_h1;
+                ymout.show_h2 = old.ym_show_h2;
+                ymout.show_h3 = old.ym_show_h3;
+                ymout.show_h4 = old.ym_show_h4;
+                ymout.show_first = old.ym_show_first;
+                ymout.mark_h1 = old.ym_mark_h1;
+                ymout.mark_h2 = old.ym_mark_h2;
+                ymout.mark_h3 = old.ym_mark_h3;
+                ymout.mark_h4 = old.ym_mark_h4;
+                snout.score = old.sn_score;
+                snout.score_ex = old.sn_ex;
+                snout.ratio_score = old.sn_ratio;
+                snout.stage = old.sn_stage;
+                snout.compound = old.sn_compound;
+                snout.target_ratio = old.sn_tgt;
+                snout.price_ratio = old.sn_px;
+                snout.rgb = old.sn_rgb;
+                snout.px_exit = old.sn_px_exit;
+                snout.below = old.sn_below;
+                snout.above = old.sn_above;
+                snout.session_reset = old.sn_reset;
+                ymout.show_price = old.pvc_price_on;
+                ymout.show_price_ratio = old.pvc_price;
+                ymout.show_vol = old.pvc_vol_on;
+                ymout.show_vol_ratio = old.pvc_vol;
+                ymout.show_both = old.pvc_both;
+                ray_on = old.ray_on;
+                ray_sign = old.ray_sign;
+                memcpy(ray_px, old.ray_px, sizeof(ray_px));
+                memcpy(ray_up, old.ray_up, sizeof(ray_up));
+                memcpy(ray_dn, old.ray_dn, sizeof(ray_dn));
+                memcpy(ray_dir, old.ray_dir, sizeof(ray_dir));
+                break;
+            }
+        }
+    }
+
     /* 봉 링과 open_time 기준으로 정합을 맞춰 봉별 지표를 기록한다 (스냅샷 복원용).
      * 새 봉이면 push, 현재 봉 갱신이면 최신 교체, 늦은 정정은 해당 슬롯만 고친다. */
     if (p->status_ring_on) {
@@ -644,6 +1342,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         st.closed = closed;
         st.reg_valid = p->lr3.reg_valid;
         st.reg_line = p->lr3.line;
+        st.reg_slope = p->lr3.slope;
         st.reg_r2 = p->lr3.r2;
         st.pred[0] = p->lr3.v4.pred_price[0];
         st.pred[1] = p->lr3.v4.pred_price[1];
@@ -656,8 +1355,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         memcpy(st.upper, upper, sizeof(upper));
         memcpy(st.lower, lower, sizeof(lower));
         st.score = p->score.score;
-        st.ob_valid = p->obd2.validity == TR_VALIDITY_VALID;
-        st.ob_score = p->obd2.score;
+        st.ob_valid = bar_ob_valid;
+        st.ob_score = bar_ob_score;
         st.mkt_valid = p->mkt_on && p->mkt.valid;
         st.mkt_center = p->mkt.center;
         st.mkt_u1 = p->mkt.upper1;
@@ -691,6 +1390,101 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         st.sma[0] = p->sma5.value;
         st.sma[1] = p->sma20.value;
         st.sma[2] = p->sma60.value;
+        st.fx_on = fx_on;
+        st.fx_mask = fx_mask;
+        memcpy(st.fx_plot, fx_plot, sizeof(st.fx_plot));
+        st.fx3_on = fx3_on;
+        st.fx3_n = fx3_n;
+        memcpy(st.fx3_id, fx3_id, sizeof(st.fx3_id));
+        memcpy(st.fx3_v, fx3_v, sizeof(st.fx3_v));
+        memcpy(st.fx3_rgb, fx3_rgb, sizeof(st.fx3_rgb));
+        memcpy(st.fx3_w, fx3_w, sizeof(st.fx3_w));
+        for (int pi = 0; pi < 2; pi++) {
+            st.pg_ready[pi] = pgout[pi].ready;
+            st.pg_v[pi][0] = pgout[pi].gap;
+            st.pg_v[pi][1] = pgout[pi].peak;
+            st.pg_v[pi][2] = pgout[pi].prev_peak;
+            st.pg_v[pi][3] = pgout[pi].ratio;
+            st.pg_v[pi][4] = pgout[pi].prev_ratio;
+            st.pg_v[pi][5] = pgout[pi].cnt;
+            st.pg_c4[pi] = pgout[pi].rgb4;
+            st.pg_c5[pi] = pgout[pi].rgb5;
+            st.pg_w4[pi] = (uint8_t)pgout[pi].width4;
+            st.pg_plot3[pi] = (uint8_t)pgout[pi].plot3;
+            st.pg_plot5[pi] = (uint8_t)pgout[pi].plot5;
+        }
+        st.rg_ready = rgout.ready;
+        st.rg_v[0] = rgout.gap;
+        st.rg_v[1] = rgout.peak;
+        st.rg_v[2] = rgout.prev_peak;
+        st.rg_v[3] = rgout.ratio;
+        st.rg_v[4] = rgout.prev_ratio;
+        st.rg_v[5] = rgout.cnt;
+        st.rg_c4 = rgout.rgb4;
+        st.rg_c5 = rgout.rgb5;
+        st.rg_w4 = (uint8_t)rgout.width4;
+        st.rg_plot3 = (uint8_t)rgout.plot3;
+        st.rg_plot5 = (uint8_t)rgout.plot5;
+        st.mg_ready = mgout.ready;
+        st.mg_v[0] = mgout.gap;
+        st.mg_v[1] = mgout.peak;
+        st.mg_v[2] = mgout.prev_peak;
+        st.mg_v[3] = mgout.ratio;
+        st.mg_v[4] = mgout.prev_ratio;
+        st.mg_v[5] = mgout.cnt;
+        st.mg_c4 = mgout.rgb4;
+        st.mg_c5 = mgout.rgb5;
+        st.mg_w4 = (uint8_t)mgout.width4;
+        st.mg_plot3 = (uint8_t)mgout.plot3;
+        st.mg_plot5 = (uint8_t)mgout.plot5;
+        st.pg_union_rgb[0] = pgout[0].union_rgb;
+        st.pg_union_rgb[1] = pgout[1].union_rgb;
+        st.pg_union_w[0] = (uint8_t)pgout[0].union_w;
+        st.pg_union_w[1] = (uint8_t)pgout[1].union_w;
+        st.ym_pos = ymout.pos;
+        st.ym_prev_valid = ymout.prev_valid;
+        st.ym_show_h1 = ymout.show_h1;
+        st.ym_show_h2 = ymout.show_h2;
+        st.ym_show_h3 = ymout.show_h3;
+        st.ym_show_h4 = ymout.show_h4;
+        st.ym_show_first = ymout.show_first;
+        st.ym_prev_hi = ymout.prev_hi;
+        st.ym_prev_lo = ymout.prev_lo;
+        st.ym_two_hi = ymout.two_hi;
+        st.ym_two_lo = ymout.two_lo;
+        st.ym_mark_h1 = ymout.mark_h1;
+        st.ym_mark_h2 = ymout.mark_h2;
+        st.ym_mark_h3 = ymout.mark_h3;
+        st.ym_mark_h4 = ymout.mark_h4;
+        st.sn_ready = snout.calc_ready;
+        st.sn_score = snout.score;
+        st.sn_ex = snout.score_ex;
+        st.sn_ratio = snout.ratio_score;
+        st.sn_stage = snout.stage;
+        st.sn_compound = snout.compound;
+        st.sn_tgt = snout.target_ratio;
+        st.sn_px = snout.price_ratio;
+        st.sn_rgb = snout.rgb;
+        st.sn_px_exit = snout.px_exit;
+        st.sn_below = snout.below;
+        st.sn_above = snout.above;
+        st.sn_reset = snout.session_reset;
+        st.pvc_price_on = ymout.show_price;
+        st.pvc_price = ymout.show_price_ratio;
+        st.pvc_vol_on = ymout.show_vol;
+        st.pvc_vol = ymout.show_vol_ratio;
+        st.pvc_both = ymout.show_both;
+        st.ray_on = ray_on;
+        st.ray_sign = ray_sign;
+        memcpy(st.ray_px, ray_px, sizeof(st.ray_px));
+        memcpy(st.ray_up, ray_up, sizeof(st.ray_up));
+        memcpy(st.ray_dn, ray_dn, sizeof(st.ray_dn));
+        memcpy(st.ray_dir, ray_dir, sizeof(st.ray_dir));
+        /* 정정은 지금 계산으로 과거 슬롯을 덮지 않는다. 적어 둔 지표를 그대로 둔다. */
+        if (have_frozen) {
+            st = frozen;
+            st.open_time_us = bar->open_time_us;
+        }
         tr_bar_status_t newest;
         if (tr_ring_count(&p->status_ring) == 0 ||
             (tr_ring_at(&p->status_ring, 0, &newest) && bar->open_time_us > newest.open_time_us)) {
@@ -724,7 +1518,20 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         }
     }
 
-    publish_status(e, p, bar, closed, day);
+    publish_status(e, p, bar, closed, day, fx_on, fx_mask, fx_plot,
+                   fx3_on, fx3_n, fx3_id, fx3_v, fx3_rgb, fx3_w,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &pgout[0] : 0,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &pgout[1] : 0,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &rgout : 0,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &mgout : 0,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &ymout : 0,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &snout : 0,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_on : 0, ray_sign,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_px : 0,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_up : 0,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_dn : 0,
+                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_dir : 0,
+                   bar_ob_valid, bar_ob_score, have_frozen ? &frozen : 0);
 
     /* 스트림 위치 마커는 현재 봉 이벤트에서만 전진한다. 과거 봉 정정(늦은 틱)이
      * trading day·봉 위치를 되돌리면 다음 현재 봉이 세션 첫 봉/새 봉으로 오인되어
@@ -755,6 +1562,14 @@ void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us) {
     for (int i = 0; i < e->pipe_count; i++) {
         tr_bar_builder_on_timer(&e->pipes[i]->bb, now_us);
     }
+}
+
+void tr_engine_set_candle_hook(tr_engine_t *e, tr_engine_candle_fn fn, void *ctx) {
+    if (e == 0) {
+        return;
+    }
+    e->candle_fn = fn;
+    e->candle_fn_ctx = ctx;
 }
 
 bool tr_engine_inject_bar(tr_engine_t *e, const tr_candle_t *bar) {
@@ -985,7 +1800,7 @@ void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
 
 bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
                              const char *shcode, const tr_session_policy_t *session,
-                             double tick_raw) {
+                             double tick_raw, bool is_ovs) {
     /* 델타 기록: 파이프라인 분리 전에는 이 함수가 tr_engine_init을 경유해 status_seq가
      * 1로 재시작했다. 이제 파이프라인 0만 재초기화하므로 스트림 시퀀스는 계속 증가한다
      * — 구독자 입장에서 seq 역행이 없어 이 동작을 유지한다. */
@@ -1005,6 +1820,7 @@ bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_fut
     cfg.is_futures = is_futures;
     cfg.session = *session; /* 새 종목의 세션 정책 (시장이 다르면 바뀐다) */
     cfg.tick_raw = tick_raw;  /* 새 종목의 틱 크기 (0이면 자동 — 해외선물만 명시) */
+    cfg.is_ovs = is_ovs;
     /* 파이프라인 0의 지표 상태를 새 종목 기준으로 재구성한다. 링 저장소는 그대로 재사용한다 */
     if (!pipe_init(e, p0, &cfg, p0->bb_storage, p0->bb_capacity,
                    p0->score_mid_storage, p0->score_mid_capacity)) {

@@ -250,6 +250,17 @@ const ls_instrument_info_t *ls_master_at(tr_ls_master_t *m, size_t index) {
     return (m != 0 && index < m->count) ? &m->items[index] : 0;
 }
 
+/* ASCII 대소문자 무시 접두 비교. 종목코드는 대문자로 저장된다. */
+static bool prefix_ci(const char *s, const char *q, size_t qlen) {
+    for (size_t i = 0; i < qlen; i++) {
+        if (s[i] == 0 ||
+            tolower((unsigned char)s[i]) != tolower((unsigned char)q[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* ASCII 대소문자 무시 부분 문자열 검색 (한글 종목명은 바이트열 비교라 그대로 동작) */
 static bool str_contains_ci(const char *hay, const char *needle) {
     size_t nlen = strlen(needle);
@@ -281,7 +292,7 @@ size_t ls_master_search(const tr_ls_master_t *m, const char *q,
     size_t qlen = q != 0 ? strlen(q) : 0;
     for (size_t i = 0; i < m->count && n < cap; i++) {
         const ls_instrument_info_t *it = &m->items[i];
-        bool match = qlen == 0 || strncmp(it->shcode, q, qlen) == 0 || str_contains_ci(it->name, q);
+        bool match = qlen == 0 || prefix_ci(it->shcode, q, qlen) || str_contains_ci(it->name, q);
         if (match) {
             out[n++] = it;
         }

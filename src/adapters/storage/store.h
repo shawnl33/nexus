@@ -96,6 +96,11 @@ int tr_store_query_candles(tr_store_t *s, uint64_t instrument_id, uint32_t timef
                            int64_t from_us, int64_t to_us, size_t limit,
                            tr_store_candle_fn cb, void *ctx);
 
+/* open_time < before_us 인 최근 limit개를 오름차순으로 out에 채운다. 반환은 개수, 실패는 -1. */
+int tr_store_query_recent_candles(tr_store_t *s, uint64_t instrument_id, uint32_t timeframe,
+                                  int64_t before_us, size_t limit,
+                                  tr_candle_t *out, size_t cap);
+
 /* ---------- 명령 ---------- */
 
 tr_store_cmd_check_t tr_store_command_check(tr_store_t *s, const char *command_id,

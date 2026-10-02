@@ -122,6 +122,19 @@ static void test_candle_query_range_order(void) {
     tr_store_close(s);
 }
 
+static void test_candle_recent_is_newest_ascending(void) {
+    tr_store_t *s = open_db();
+    for (int i = 0; i < 5; i++) {
+        tr_candle_t c = make_candle((int64_t)i * 60000000, 100 + i, 0, TR_CANDLE_CLOSED);
+        TR_CHECK(tr_store_put_candle(s, &c) == TR_STORE_OK);
+    }
+    tr_candle_t out[3];
+    int n = tr_store_query_recent_candles(s, 1, 60, 60000000LL * 5, 3, out, 3);
+    TR_CHECK(n == 3);
+    TR_CHECK(out[0].open_time_us == 120000000 && out[2].open_time_us == 240000000);
+    tr_store_close(s);
+}
+
 static void test_command_dedup(void) {
     tr_store_t *s = open_db();
     TR_CHECK(tr_store_command_check(s, "cmd-1", "hash-a", 1, 1000) == TR_STORE_CMD_NEW);
@@ -228,6 +241,7 @@ int main(void) {
     test_instrument_roundtrip();
     test_candle_revision_upsert();
     test_candle_query_range_order();
+    test_candle_recent_is_newest_ascending();
     test_command_dedup();
     test_fill_transaction_and_dedup();
     test_persistence_reopen();

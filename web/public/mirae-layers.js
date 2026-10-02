@@ -106,6 +106,9 @@ const MiraeLayers = (() => {
       day: num(ind[27]),
       smaValid: ind[28] === 1,
       sma: [num(ind[29]), num(ind[30]), num(ind[31])], // SMA 5/20/60
+      // 해외선물 미래곡선 V1. 국내 봉(32원소)에는 없다
+      fxMask: ind.length >= 33 ? num(ind[32]) : 0,
+      fx: Array.from({ length: 24 }, (_, k) => num(ind[33 + k])),
     };
   }
   // 봉별 지표 캐시(barInd) 엔트리: 시딩(parseInd 결과)과 라이브(status 페이로드) 공통 형태
@@ -117,12 +120,15 @@ const MiraeLayers = (() => {
       regLine: d.regLine,
       obValid: d.obValid, obScore: d.obScore,
       smaValid: d.smaValid, sma: d.sma,
+      fxMask: d.fxMask || 0,
+      fx: d.fx,
     };
   }
   function barIndFromPayload(p) {
     const fin = Array.isArray(p.final) ? p.final : [];
     const mkt = Array.isArray(p.mkt) ? p.mkt : [];
     const sma = Array.isArray(p.sma) ? p.sma : [];
+    const fx = Array.isArray(p.fx) ? p.fx : null;
     return {
       predDir: Array.isArray(p.pred_dir) ? p.pred_dir.map(int) : [0, 0, 0],
       regValid: p.reg_valid === 1,
@@ -138,6 +144,9 @@ const MiraeLayers = (() => {
       obScore: num(p.ob_score),
       smaValid: sma[0] === 1,
       sma: [num(sma[1]), num(sma[2]), num(sma[3])],
+      fxMask: fx ? num(fx[0]) : 0,
+      fx: fx ? Array.from({ length: 24 }, (_, k) => num(fx[k + 1]))
+                 : Array.from({ length: 24 }, () => NaN),
     };
   }
 
@@ -259,7 +268,7 @@ const MiraeLayers = (() => {
       const ya = priceConverter(da.value), yb = priceConverter(db.value);
       if (ya === null || yb === null) return;
       if (!layers || layers.reg !== false) {
-        strokeSeg(ctx, a.x, ya, b.x, yb, scoreColor(da.score), regWidth(da.r2));
+        strokeSeg(ctx, a.x, ya, b.x, yb, scoreColor(db.score), regWidth(db.r2));
       }
       if (!layers || layers.state !== false) {
         const style = tradeStyle(da.finalState);
@@ -279,13 +288,15 @@ const MiraeLayers = (() => {
     });
   }
 
-  // ⑧ 마켓 중심선 (Plot51) — 봉별 단계색, 굵기 3
+  // ⑧ 마켓 중심선 — 같은 값·같은 단계색만 수평. 값이 바뀌면 잇지 않는다. 굵기 3.
   function createMarketCenterPaneView() {
     return makeSegmentPaneView((ctx, priceConverter, a, b) => {
       const da = a.originalData, db = b.originalData;
-      const ya = priceConverter(da.value), yb = priceConverter(db.value);
-      if (ya === null || yb === null) return;
-      strokeSeg(ctx, a.x, ya, b.x, yb, mktStageColor(da.stage), 3);
+      if (da.value !== db.value) return;
+      if (scoreColor(da.score) !== scoreColor(db.score)) return;
+      const y = priceConverter(da.value);
+      if (y === null) return;
+      strokeSeg(ctx, a.x, y, b.x, y, scoreColor(db.score), 3);
     });
   }
 
@@ -517,7 +528,7 @@ const MiraeLayers = (() => {
           const bar = ctx.bars.get(t);
           if (!ind || !ind.mktValid || !bar) continue;
           const [center, u1v, l1v, u2v, l2v] = ind.mkt;
-          cData.push({ time: t, value: center,
+          cData.push({ time: t, value: center, score: ind.score,
                        stage: mktStage(prev, center, bar.close, ind.regFlat, u1v, ctx.tickRaw()) });
           prev = center;
           u1.push({ time: t, value: u1v });
@@ -655,7 +666,7 @@ const MiraeLayers = (() => {
             const [, center, u1, l1, u2, l2] = p.mkt;
             if (layers.mktband) {
               const close = Array.isArray(p.ohlc) ? p.ohlc[3] : undefined;
-              mktCenterSeries.update({ time: t, value: center, stage: mktStage(lastMktCenter, center, close, ind.regFlat, u1, tick) });
+              mktCenterSeries.update({ time: t, value: center, score: ind.score, stage: mktStage(lastMktCenter, center, close, ind.regFlat, u1, tick) });
               mktU1.update({ time: t, value: u1 });
               mktL1.update({ time: t, value: l1 });
               mktU2.update({ time: t, value: u2 });

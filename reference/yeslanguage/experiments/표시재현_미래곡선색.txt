@@ -1,0 +1,35 @@
+// 미래곡선 V1에서 색으로 찾은 줄을 가격 위에 그린다.
+// 주황 굵기2 = 지난 상승 Plot9~13. 초록 굵기2 = 지난 하락 Plot14~18.
+// 빨강/파랑 굵기3 = 회귀선·마켓중심 단계색. 주황/보라/청록 굵기3 = 5/15/30분.
+
+Var : 고(0), 저(0), 폭(0), 선(0);
+
+고 = Highest(High, 30);
+저 = Lowest(Low, 30);
+폭 = 고 - 저;
+
+Plot1(고,"지난상승최고",Orange,Def,2);
+Plot2(저,"지난상승최저",Orange,Def,2);
+Plot3(저 + 폭 * 0.382,"지난상승382",Orange,Def,2);
+Plot4(저 + 폭 * 0.500,"지난상승500",Orange,Def,2);
+Plot5(저 + 폭 * 0.618,"지난상승618",Orange,Def,2);
+
+고 = Highest(High, 60);
+저 = Lowest(Low, 60);
+폭 = 고 - 저;
+
+Plot6(고,"지난하락최고",Green,Def,2);
+Plot7(저,"지난하락최저",Green,Def,2);
+Plot8(고 - 폭 * 0.382,"지난하락382",Green,Def,2);
+Plot9(고 - 폭 * 0.500,"지난하락500",Green,Def,2);
+Plot10(고 - 폭 * 0.618,"지난하락618",Green,Def,2);
+
+선 = Average(Close, 5);
+If 선 >= 선[1] Then
+    Plot11(선,"회귀선",RGB(220,0,0),Def,3);
+Else
+    Plot11(선,"회귀선",RGB(0,0,180),Def,3);
+
+Plot12(Highest(High, 5),"평탄5분",RGB(240,130,30),Def,3);
+Plot13(Highest(High, 15),"평탄15분",RGB(140,70,190),Def,3);
+Plot14(Highest(High, 30),"평탄30분",RGB(20,130,180),Def,3);

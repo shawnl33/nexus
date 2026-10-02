@@ -59,6 +59,12 @@ test("staleWatchLeaks: 실패한 선택 외에 아직 진행 중인 이어받기
   assert.equal(WatchGuard.staleWatchLeaks("000660", panes), false);
 });
 
+test("staleWatchLeaks: Data2 참조로 쓰는 종목은 해지하지 않는다", () => {
+  const panes = [{ symbol: "ESZ26", selTarget: "", data2: "NQZ26" }];
+  assert.equal(WatchGuard.staleWatchLeaks("NQZ26", panes), false);
+  assert.equal(WatchGuard.staleWatchLeaks("RTYZ26", panes), true);
+});
+
 test("staleWatchLeaks: 실패 후에도 이미 그 종목을 보는 칸이 있으면 해지하지 않는다", () => {
   const panes = [
     { symbol: "000660", selTarget: "" },

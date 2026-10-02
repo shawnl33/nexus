@@ -39,6 +39,13 @@ static void capture_cb(void *ctx, const char *stream_id, uint64_t seq, const cha
     (void)seq;
 }
 
+/* fx 키는 페이로드 끝(shcode 직전)이라 700자 절단 캡처로는 보이지 않는다 */
+static void capture_full(void *ctx, const char *stream_id, uint64_t seq, const char *payload) {
+    (void)stream_id;
+    (void)seq;
+    snprintf((char *)ctx, 8192, "%s", payload);
+}
+
 static void init_engine(tr_engine_t *e, capture_t *cap) {
     tr_engine_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
@@ -159,13 +166,13 @@ static void test_select_symbol_generation(void) {
     TR_CHECK(e.lr3.reg_valid); /* 워밍업 완료 상태 */
 
     /* 종목 전환: 상태가 리셋되고 generation이 오른다 */
-    TR_CHECK(tr_engine_select_symbol(&e, 999, false, "099999", &TEST_SESS, 0.0));
+    TR_CHECK(tr_engine_select_symbol(&e, 999, false, "099999", &TEST_SESS, 0.0, false));
     TR_CHECK(e.generation == 2);
     TR_CHECK(e.cfg.instrument_id == 999);
     TR_CHECK(strcmp(e.shcode, "099999") == 0); /* 전환 종목 코드가 파이프라인에 실린다 */
     TR_CHECK(!e.lr3.reg_valid); /* 지표는 새 종목 기준으로 다시 워밍업 */
     TR_CHECK(e.status_cb == capture_cb); /* 출력 연결은 보존 */
-    TR_CHECK(tr_engine_select_symbol(&e, 1000, true, "1000F0", &TEST_SESS, 0.0));
+    TR_CHECK(tr_engine_select_symbol(&e, 1000, true, "1000F0", &TEST_SESS, 0.0, false));
     TR_CHECK(e.generation == 3);
 
     /* 전환 후에도 상태 발행이 계속된다 */
@@ -385,6 +392,10 @@ static void test_sma_late_correction(void) {
     TR_CHECK(fabs(e.sma5.value - 104.0) < 1e-9);
     TR_CHECK(ylv_count(&e.sma20.win) == 6 && ylv_count(&e.sma60.win) == 6);
 
+    double line_before = e.pipe0.lr3.line;
+    int score_before = e.pipe0.score.score;
+    size_t mids_before = ylv_count(&e.pipe0.score.mid_hist);
+
     /* 늦은 틱: 확정된 봉 3(9:03)을 999로 정정한다. exec_id는 단조 증가를 유지해야
      * 중복 필터를 지나 정정 경로(TR_BB_LATE_CORRECTED)에 도달한다 */
     {
@@ -410,6 +421,10 @@ static void test_sma_late_correction(void) {
     TR_CHECK(fabs(e.sma5.value - 104.0) < 1e-9);
     TR_CHECK(ylv_count(&e.sma20.win) == 6 && ylv_count(&e.sma60.win) == 6);
     TR_CHECK(strstr(cap.last, "\"sma\":[0,104,0,0]") != 0); /* 정정 이벤트 발행에도 현재 창 유지 */
+    /* 회귀·통합 점수도 정정으로 창이 늘거나 값이 바뀌지 않는다 */
+    TR_CHECK(fabs(e.pipe0.lr3.line - line_before) < 1e-9);
+    TR_CHECK(e.pipe0.score.score == score_before);
+    TR_CHECK(ylv_count(&e.pipe0.score.mid_hist) == mids_before);
 
     /* 다음 새 봉은 정상 push: 창은 103..107로 밀려 평균 105 (999가 남아 있으면 실패) */
     feed_min1(&e, 7, 107, id++);
@@ -721,15 +736,15 @@ static void test_pipe_slot_reuse(void) {
     init_engine(&e, &cap);
     static tr_candle_t bb_a[BB_CAP], bb_b[BB_CAP], bb_c[BB_CAP], bb_d[BB_CAP];
     static double mid_a[32], mid_b[32], mid_c[32], mid_d[32];
-    tr_pipeline_t *pa = tr_engine_pipe_add(&e, 100, true, "0100A0", &TEST_SESS, 0.0, bb_a, BB_CAP, mid_a, 32);
-    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 200, true, "0200B0", &TEST_SESS, 0.0, bb_b, BB_CAP, mid_b, 32);
-    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 300, true, "0300C0", &TEST_SESS, 0.0, bb_c, BB_CAP, mid_c, 32);
+    tr_pipeline_t *pa = tr_engine_pipe_add(&e, 100, true, "0100A0", &TEST_SESS, 0.0, false, bb_a, BB_CAP, mid_a, 32);
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 200, true, "0200B0", &TEST_SESS, 0.0, false, bb_b, BB_CAP, mid_b, 32);
+    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 300, true, "0300C0", &TEST_SESS, 0.0, false, bb_c, BB_CAP, mid_c, 32);
     TR_CHECK(pa != 0 && pb != 0 && pc != 0);
     TR_CHECK(e.pipe_count == 4);
     /* 저장소·세션 인자 검증: NULL·용량 부족은 거부 */
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, 0.0, 0, BB_CAP, mid_b, 32) == 0);
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, 0.0, bb_b, BB_CAP, mid_b, 4) == 0);
-    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", 0, 0.0, bb_b, BB_CAP, mid_b, 32) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, 0.0, false, 0, BB_CAP, mid_b, 32) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", &TEST_SESS, 0.0, false, bb_b, BB_CAP, mid_b, 4) == 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 500, true, "0500E0", 0, 0.0, false, bb_b, BB_CAP, mid_b, 32) == 0);
     TR_CHECK(e.pipe_count == 4);
 
     /* C에 먼저 상태를 쌓아 둔다 (OPEN 봉 1개) */
@@ -740,7 +755,7 @@ static void test_pipe_slot_reuse(void) {
     TR_CHECK(tr_engine_pipe_remove(&e, 200));
     TR_CHECK(e.pipe_count == 3);
     TR_CHECK(tr_engine_pipe_find(&e, 200) == 0);
-    tr_pipeline_t *pd = tr_engine_pipe_add(&e, 400, true, "0400D0", &TEST_SESS, 0.0, bb_d, BB_CAP, mid_d, 32);
+    tr_pipeline_t *pd = tr_engine_pipe_add(&e, 400, true, "0400D0", &TEST_SESS, 0.0, false, bb_d, BB_CAP, mid_d, 32);
     TR_CHECK(pd != 0);
     TR_CHECK(e.pipe_count == 4);
     /* D는 독립 저장소: 어느 활성 파이프라인과도 주소가 다르다 (on_timer 이중 호출 방지) */
@@ -821,7 +836,7 @@ static void test_two_pipes_independent(void) {
     static tr_bar_status_t ring_b[BB_CAP];
     /* B는 파이프0과 다른 세션(선물형 08:45~익일 05:00)을 갖는다 — 종목별 세션 보관 검증 겸용 */
     static const tr_session_policy_t fut_sess = {KST, 525, 300, TR_SESSION_WEEKDAYS};
-    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &fut_sess, 0.0, bb_b, BB_CAP, mid_b, 32);
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &fut_sess, 0.0, false, bb_b, BB_CAP, mid_b, 32);
     TR_CHECK(pb != 0);
     TR_CHECK(strcmp(pb->shcode, "BBB002") == 0);
     TR_CHECK(pb->session.open_min == 525 && pb->session.close_min == 300); /* 기동 세션 미상속 */
@@ -1019,7 +1034,7 @@ static void test_pipe_transplant_atr_relink(void) {
 
     static tr_candle_t bb_b[BB_CAP], bb_c[BB_CAP];
     static double mid_b[32], mid_c[32];
-    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &TEST_SESS, 0.0, bb_b, BB_CAP, mid_b, 32);
+    tr_pipeline_t *pb = tr_engine_pipe_add(&e, 100, false, "BBB002", &TEST_SESS, 0.0, false, bb_b, BB_CAP, mid_b, 32);
     TR_CHECK(pb != 0);
 
     /* 미러 엔진: 같은 종목(100)을 이식 없이 운영하는 독립 참조 */
@@ -1041,7 +1056,7 @@ static void test_pipe_transplant_atr_relink(void) {
     mcfg.market_period = 20;
     mcfg.is_futures = true;
     TR_CHECK(tr_engine_init(&m, &mcfg, m_bb0, BB_CAP, m_mid0, 32));
-    tr_pipeline_t *mb = tr_engine_pipe_add(&m, 100, false, "BBB002", &TEST_SESS, 0.0, m_bbb, BB_CAP, m_midb, 32);
+    tr_pipeline_t *mb = tr_engine_pipe_add(&m, 100, false, "BBB002", &TEST_SESS, 0.0, false, m_bbb, BB_CAP, m_midb, 32);
     TR_CHECK(mb != 0);
 
     /* ⑤ 체인 워밍업: 백필 1-1 단계처럼 prime으로 과거 완성 세션을 채운다 (미러 동일).
@@ -1084,7 +1099,7 @@ static void test_pipe_transplant_atr_relink(void) {
     TR_CHECK(e.pipe0.instrument_id == 100);
 
     /* 기증 슬롯 재사용: 새 파이프라인 C가 그 슬롯에 들어가 memset + 자기 링 재연결 */
-    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 200, false, "CCC003", &TEST_SESS, 0.0, bb_c, BB_CAP, mid_c, 32);
+    tr_pipeline_t *pc = tr_engine_pipe_add(&e, 200, false, "CCC003", &TEST_SESS, 0.0, false, bb_c, BB_CAP, mid_c, 32);
     TR_CHECK(pc != 0);
     for (int i = 1; i <= 3; i++) {
         feed_pipe(&e, 200, (unsigned)i, 0, 900 + i, id++);
@@ -1180,7 +1195,7 @@ static void test_mixed_market_sessions(void) {
     static tr_candle_t bb_s[BB_CAP];
     static double mid_s[32];
     static const tr_session_policy_t stk_sess = {KST, 480, 1200, TR_SESSION_WEEKDAYS}; /* 주식: 08:00~20:00 */
-    tr_pipeline_t *ps = tr_engine_pipe_add(&e, 100, false, "005930", &stk_sess, 0.0, bb_s, BB_CAP, mid_s, 32);
+    tr_pipeline_t *ps = tr_engine_pipe_add(&e, 100, false, "005930", &stk_sess, 0.0, false, bb_s, BB_CAP, mid_s, 32);
     TR_CHECK(ps != 0);
     TR_CHECK(ps->session.open_min == 480 && ps->session.close_min == 1200);
     TR_CHECK(e.pipe0.session.open_min == 525); /* 기동(선물) 세션 유지 */
@@ -1515,7 +1530,7 @@ static void test_snapshot_gaps(void) {
     static const tr_session_policy_t fut_sess = {KST, 525, 300, TR_SESSION_WEEKDAYS};
     static tr_candle_t bb_f[BB_CAP];
     static double mid_f[32];
-    TR_CHECK(tr_engine_pipe_add(&e, 100, true, "0100A0", &fut_sess, 0.0, bb_f, BB_CAP, mid_f, 32) != 0);
+    TR_CHECK(tr_engine_pipe_add(&e, 100, true, "0100A0", &fut_sess, 0.0, false, bb_f, BB_CAP, mid_f, 32) != 0);
     feed_at_day(&e, 100, 0, 23, 58, 300, id++);
     feed_at_day(&e, 100, 0, 23, 59, 301, id++);
     feed_at_day(&e, 100, 1, 0, 2, 302, id++);
@@ -1524,6 +1539,283 @@ static void test_snapshot_gaps(void) {
     ng = tr_engine_pipe_find_gaps(&e, 100, 0, 5, gaps, 8);
     TR_CHECK(ng == 1);
     TR_CHECK(gaps[0][0] == kst_day(1, 0, 0) && gaps[0][1] == kst_day(1, 0, 1));
+}
+
+/* 해외선물 파이프만 라이브 "fx"와 스냅샷 ind 57원소를 낸다.
+ * [0]=Plot 표시 비트(Plot1은 항상 켜짐), [1..]=Plot 값. shcode는 맨 끝. */
+static void test_fx_ovs_emits_plots(void) {
+    tr_engine_t e;
+    char last[8192];
+    last[0] = '\0';
+    tr_engine_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.engine_instance_id = 1;
+    cfg.instrument_id = 7;
+    snprintf(cfg.shcode, sizeof(cfg.shcode), "ESZ26");
+    cfg.session = TEST_SESS;
+    cfg.timeframe_sec = 60;
+    cfg.no_trade = TR_NO_TRADE_SKIP;
+    cfg.predict_bars[0] = 5;
+    cfg.predict_bars[1] = 10;
+    cfg.predict_bars[2] = 15;
+    cfg.htf_ticks = 10;
+    cfg.min_r2 = 0.40;
+    cfg.market_period = 20;
+    cfg.is_futures = true;
+    cfg.is_ovs = true;
+    cfg.tick_raw = 25.0;
+    static tr_candle_t bb[BB_CAP];
+    static double mid[32];
+    TR_CHECK(tr_engine_init(&e, &cfg, bb, BB_CAP, mid, 32));
+    tr_engine_attach_status_cb(&e, capture_full, last);
+    static tr_bar_status_t ring[BB_CAP];
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+
+    uint64_t id = 1;
+    for (int i = 0; i < 8; i++) {
+        feed(&e, (unsigned)i, 0, 1000 + i * 25, id++);
+    }
+    TR_CHECK(last[0] != '\0');
+    TR_CHECK(strstr(last, "\"fx\":[") != 0);
+    TR_CHECK(strstr(last, "\"pvc\":[") != 0);
+    const char *fx = strstr(last, "\"fx\":[");
+    const char *pvc = strstr(last, "\"pvc\":[");
+    const char *sh = strstr(last, "\"shcode\":");
+    TR_CHECK(fx != 0 && sh != 0 && fx < sh);
+    TR_CHECK(pvc != 0 && pvc < sh);
+    TR_CHECK(strstr(sh, "ESZ26") != 0);
+
+    yyjson_doc *doc = yyjson_read(last, strlen(last), 0);
+    TR_CHECK(doc != 0);
+    if (doc != 0) {
+        yyjson_val *fxa = yyjson_obj_get(yyjson_doc_get_root(doc), "fx");
+        TR_CHECK(yyjson_is_arr(fxa));
+        TR_CHECK(yyjson_arr_size(fxa) == 25); /* mask + Plot 24 */
+        unsigned mask = (unsigned)yyjson_get_uint(yyjson_arr_get(fxa, 0));
+        TR_CHECK((mask & 1u) != 0);           /* Plot1 단계화는 항상 표시 */
+        TR_CHECK((mask & 2u) != 0);           /* 8봉 직선이면 평탄회귀선이 켜진다 */
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(fxa, 2)) != 0.0);
+        yyjson_val *fx3 = yyjson_obj_get(yyjson_doc_get_root(doc), "fx3");
+        TR_CHECK(yyjson_is_arr(fx3) && yyjson_arr_size(fx3) > 0);
+        yyjson_val *p1 = yyjson_arr_get(fx3, 0);
+        TR_CHECK(yyjson_is_arr(p1) && yyjson_arr_size(p1) == 4);
+        TR_CHECK((unsigned)yyjson_get_uint(yyjson_arr_get(p1, 0)) == 1); /* Plot1 단계화 */
+        TR_CHECK(yyjson_obj_get(yyjson_doc_get_root(doc), "rays") != 0);
+        yyjson_doc_free(doc);
+    }
+
+    tr_bar_status_t st;
+    TR_CHECK(tr_engine_status_at(&e, 0, &st));
+    TR_CHECK(st.fx_on == 1);
+    char buf[2048];
+    int n = tr_bar_status_format_ind(&st, 25.0, true, buf, sizeof(buf));
+    TR_CHECK(n > 0 && (size_t)n < sizeof(buf));
+    doc = yyjson_read(buf, (size_t)n, 0);
+    TR_CHECK(doc != 0);
+    if (doc != 0) {
+        yyjson_val *a = yyjson_doc_get_root(doc);
+        TR_CHECK(yyjson_arr_size(a) == 57); /* [0..31] 기존 + [32] mask + [33..56] Plot */
+        TR_CHECK(((unsigned)yyjson_get_uint(yyjson_arr_get(a, 32)) & 1u) != 0);
+        TR_CHECK(yyjson_get_num(yyjson_arr_get(a, 34)) != 0.0); /* Plot2 평탄회귀선 */
+        yyjson_doc_free(doc);
+    }
+}
+
+/* 국내 파이프라인 페이로드는 기존과 같이 fx 키를 넣지 않는다 */
+static void test_fx_domestic_omits_fx(void) {
+    tr_engine_t e;
+    char last[4096];
+    last[0] = '\0';
+    capture_t dummy;
+    init_engine(&e, &dummy);
+    tr_engine_attach_status_cb(&e, capture_full, last);
+    feed(&e, 0, 0, 100, 1);
+    TR_CHECK(last[0] != '\0');
+    TR_CHECK(strstr(last, "\"fx\"") == 0);
+    TR_CHECK(strstr(last, "\"pvc\"") == 0);
+    TR_CHECK(strstr(last, "\"shcode\"") != 0);
+}
+
+/* 해외선물 1분봉은 호가 대신 OSF 결합 점수를 ob_score에 넣는다. 종가가 고가면 양수. */
+static void test_ovs_ob_uses_osf(void) {
+    tr_engine_t e;
+    char last[8192];
+    last[0] = '\0';
+    tr_engine_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.engine_instance_id = 1;
+    cfg.instrument_id = 7;
+    snprintf(cfg.shcode, sizeof(cfg.shcode), "ESZ26");
+    cfg.session = TEST_SESS;
+    cfg.timeframe_sec = 60;
+    cfg.no_trade = TR_NO_TRADE_SKIP;
+    cfg.predict_bars[0] = 5;
+    cfg.predict_bars[1] = 10;
+    cfg.predict_bars[2] = 15;
+    cfg.htf_ticks = 10;
+    cfg.min_r2 = 0.40;
+    cfg.market_period = 20;
+    cfg.is_futures = true;
+    cfg.is_ovs = true;
+    cfg.tick_raw = 25.0;
+    static tr_candle_t bb[BB_CAP];
+    static double mid[32];
+    TR_CHECK(tr_engine_init(&e, &cfg, bb, BB_CAP, mid, 32));
+    tr_engine_attach_status_cb(&e, capture_full, last);
+    uint64_t id = 1;
+    for (int i = 0; i < 20; i++) {
+        feed(&e, (unsigned)i, 0, 900, id++);
+        feed(&e, (unsigned)i, 1, 1000, id++); /* 종가가 고가 → CLV +100 */
+    }
+    yyjson_doc *doc = yyjson_read(last, strlen(last), 0);
+    TR_CHECK(doc != 0);
+    if (doc != 0) {
+        yyjson_val *root = yyjson_doc_get_root(doc);
+        TR_CHECK(yyjson_get_int(yyjson_obj_get(root, "ob_valid")) == 1);
+        TR_CHECK(yyjson_get_num(yyjson_obj_get(root, "ob_score")) > 0.0);
+        TR_CHECK(yyjson_get_int(yyjson_obj_get(root, "ob_dir")) == 1);
+        yyjson_doc_free(doc);
+    }
+}
+
+/* 늦은 정정은 그 봉에 적어 둔 호가 점수를 유지한다. 지금 봉의 OSF 점수로 덮지 않는다. */
+static void test_ovs_correction_keeps_saved_ob(void) {
+    tr_engine_t e;
+    char last[8192];
+    last[0] = '\0';
+    tr_engine_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.engine_instance_id = 1;
+    cfg.instrument_id = 7;
+    snprintf(cfg.shcode, sizeof(cfg.shcode), "ESZ26");
+    cfg.session = TEST_SESS;
+    cfg.timeframe_sec = 60;
+    cfg.no_trade = TR_NO_TRADE_SKIP;
+    cfg.predict_bars[0] = 5;
+    cfg.predict_bars[1] = 10;
+    cfg.predict_bars[2] = 15;
+    cfg.htf_ticks = 10;
+    cfg.min_r2 = 0.40;
+    cfg.market_period = 20;
+    cfg.is_futures = true;
+    cfg.is_ovs = true;
+    cfg.tick_raw = 25.0;
+    static tr_candle_t bb[BB_CAP];
+    static double mid[32];
+    static tr_bar_status_t ring[BB_CAP];
+    TR_CHECK(tr_engine_init(&e, &cfg, bb, BB_CAP, mid, 32));
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+    tr_engine_attach_status_cb(&e, capture_full, last);
+    uint64_t id = 1;
+    for (int i = 0; i < 20; i++) {
+        feed(&e, (unsigned)i, 0, 900, id++);
+        feed(&e, (unsigned)i, 1, 1000, id++);
+    }
+    tr_bar_status_t up;
+    memset(&up, 0, sizeof(up));
+    TR_CHECK(tr_engine_status_at(&e, 0, &up));
+    tr_time_us_t up_open = up.open_time_us;
+
+    for (int i = 20; i < 40; i++) {
+        feed(&e, (unsigned)i, 0, 1000, id++);
+        feed(&e, (unsigned)i, 1, 900, id++);
+    }
+    TR_CHECK(e.pipe0.osf.valid);
+    TR_CHECK(e.pipe0.osf.score < 0.0);
+    double live_score = e.pipe0.osf.score;
+    tr_bar_status_t saved;
+    memset(&saved, 0, sizeof(saved));
+    bool saved_found = false;
+    size_t nbefore = tr_engine_status_count(&e);
+    for (size_t i = 0; i < nbefore; i++) {
+        tr_bar_status_t st;
+        TR_CHECK(tr_engine_status_at(&e, i, &st));
+        if (st.open_time_us == up_open) {
+            saved = st;
+            saved_found = true;
+        }
+    }
+    TR_CHECK(saved_found);
+    TR_CHECK(saved.ob_valid);
+    TR_CHECK(saved.ob_score > 0.0);
+    TR_CHECK(fabs(saved.ob_score - live_score) > 1.0);
+    int saved_points = saved.score;
+    double saved_line = saved.reg_line;
+    double saved_mkt = saved.mkt_center;
+    int live_points = e.pipe0.score.score;
+    double live_line = e.pipe0.lr3.line;
+    size_t live_mids = ylv_count(&e.pipe0.score.mid_hist);
+
+    tr_event_envelope_t env;
+    memset(&env, 0, sizeof(env));
+    env.kind = TR_EVENT_TICK;
+    env.event_time_us = kst(9, 19, 30);
+    env.received_time_us = env.event_time_us;
+    tr_tick_t tk;
+    memset(&tk, 0, sizeof(tk));
+    tk.instrument_id = e.cfg.instrument_id;
+    tk.price = 1000;
+    tk.qty = 10;
+    tk.source_exec_id = id++;
+    tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+    TR_CHECK(tr_engine_on_tick(&e, &env, &tk) == TR_BB_LATE_CORRECTED);
+
+    yyjson_doc *doc = yyjson_read(last, strlen(last), YYJSON_READ_ALLOW_INF_AND_NAN);
+    TR_CHECK(doc != 0);
+    if (doc != 0) {
+        yyjson_val *root = yyjson_doc_get_root(doc);
+        const char *open_s = yyjson_get_str(yyjson_obj_get(root, "bar_open_time"));
+        TR_CHECK(open_s != 0 && strtoll(open_s, 0, 10) == (int64_t)up_open);
+        TR_CHECK(yyjson_get_int(yyjson_obj_get(root, "ob_valid")) == 1);
+        TR_CHECK(yyjson_get_int(yyjson_obj_get(root, "ob_dir")) == 1);
+        TR_CHECK(fabs(yyjson_get_num(yyjson_obj_get(root, "ob_score")) - saved.ob_score) < 1e-6);
+        TR_CHECK(yyjson_get_int(yyjson_obj_get(root, "score")) == saved_points);
+        TR_CHECK(fabs(yyjson_get_num(yyjson_obj_get(root, "reg_line")) - saved_line) < 1e-6);
+        yyjson_doc_free(doc);
+    }
+    bool found = false;
+    size_t n = tr_engine_status_count(&e);
+    for (size_t i = 0; i < n; i++) {
+        tr_bar_status_t st;
+        TR_CHECK(tr_engine_status_at(&e, i, &st));
+        if (st.open_time_us == up_open) {
+            TR_CHECK(st.ob_valid);
+            TR_CHECK(fabs(st.ob_score - saved.ob_score) < 1e-9);
+            TR_CHECK(st.score == saved_points);
+            TR_CHECK(fabs(st.reg_line - saved_line) < 1e-9);
+            TR_CHECK(fabs(st.mkt_center - saved_mkt) < 1e-6);
+            found = true;
+        }
+    }
+    TR_CHECK(found);
+    TR_CHECK(fabs(e.pipe0.osf.score - live_score) < 1e-9);
+    TR_CHECK(e.pipe0.score.score == live_points);
+    TR_CHECK(fabs(e.pipe0.lr3.line - live_line) < 1e-9);
+    TR_CHECK(ylv_count(&e.pipe0.score.mid_hist) == live_mids);
+}
+
+/* pipe0 이식 후에도 fx 시계열 저장소가 자기 버퍼를 가리켜 평가가 계속된다 */
+static void test_fx_transplant_relink(void) {
+    tr_engine_t e;
+    char last[4096];
+    last[0] = '\0';
+    capture_t dummy;
+    init_engine(&e, &dummy);
+    tr_engine_attach_status_cb(&e, capture_full, last);
+    static tr_candle_t bb[BB_CAP];
+    static double mid[32];
+    tr_pipeline_t *ovs = tr_engine_pipe_add(&e, 77, true, "ESZ26", &TEST_SESS, 25.0, true,
+                                            bb, BB_CAP, mid, 32);
+    TR_CHECK(ovs != 0);
+    TR_CHECK(tr_engine_pipe_remove(&e, 1)); /* 국내 pipe0을 빼고 해외선물을 pipe0으로 이식 */
+    TR_CHECK(e.cfg.instrument_id == 77);
+    TR_CHECK(e.cfg.is_ovs);
+    uint64_t id = 1;
+    for (int i = 0; i < 6; i++) {
+        feed(&e, (unsigned)i, 10, 2500 + i * 25, id++);
+    }
+    TR_CHECK(strstr(last, "\"fx\":[") != 0);
+    TR_CHECK(strstr(last, "ESZ26") != 0);
 }
 
 int main(void) {
@@ -1547,5 +1839,10 @@ int main(void) {
     test_two_pipes_independent();
     test_pipe_transplant_atr_relink();
     test_mixed_market_sessions();
+    test_fx_ovs_emits_plots();
+    test_fx_domestic_omits_fx();
+    test_ovs_ob_uses_osf();
+    test_ovs_correction_keeps_saved_ob();
+    test_fx_transplant_relink();
     TR_TEST_SUMMARY();
 }

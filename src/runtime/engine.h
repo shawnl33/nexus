@@ -26,6 +26,12 @@
 #include "core/functions/orderbook_dir_v2.h"
 #include "core/indicators/score_1m.h"
 #include "core/functions/sma.h"
+#include "core/indicators/fx_mirae_v1.h"
+#include "core/indicators/fx_mirae_v3.h"
+#include "core/indicators/fx_persist_gap.h"
+#include "core/indicators/fx_yangmae.h"
+#include "core/functions/osf_clv_vol_flow_v1.h"
+#include "core/indicators/fx_sniper.h"
 #include "core/market/bar_builder.h"
 
 typedef struct {
@@ -37,6 +43,7 @@ typedef struct {
     tr_no_trade_policy_t no_trade;
     bool is_futures;             /* 호가 부호 규칙(선물=매수 우세 양수)에 사용 */
     double tick_raw;             /* 1틱의 raw 크기 (실제 × 100). 0이면 자동(선물 5, 주식 100) — 해외선물만 명시 */
+    bool is_ovs;                 /* 해외선물. 1분봉에서만 fx_mirae_v1을 평가한다 */
     /* 지표 파라미터 (메인 원본 기본값 대응) */
     int32_t predict_bars[3];     /* 예측봉수1~3 (기본 5/10/15) */
     int32_t htf_ticks;           /* 예측변수 (기본 10) */
@@ -53,13 +60,15 @@ typedef struct {
 typedef void (*tr_engine_status_fn)(void *ctx, const char *stream_id, uint64_t sequence,
                                     const char *payload_json);
 
+#define TR_FX3_WIRE 64 /* V3 표시 Plot을 봉 상태에 실을 상한 */
+
 /* 봉별 지표 스냅샷 (스냅샷 명령으로 과거 봉의 회귀·예측·점수를 복원하기 위한 기록).
  * 봉 링과 같은 순서·같은 용량으로 유지한다 (push/update 패턴 동일). */
 typedef struct {
     tr_time_us_t open_time_us;  /* 봉 링과의 정합 검사용 */
     bool closed;
     bool reg_valid;
-    double reg_line, reg_r2;
+    double reg_line, reg_slope, reg_r2;
     double pred[3];
     int pred_dir[3];            /* 예측방향1~3 (과거 채점의 방향 비교에 사용) */
     double residual;            /* 회귀잔차 (미래 목표선 오차 띠) */
@@ -91,6 +100,53 @@ typedef struct {
     /* SMA 5/20/60 (모든 timeframe에서 평가, 진행 봉 포함 현재 값) */
     int sma_valid;              /* 세 기간 모두 valid일 때 1 */
     double sma[3];              /* 5/20/60 순 */
+    /* 해외선물 미래곡선 V1. fx_on=0이면 국내 봉(스냅샷 ind는 32원소로 끝난다) */
+    int fx_on;
+    uint32_t fx_mask;           /* bit k = Plot(k+1) 표시 */
+    double fx_plot[TR_FXMIRAE_PLOTS];
+    /* 해외선물 미래곡선 V3 표시. 켜진 Plot만, 번호 오름차순, 최대 TR_FX3_WIRE개 */
+    int fx3_on;
+    int fx3_n;
+    uint16_t fx3_id[TR_FX3_WIRE];
+    double fx3_v[TR_FX3_WIRE];
+    uint32_t fx3_rgb[TR_FX3_WIRE];
+    uint8_t fx3_w[TR_FX3_WIRE];
+    /* 지속목표차. [0]=삼선 [1]=오선. v = gap,peak,prev,ratio,prevRatio,cnt */
+    int pg_ready[2];
+    double pg_v[2][6];
+    uint32_t pg_c4[2], pg_c5[2];
+    uint8_t pg_w4[2];
+    uint8_t pg_plot3[2], pg_plot5[2];
+    /* 평탄회귀차 1/5/15/30분. v = gap,peak,prev,ratio,prevRatio,cnt */
+    int rg_ready;
+    double rg_v[6];
+    uint32_t rg_c4, rg_c5;
+    uint8_t rg_w4, rg_plot3, rg_plot5;
+    /* 마켓중심차 1/5/15/30분 */
+    int mg_ready;
+    double mg_v[6];
+    uint32_t mg_c4, mg_c5;
+    uint8_t mg_w4, mg_plot3, mg_plot5;
+    /* 통합 지표의 삼선·오선 비율색. [0]=삼선 [1]=오선 */
+    uint32_t pg_union_rgb[2];
+    uint8_t pg_union_w[2];
+    /* 양매수. 0이면 표시 없음 */
+    int ym_pos, ym_prev_valid, ym_show_h1, ym_show_h2, ym_show_h3, ym_show_h4, ym_show_first;
+    double ym_prev_hi, ym_prev_lo, ym_two_hi, ym_two_lo;
+    double ym_mark_h1, ym_mark_h2, ym_mark_h3, ym_mark_h4;
+    /* 스나이퍼. score=합계, ex=스코프제외, ratio=비율점수, stage=압축단계 */
+    int sn_ready, sn_score, sn_ex, sn_ratio, sn_stage, sn_compound;
+    double sn_tgt, sn_px;
+    uint32_t sn_rgb;
+    int sn_px_exit, sn_below, sn_above, sn_reset;
+    /* 가격거래량압축. 직전 봉 비율. on이 0이면 그 선은 그리지 않는다. */
+    int pvc_price_on, pvc_vol_on, pvc_both;
+    double pvc_price, pvc_vol;
+    /* 우측 미래 목표선. 회귀가 유효하고 세션 첫 봉이 아닐 때만. */
+    int ray_on;
+    int ray_sign;
+    double ray_px[5], ray_up[5], ray_dn[5];
+    int8_t ray_dir[5];
 } tr_bar_status_t;
 
 typedef struct tr_engine tr_engine_t;
@@ -133,6 +189,17 @@ typedef struct {
     tr_regmem_t regmem;
     tr_persist_t persist;       /* ⑦ 지속 사진 */
     tr_sma_t sma5, sma20, sma60; /* 이평선 (게이트 없음, 모든 timeframe) */
+    bool is_ovs;                /* 해외선물 파이프라인. 1분봉에서 fx_mirae_v1 평가 */
+    tr_fxmirae_t fx;            /* is_ovs일 때만 init. 이식 후 tr_fxmirae_relink */
+    tr_fxv3_run_t fx3;          /* is_ovs 1분봉 표시부. 이식 후 tr_fxv3_run_relink */
+    tr_fxpgap_t pgap3, pgap5;   /* 지속목표차 삼선·오선 */
+    tr_fxpgap_t rgap;           /* 평탄회귀차 1/5/15/30분 */
+    tr_fxpgap_t mgap;           /* 마켓중심차 1/5/15/30분 */
+    tr_fxymae_t ymae;
+    tr_fxsniper_t sniper;
+    tr_osf_combo_t osf; /* 해외선물 1분봉 호가 대체. 국내 파이프는 읽지 않는다 */
+    int64_t pgap_key;
+    bool pgap_has_key;
 } tr_pipeline_t;
 
 #define TR_ENGINE_MAX_PIPES 8 /* 동시 관측 종목 상한 (더 필요하면 상수만 올린다) */
@@ -146,6 +213,9 @@ struct tr_engine {
     uint64_t status_seq;
     tr_pipeline_t *pipes[TR_ENGINE_MAX_PIPES]; /* 활성 파이프라인. [0]은 항상 내장 pipe0 */
     int pipe_count;
+    /* 확정·정정 봉을 캐시에 남기는 고리. 없으면 호출하지 않는다. */
+    void (*candle_fn)(void *ctx, const tr_candle_t *bar);
+    void *candle_fn_ctx;
     /* 파이프라인 0은 엔진에 내장하고, 익명 구조체 뷰를 겹쳐 놓아 e->bb·e->lr3 등
      * 기존 직접 접근이 pipes[0]의 저장소를 가리키게 한다 (C11 익명 멤버).
      * 아래 멤버 목록·순서는 tr_pipeline_t와 동일해야 한다 — 뒤의 offset 검사가 고정한다. */
@@ -183,6 +253,17 @@ struct tr_engine {
             tr_regmem_t regmem;
             tr_persist_t persist;
             tr_sma_t sma5, sma20, sma60;
+            bool is_ovs;
+            tr_fxmirae_t fx;
+            tr_fxv3_run_t fx3;
+            tr_fxpgap_t pgap3, pgap5;
+            tr_fxpgap_t rgap;
+            tr_fxpgap_t mgap;
+            tr_fxymae_t ymae;
+    tr_fxsniper_t sniper;
+    tr_osf_combo_t osf; /* 해외선물 1분봉 호가 대체. 국내 파이프는 읽지 않는다 */
+            int64_t pgap_key;
+            bool pgap_has_key;
         };
     };
     tr_pipeline_t pipe_slots[TR_ENGINE_MAX_PIPES - 1]; /* pipes[1..] 내장 저장소 */
@@ -226,6 +307,18 @@ TR_ENGINE_PIPE_LAYOUT_CHECK(persist);
 TR_ENGINE_PIPE_LAYOUT_CHECK(sma5);
 TR_ENGINE_PIPE_LAYOUT_CHECK(sma20);
 TR_ENGINE_PIPE_LAYOUT_CHECK(sma60);
+TR_ENGINE_PIPE_LAYOUT_CHECK(is_ovs);
+TR_ENGINE_PIPE_LAYOUT_CHECK(fx);
+TR_ENGINE_PIPE_LAYOUT_CHECK(fx3);
+TR_ENGINE_PIPE_LAYOUT_CHECK(pgap3);
+TR_ENGINE_PIPE_LAYOUT_CHECK(pgap5);
+TR_ENGINE_PIPE_LAYOUT_CHECK(rgap);
+TR_ENGINE_PIPE_LAYOUT_CHECK(mgap);
+TR_ENGINE_PIPE_LAYOUT_CHECK(ymae);
+TR_ENGINE_PIPE_LAYOUT_CHECK(sniper);
+TR_ENGINE_PIPE_LAYOUT_CHECK(osf);
+TR_ENGINE_PIPE_LAYOUT_CHECK(pgap_key);
+TR_ENGINE_PIPE_LAYOUT_CHECK(pgap_has_key);
 #undef TR_ENGINE_PIPE_LAYOUT_CHECK
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
@@ -247,7 +340,7 @@ bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
 tr_pipeline_t *tr_engine_pipe_find(tr_engine_t *e, uint64_t instrument_id);
 tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
                                   const char *shcode, const tr_session_policy_t *session,
-                                  double tick_raw,
+                                  double tick_raw, bool is_ovs,
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity);
 bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id);
@@ -271,12 +364,16 @@ size_t tr_engine_pipe_status_count(const tr_engine_t *e, uint64_t instrument_id)
 bool tr_engine_pipe_status_at(const tr_engine_t *e, uint64_t instrument_id,
                               size_t back_index, tr_bar_status_t *out);
 
-/* chart.snapshot의 ind[i] 한 행을 포맷한다 — 32개 값, 인덱스 레이아웃은
- * docs/display_payload.md §2. first=false이면 앞에 쉼표를 붙인다 (배열 연결).
- * ps_flat은 reg_flat 재계산·틱 크기의 raw 단위 (선물 5, 주식 100).
+/* chart.snapshot의 ind[i] 한 행을 포맷한다. 국내 봉은 32개, fx_on 봉은 57개
+ * ([32]=Plot 표시 비트, [33..56]=Plot1..24). 레이아웃은 docs/display_payload.md §2.
+ * first=false이면 앞에 쉼표를 붙인다 (배열 연결).
+ * ps_flat은 reg_flat 재계산·틱 크기의 raw 단위 (선물 5, 주식 100, 해외선물은 명시 틱).
  * 반환은 snprintf 규약: cap을 넘으면 잘리고 썼어야 할 길이를 돌려준다. */
 int tr_bar_status_format_ind(const tr_bar_status_t *st, double ps_flat, bool first,
                              char *buf, size_t cap);
+
+/* chart.snapshot의 fx3[i]. 켜진 Plot의 [번호,값,rgb,두께]. first=false면 앞에 쉼표. */
+int tr_bar_status_format_fx3(const tr_bar_status_t *st, bool first, char *buf, size_t cap);
 
 /* chart.snapshot의 mem[i] 한 이벤트를 포맷한다 — 17개 값, 레이아웃은
  * docs/display_payload.md §2: [time, valid, dir, price, t1..3, u1..3, l1..3,
@@ -300,6 +397,10 @@ void tr_engine_on_timer(tr_engine_t *e, tr_time_us_t now_us);
 
 /* 백필: 과거 확정 봉(실제 OHLC)을 직접 주입한다. tr_bar_builder_inject_bar 래퍼. */
 bool tr_engine_inject_bar(tr_engine_t *e, const tr_candle_t *bar);
+
+/* 확정 봉과 확정 봉의 늦은 정정을 알린다. 무거래 채움 봉은 알리지 않는다. */
+typedef void (*tr_engine_candle_fn)(void *ctx, const tr_candle_t *bar);
+void tr_engine_set_candle_hook(tr_engine_t *e, tr_engine_candle_fn fn, void *ctx);
 
 /* RT 공백 캐치업 병합 (2026-09-30, RT 재연결 공백 유실 사건 후속):
  * 조회해 온 과거 확정 봉을 봉 링에 **지표 재평가 없이** 병합한다.
@@ -352,6 +453,6 @@ void tr_engine_on_orderbook(tr_engine_t *e, uint64_t instrument_id,
    session은 새 종목의 세션 정책이다 (필수 — 시장이 다르면 바뀐다). */
 bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_futures,
                              const char *shcode, const tr_session_policy_t *session,
-                             double tick_raw);
+                             double tick_raw, bool is_ovs);
 
 #endif

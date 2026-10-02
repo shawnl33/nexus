@@ -33,7 +33,11 @@ static void sleep_ms(int ms) {
 #include "adapters/ls/ls_ovsfut.h"
 #include "adapters/ls/ls_realtime.h"
 #include "core/model/civil_time.h"
+#include "runtime/bar_cache.h"
 #include "runtime/engine.h"
+#ifdef TR_HAS_STORE
+#include "adapters/storage/live_bars.h"
+#endif
 #include "yyjson.h"
 
 #include <signal.h>
@@ -160,6 +164,8 @@ static tr_candle_t g_hist[2208]; /* 2일치(선물 2,130) + 페이지 경계 여
 static tr_candle_t g_page[512];   /* 주간 페이지 스크래치 (비압축 500 상한) */
 static tr_candle_t g_night[1008]; /* 야간 t8461 (서버 상한 999) */
 static ls_daily_bar_t g_daily[32]; /* ⑤ 체인 프라임용 일봉 (t8410/t8466) */
+static tr_candle_t g_cache_bars[BB_CAP];
+static tr_candle_t g_merged_bars[BB_CAP];
 static tr_candle_t g_merge_bars[BB_CAP];       /* RT 캐치업 병합 스크래치 (링 저장소와 분리) */
 static tr_bar_status_t g_merge_status[BB_CAP];
 #define HIST_CAP ((size_t)(sizeof(g_hist) / sizeof(g_hist[0])))
@@ -189,6 +195,50 @@ bool tr_backfill_marks_rt_only(int kind, int chart_rc) {
     return kind == LS_MARKET_OVS_FUT && chart_rc == LS_CHART_EMPTY;
 }
 
+static void persist_closed_bar(void *ctx, const tr_candle_t *bar) {
+#ifdef TR_HAS_STORE
+    (void)ctx;
+    tr_live_bars_put(bar);
+#else
+    (void)ctx;
+    (void)bar;
+#endif
+}
+
+static size_t load_cached_bars(uint64_t instrument_id, uint32_t timeframe, tr_candle_t *out, size_t cap) {
+#ifdef TR_HAS_STORE
+    return tr_live_bars_load(instrument_id, timeframe, out, cap);
+#else
+    (void)instrument_id;
+    (void)timeframe;
+    (void)out;
+    (void)cap;
+    return 0;
+#endif
+}
+
+/* 조회 봉과 캐시를 합쳐 주입한다. 파이프라인에 OPEN 봉이 생기기 전에 호출한다. */
+static int inject_with_cache(tr_engine_t *eng, tr_pipeline_t *pipe, const tr_candle_t *broker, size_t nb) {
+    size_t nc = load_cached_bars(pipe->instrument_id, pipe->bb.cfg.timeframe_sec, g_cache_bars, BB_CAP);
+    size_t nm = tr_bar_cache_merge(broker, nb, g_cache_bars, nc, g_merged_bars, BB_CAP);
+    int injected = 0;
+    int future_dropped = 0;
+    tr_time_us_t now_us = (tr_time_us_t)time(0) * TR_US_PER_SEC;
+    for (size_t i = 0; i < nm; i++) {
+        if (!tr_backfill_keep_bar(g_merged_bars[i].open_time_us, now_us, pipe->bb.cfg.timeframe_sec)) {
+            future_dropped++;
+            continue;
+        }
+        if (tr_engine_inject_bar(eng, &g_merged_bars[i])) {
+            injected++;
+        }
+    }
+    if (future_dropped > 0) {
+        fprintf(stderr, "backfill %s: 미래 봉 %d개 제외\n", pipe->shcode, future_dropped);
+    }
+    return injected;
+}
+
 /* 해외선물 워밍업 백필 (o3103, 1페이지 — 서버가 cts 연속 조회를 받지 않는다, 2026-10-01 실측).
  * 이 계정에서 CME는 "해당자료가 없습니다"(LS_CHART_EMPTY)가 와서 RT-only로 표시하고
  * 0을 돌려준다 (실패가 아니다 — 라이브부터 봉을 쌓는다). ⑤ 체인 일봉 프라임(o3108)은
@@ -208,28 +258,14 @@ static int backfill_ovs_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeli
         if (rt_only_out != 0) {
             *rt_only_out = true;
         }
-        return 0;
+        return inject_with_cache(eng, pipe, 0, 0);
     }
     if (rc != LS_HTTP_OK && rc != LS_CHART_EMPTY) {
         fprintf(stderr, "ovs backfill %s failed rc=%d: %s\n", shcode, rc, cerr);
-        return -1;
+        int cached = inject_with_cache(eng, pipe, 0, 0);
+        return cached > 0 ? cached : -1;
     }
-    int injected = 0;
-    int future_dropped = 0;
-    tr_time_us_t now_us = (tr_time_us_t)time(0) * TR_US_PER_SEC;
-    for (size_t i = 0; i < n; i++) {
-        if (!tr_backfill_keep_bar(g_page[i].open_time_us, now_us, pipe->bb.cfg.timeframe_sec)) {
-            future_dropped++;
-            continue;
-        }
-        if (tr_engine_inject_bar(eng, &g_page[i])) {
-            injected++;
-        }
-    }
-    if (future_dropped > 0) {
-        fprintf(stderr, "backfill %s: 미래 봉 %d개 제외\n", shcode, future_dropped);
-    }
-    return injected;
+    return inject_with_cache(eng, pipe, g_page, n);
 }
 
 /* 워밍업 백필: 1분봉(실제 OHLC)을 2일치 조회해 봉 자체로 주입한다.
@@ -340,12 +376,11 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
         }
     }
 
-    /* 3) 두 오름차순 계열을 시각으로 병합 주입 (같은 시각은 주간 우선).
-     * 미래 스텁 봉(t8412 프리마켓 응답 꼬리)은 두 계열 공통으로 여기서 걸러낸다 */
-    int injected = 0;
-    int future_dropped = 0;
+    /* 3) 두 오름차순 계열을 시각으로 모은 뒤 캐시와 합쳐 주입한다.
+     * 미래 스텁 봉(t8412 프리마켓 응답 꼬리)은 여기서 걸러낸다. */
     tr_time_us_t now_us = (tr_time_us_t)time(0) * TR_US_PER_SEC;
-    size_t i = 0, j = 0;
+    size_t i = 0, j = 0, nb = 0;
+    int future_dropped = 0;
     while (i < nday || j < nnight) {
         const tr_candle_t *c;
         if (j >= nnight || (i < nday && day[i].open_time_us <= g_night[j].open_time_us)) {
@@ -360,13 +395,17 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
             future_dropped++;
             continue;
         }
-        if (tr_engine_inject_bar(eng, c)) {
-            injected++;
+        if (nb < BB_CAP) {
+            g_merge_bars[nb++] = *c;
+        } else {
+            memmove(g_merge_bars, g_merge_bars + 1, (BB_CAP - 1) * sizeof(g_merge_bars[0]));
+            g_merge_bars[BB_CAP - 1] = *c;
         }
     }
     if (future_dropped > 0) {
         fprintf(stderr, "backfill %s: 미래 봉 %d개 제외\n", shcode, future_dropped);
     }
+    int injected = inject_with_cache(eng, pipe, g_merge_bars, nb);
     return injected;
 }
 
@@ -419,6 +458,33 @@ static void rt_catchup_missing_bars(live_ctx_t *lc, tr_time_us_t now_us) {
 }
 
 static live_ctx_t g_live_ctx;
+static time_t g_master_retry_after = 0;
+
+/* 기동 때 마스터 조회가 실패하면 검색(market.instruments)이 세션 내내 거절된다.
+ * 명령 시점에 한 번 더 받고, 연속 실패는 30초 간격으로만 재시도한다. */
+static bool ensure_master(live_ctx_t *lc) {
+    if (lc->master != 0) {
+        return true;
+    }
+    if (lc->auth == 0) {
+        return false;
+    }
+    time_t now = time(0);
+    if (now < g_master_retry_after) {
+        return false;
+    }
+    char merr[128] = {0};
+    tr_ls_master_t *master = ls_master_fetch(lc->auth, merr, sizeof(merr));
+    if (master == 0) {
+        fprintf(stderr, "instrument master unavailable: %s\n", merr);
+        g_master_retry_after = now + 30;
+        return false;
+    }
+    lc->master = master;
+    printf("instruments: %zu registered\n", ls_master_count(master));
+    fflush(stdout);
+    return true;
+}
 
 /* shcode → instrument_id 해시 (FNV-1a). 종목별 지표 상태가 섞이지 않게 한다 */
 static uint64_t instrument_id_of(const char *shcode) {
@@ -571,7 +637,66 @@ static const char SNAP_IND_MANIFEST[] =
     "{\"id\":\"sma\",\"name\":\"이평선 5/20/60\",\"layers\":["
     "{\"id\":\"sma5\",\"name\":\"SMA 5\",\"defaultOn\":true},"
     "{\"id\":\"sma20\",\"name\":\"SMA 20\",\"defaultOn\":true},"
-    "{\"id\":\"sma60\",\"name\":\"SMA 60\",\"defaultOn\":true}]}]}";
+    "{\"id\":\"sma60\",\"name\":\"SMA 60\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_mirae_v1\",\"name\":\"해외선물 미래곡선 V1\",\"layers\":["
+    "{\"id\":\"score\",\"name\":\"단계화\",\"defaultOn\":false},"
+    "{\"id\":\"reg\",\"name\":\"회귀선\",\"defaultOn\":true},"
+    "{\"id\":\"market\",\"name\":\"마켓중심\",\"defaultOn\":true},"
+    "{\"id\":\"persist\",\"name\":\"지속 목표\",\"defaultOn\":true},"
+    "{\"id\":\"swingUp\",\"name\":\"지난상승\",\"defaultOn\":true},"
+    "{\"id\":\"swingDn\",\"name\":\"지난하락\",\"defaultOn\":true},"
+    "{\"id\":\"synth\",\"name\":\"합성 5/15/30\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_mirae_v3\",\"name\":\"해외선물 미래곡선 V3\",\"layers\":["
+    "{\"id\":\"stage\",\"name\":\"단계화\",\"defaultOn\":true},"
+    "{\"id\":\"reg\",\"name\":\"회귀선\",\"defaultOn\":true},"
+    "{\"id\":\"past\",\"name\":\"과거 채점\",\"defaultOn\":true},"
+    "{\"id\":\"state\",\"name\":\"매매 상태\",\"defaultOn\":true},"
+    "{\"id\":\"memory\",\"name\":\"방향 기억\",\"defaultOn\":true},"
+    "{\"id\":\"persist\",\"name\":\"지속선\",\"defaultOn\":true},"
+    "{\"id\":\"market\",\"name\":\"마켓 밴드\",\"defaultOn\":true},"
+    "{\"id\":\"swing\",\"name\":\"스윙 되돌림\",\"defaultOn\":true},"
+    "{\"id\":\"rays\",\"name\":\"미래 목표선\",\"defaultOn\":true},"
+    "{\"id\":\"rayBand\",\"name\":\"미래 범위\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_pgap3\",\"name\":\"지속목표차 삼선\",\"layers\":["
+    "{\"id\":\"width\",\"name\":\"폭\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"비율\",\"defaultOn\":true},"
+    "{\"id\":\"count\",\"name\":\"유지 봉수\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_pgap5\",\"name\":\"지속목표차 오선\",\"layers\":["
+    "{\"id\":\"width\",\"name\":\"폭\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"비율\",\"defaultOn\":true},"
+    "{\"id\":\"count\",\"name\":\"유지 봉수\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_rgap\",\"name\":\"평탄회귀차\",\"layers\":["
+    "{\"id\":\"width\",\"name\":\"폭\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"비율\",\"defaultOn\":true},"
+    "{\"id\":\"count\",\"name\":\"유지 봉수\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_mgap\",\"name\":\"마켓중심차\",\"layers\":["
+    "{\"id\":\"width\",\"name\":\"폭\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"비율\",\"defaultOn\":true},"
+    "{\"id\":\"count\",\"name\":\"유지 봉수\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_ugap\",\"name\":\"지속목표차 통합\",\"layers\":["
+    "{\"id\":\"three\",\"name\":\"삼선\",\"defaultOn\":true},"
+    "{\"id\":\"five\",\"name\":\"오선\",\"defaultOn\":true},"
+    "{\"id\":\"reg\",\"name\":\"평탄회귀\",\"defaultOn\":true},"
+    "{\"id\":\"market\",\"name\":\"마켓중심\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_ymae\",\"name\":\"양매수\",\"layers\":["
+    "{\"id\":\"range\",\"name\":\"구간 범위\",\"defaultOn\":true},"
+    "{\"id\":\"hypo\",\"name\":\"가설 신호\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_sniper\",\"name\":\"스나이퍼스코프\",\"layers\":["
+    "{\"id\":\"three\",\"name\":\"삼선 비율\",\"defaultOn\":true},"
+    "{\"id\":\"reg\",\"name\":\"회귀 비율\",\"defaultOn\":true},"
+    "{\"id\":\"market\",\"name\":\"마켓 비율\",\"defaultOn\":true},"
+    "{\"id\":\"price\",\"name\":\"가격 비율\",\"defaultOn\":true},"
+    "{\"id\":\"marks\",\"name\":\"이탈 표시\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_pvc\",\"name\":\"가격거래량압축\",\"layers\":["
+    "{\"id\":\"price\",\"name\":\"가격 비율\",\"defaultOn\":true},"
+    "{\"id\":\"volume\",\"name\":\"거래량 비율\",\"defaultOn\":true},"
+    "{\"id\":\"both\",\"name\":\"동시 압축\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_data2\",\"name\":\"스나이퍼 Data2\",\"layers\":["
+    "{\"id\":\"three\",\"name\":\"삼선 비율\",\"defaultOn\":true},"
+    "{\"id\":\"reg\",\"name\":\"회귀 비율\",\"defaultOn\":true},"
+    "{\"id\":\"market\",\"name\":\"마켓 비율\",\"defaultOn\":true},"
+    "{\"id\":\"price\",\"name\":\"가격 비율\",\"defaultOn\":true},"
+    "{\"id\":\"marks\",\"name\":\"이탈 표시\",\"defaultOn\":true}]}]}";
 
 /* chart.snapshot 꼬리 고정 바이트: 섹션 구분자 3개(\"],\"ind|mem|pst\":[", 각 10자) +
  * 매니페스트 본문. 각 루프 가드는 항목 최악 크기에 이 고정 꼬리를 더한 만큼을 남긴다 —
@@ -633,6 +758,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         uint64_t new_id = instrument_id_of(new_code);
         const char *new_name = 0;
         double new_tick = 0.0;
+        ensure_master(lc);
         int new_kind = resolve_instrument(lc->master, new_code, &new_name, &new_tick);
         const char *new_tick_cd, *new_ob;
         rt_channels_for(new_kind, &new_tick_cd, &new_ob);
@@ -641,7 +767,8 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
 
         tr_session_policy_t new_sess = session_for(new_kind);
         tr_engine_select_symbol(lc->engine, new_id, kind_is_futures(new_kind), new_code,
-                                &new_sess, new_kind == LS_MARKET_OVS_FUT ? new_tick : 0.0);
+                                &new_sess, new_kind == LS_MARKET_OVS_FUT ? new_tick : 0.0,
+                                new_kind == LS_MARKET_OVS_FUT);
         /* 재초기화로 링이 끊기므로 다시 부착한다 (백필 주입 전에). 파이프라인 0이 쓰는
          * 풀 슬롯과 같은 슬롯의 상태/마켓 저장소를 부착한다 (pipe0 이식 후에도 정합) */
         int slot = watch_pool_of(lc->engine->pipes[0]);
@@ -711,12 +838,14 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             yyjson_doc_free(doc);
             return;
         }
+        ensure_master(lc);
         const char *name = 0;
         double tick = 0.0;
         int kind = resolve_instrument(lc->master, code, &name, &tick);
         tr_session_policy_t sess = session_for(kind);
         pipe = tr_engine_pipe_add(lc->engine, id, kind_is_futures(kind), code, &sess,
                                   kind == LS_MARKET_OVS_FUT ? tick : 0.0,
+                                  kind == LS_MARKET_OVS_FUT,
                                   g_bb_pool[slot], BB_CAP, g_score_mid_pool[slot], 64);
         if (pipe == 0) {
             cmd->status = "rejected";
@@ -815,11 +944,13 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     if (strstr(p, "\"type\":\"chart.snapshot\"") != 0) {
         /* 늦게 접속한 대시보드의 과거 봉 시딩용. PUB/SUB는 과거 메시지를 보존하지 않으므로
          * 엔진의 봉 링에서 직접 돌려준다. data.back_index(최신 기준 건너뜀, 기본 0)로
-         * 페이지를 나누고, 이어지면 next_back_index != 0 을 돌려준다 (페이지당 150봉, 오름차순).
+         * 페이지를 나누고, 이어지면 next_back_index != 0 을 돌려준다 (페이지당 16봉, 오름차순).
+         * 한 페이지는 IPC payload 상한(64KiB) 안에 있어야 한다. 넘으면 snprintf가 JSON을
+         * 잘라 payload_raw로 나가고, 대시보드는 payload가 없다고 보고 차트를 비운다.
          * data.shcode로 대상 파이프라인을 고른다 (없으면 첫 파이프라인 — 구 호환).
          * 응답에는 봉·지표 외에 시간축 공백(gaps) 구간 목록도 실린다 — 대시보드가 빠진 분을
          * whitespace로 표시하는 데 쓴다 (docs/display_payload.md §2). */
-        static char buf[60 * 1024];
+        static char buf[256 * 1024];
         tr_engine_t *eng = g_live_ctx.engine;
         long back_index = 0;
         char want[16] = {0};
@@ -853,7 +984,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         size_t n = tr_ring_count(&pipe->bb.bars);
         size_t from = (size_t)back_index;
         size_t remain = from < n ? n - from : 0;
-        size_t take = remain < 150 ? remain : 150;
+        size_t take = remain < 16 ? remain : 16;
         size_t next = from + take < n ? from + take : 0;
         /* 시간축 공백(gaps): 같은 세션 안에서 이웃 봉의 시각 차가 timeframe을 넘는 구간을
          * [start_us, end_us] 쌍으로 수집한다 (tr_engine_pipe_find_gaps — 판별 규칙은 그
@@ -896,7 +1027,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ind\":[");
         SNAP_CLAMP(buf, off);
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 448 - SNAP_TAIL_FIXED - gaps_len;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 1100 - SNAP_TAIL_FIXED - gaps_len;) {
             tr_bar_status_t st;
             memset(&st, 0, sizeof(st));
             tr_engine_pipe_status_at(eng, pipe_id, k, &st);
@@ -943,6 +1074,119 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             SNAP_CLAMP(buf, off);
             first = false;
         }
+        /* V3 표시 Plot. bars와 같은 순서. 국내 봉은 빈 배열. */
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"fx3\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 1400 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += tr_bar_status_format_fx3(&st, first, buf + off, sizeof(buf) - (size_t)off);
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"pgap\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 500 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[", first ? "" : ",");
+            SNAP_CLAMP(buf, off);
+            for (int pi = 0; pi < 2; pi++) {
+                off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                                "%s[%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%u,%u,%u,%u,%u,%u,%u]",
+                                pi > 0 ? "," : "", st.pg_ready[pi],
+                                st.pg_v[pi][0], st.pg_v[pi][1], st.pg_v[pi][2],
+                                st.pg_v[pi][3], st.pg_v[pi][4], st.pg_v[pi][5],
+                                st.pg_c4[pi], (unsigned)st.pg_w4[pi], st.pg_c5[pi],
+                                (unsigned)st.pg_plot3[pi], (unsigned)st.pg_plot5[pi],
+                                st.pg_union_rgb[pi], (unsigned)st.pg_union_w[pi]);
+                SNAP_CLAMP(buf, off);
+            }
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "]");
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"rgap\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 280 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s[%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%u,%u,%u,%u,%u]",
+                            first ? "" : ",", st.rg_ready,
+                            st.rg_v[0], st.rg_v[1], st.rg_v[2], st.rg_v[3], st.rg_v[4], st.rg_v[5],
+                            st.rg_c4, (unsigned)st.rg_w4, st.rg_c5,
+                            (unsigned)st.rg_plot3, (unsigned)st.rg_plot5);
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"mgap\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 280 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s[%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%u,%u,%u,%u,%u]",
+                            first ? "" : ",", st.mg_ready,
+                            st.mg_v[0], st.mg_v[1], st.mg_v[2], st.mg_v[3], st.mg_v[4], st.mg_v[5],
+                            st.mg_c4, (unsigned)st.mg_w4, st.mg_c5,
+                            (unsigned)st.mg_plot3, (unsigned)st.mg_plot5);
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"ymae\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 320 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s[%d,%d,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%d]",
+                            first ? "" : ",", st.ym_pos, st.ym_prev_valid, st.ym_prev_hi, st.ym_prev_lo,
+                            st.ym_two_hi, st.ym_two_lo, st.ym_show_h1, st.ym_show_h2, st.ym_show_h3,
+                            st.ym_show_h4, st.ym_mark_h1, st.ym_mark_h2, st.ym_mark_h3, st.ym_mark_h4,
+                            st.ym_show_first);
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"sniper\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 220 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s[%d,%d,%d,%d,%d,%.10g,%.10g,%u,%d,%d,%d,%d]",
+                            first ? "" : ",", st.sn_score, st.sn_ex, st.sn_ratio, st.sn_stage,
+                            st.sn_compound, st.sn_tgt, st.sn_px, st.sn_rgb, st.sn_px_exit,
+                            st.sn_below, st.sn_above, st.sn_reset);
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"pvc\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 120 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s[%d,%.10g,%d,%.10g,%d]",
+                            first ? "" : ",", st.pvc_price_on, st.pvc_price, st.pvc_vol_on,
+                            st.pvc_vol, st.pvc_both);
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
         /* 매니페스트는 고정 길이 — 루프 가드들이 SNAP_TAIL_FIXED + gaps_len만큼 남겨 두므로,
          * 각 항목이 추정 최악 크기 안에 든 경우에 한해 gaps 섹션·매니페스트가 잘리지 않고
          * 온전히 쓰인다 */
@@ -958,7 +1202,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         /* 검색: data.q(종목코드 접두사 또는 종목명 부분 문자열), data.limit(기본 50, 최대 100) */
         static const ls_instrument_info_t *hits[100];
         static char buf[100 * 128 + 256];
-        if (g_live_ctx.master == 0) {
+        if (!ensure_master(&g_live_ctx)) {
             cmd->status = "rejected";
             cmd->error_code = "registry_unavailable";
             cmd->payload_json = 0;
@@ -1034,7 +1278,14 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
 
     /* 1-1) 종목 레지스트리 (t8436 + t8467 + o3101 + 해외선물 정적 표). 실패 시 추정으로 계속한다 */
     char merr[128] = {0};
-    tr_ls_master_t *master = ls_master_fetch(&auth, merr, sizeof(merr));
+    tr_ls_master_t *master = 0;
+    for (int attempt = 0; attempt < 3 && master == 0; attempt++) {
+        if (attempt > 0) {
+            fprintf(stderr, "instrument master retry %d\n", attempt + 1);
+            sleep_ms(1000);
+        }
+        master = ls_master_fetch(&auth, merr, sizeof(merr));
+    }
     if (master == 0) {
         fprintf(stderr, "instrument master unavailable: %s (fallback to heuristic)\n", merr);
     }
@@ -1080,6 +1331,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     ecfg.is_futures = kind_is_futures(kind);
     /* 해외선물만 틱 크기를 명시한다 (국내는 0 = 자동: 선물 5, 주식 100) */
     ecfg.tick_raw = kind == LS_MARKET_OVS_FUT ? tick_raw : 0.0;
+    ecfg.is_ovs = kind == LS_MARKET_OVS_FUT;
     ecfg.predict_bars[0] = 5;
     ecfg.predict_bars[1] = 10;
     ecfg.predict_bars[2] = 15;
@@ -1102,12 +1354,27 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     tr_engine_attach_status_ring(&engine, g_status_storage, BB_CAP);
     tr_engine_attach_market(&engine, g_mkt_storage, sizeof(g_mkt_storage) / sizeof(g_mkt_storage[0]));
 
+#ifdef TR_HAS_STORE
+    {
+        const char *db_path = getenv("NEXUS_DB");
+        if (db_path == 0 || db_path[0] == '\0') {
+            db_path = "engine.db";
+        }
+        char serr[256] = {0};
+        if (tr_live_bars_open(db_path, serr, sizeof(serr)) != 0) {
+            fprintf(stderr, "bar cache disabled: %s\n", serr[0] ? serr : "open failed");
+        }
+        tr_engine_set_candle_hook(&engine, persist_closed_bar, 0);
+    }
+#endif
+
     /* 4) 워밍업 백필 (market select/watch 시에도 같은 경로로 다시 채운다) */
     bool rt_only = false;
     {
         int nb = backfill_minute_bars(&auth, &engine, engine.pipes[0], shcode, kind, &rt_only);
         if (nb > 0) {
             printf("backfill: %d bars\n", nb);
+            fflush(stdout);
         }
     }
 
@@ -1122,6 +1389,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     if (rt == 0) {
         fprintf(stderr, "error: realtime open failed: %s\n", err);
         tr_ipc_close(ipc);
+#ifdef TR_HAS_STORE
+        tr_live_bars_close();
+#endif
         return 3;
     }
     /* 주식은 S3_/H1_, 선물은 주간 FC9/FH9·야간 DC0/DH0, 해외선물은 OVC/OVH */
@@ -1132,6 +1402,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         fprintf(stderr, "error: subscribe failed\n");
         tr_ls_rt_close(rt);
         tr_ipc_close(ipc);
+#ifdef TR_HAS_STORE
+        tr_live_bars_close();
+#endif
         return 3;
     }
 
@@ -1254,6 +1527,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     tr_ls_rt_close(rt);
     tr_ipc_close(ipc);
     ls_master_free(master);
+#ifdef TR_HAS_STORE
+    tr_live_bars_close();
+#endif
     return rc;
 }
 

@@ -338,6 +338,60 @@ int tr_store_query_candles(tr_store_t *s, uint64_t instrument_id, uint32_t timef
     return count;
 }
 
+int tr_store_query_recent_candles(tr_store_t *s, uint64_t instrument_id, uint32_t timeframe,
+                                  int64_t before_us, size_t limit,
+                                  tr_candle_t *out, size_t cap) {
+    if (s == 0 || out == 0 || cap == 0 || limit == 0) {
+        return -1;
+    }
+    if (limit > cap) {
+        limit = cap;
+    }
+    static const char *SQL =
+        "SELECT open_time, close_time, open, high, low, close, volume, source_id, is_closed, revision, quality"
+        " FROM candles WHERE instrument_id = ? AND timeframe = ? AND open_time < ?"
+        " ORDER BY open_time DESC LIMIT ?;";
+    sqlite3_stmt *st = 0;
+    if (sqlite3_prepare_v2(s->db, SQL, -1, &st, 0) != SQLITE_OK) {
+        return -1;
+    }
+    sqlite3_bind_int64(st, 1, (sqlite3_int64)instrument_id);
+    sqlite3_bind_int(st, 2, (int)timeframe);
+    sqlite3_bind_int64(st, 3, before_us);
+    sqlite3_bind_int64(st, 4, (sqlite3_int64)limit);
+    /* 최근 N개를 역순으로 받은 뒤 뒤집는다. */
+    tr_candle_t *tmp = out;
+    int n = 0;
+    while (sqlite3_step(st) == SQLITE_ROW && (size_t)n < limit) {
+        tr_candle_t c;
+        memset(&c, 0, sizeof(c));
+        c.instrument_id = instrument_id;
+        c.timeframe_sec = timeframe;
+        c.open_time_us = sqlite3_column_int64(st, 0);
+        c.close_time_us = sqlite3_column_int64(st, 1);
+        c.open = sqlite3_column_int64(st, 2);
+        c.high = sqlite3_column_int64(st, 3);
+        c.low = sqlite3_column_int64(st, 4);
+        c.close = sqlite3_column_int64(st, 5);
+        c.volume = sqlite3_column_int64(st, 6);
+        c.source_id = (uint64_t)sqlite3_column_int64(st, 7);
+        c.state = sqlite3_column_int(st, 8) ? TR_CANDLE_CLOSED : TR_CANDLE_OPEN;
+        c.revision = (uint32_t)sqlite3_column_int(st, 9);
+        c.quality = (tr_quality_flags_t)sqlite3_column_int(st, 10);
+        if ((c.quality & TR_QUALITY_FILLED_EMPTY) != 0) {
+            continue;
+        }
+        tmp[n++] = c;
+    }
+    sqlite3_finalize(st);
+    for (int i = 0; i < n / 2; i++) {
+        tr_candle_t swap = tmp[i];
+        tmp[i] = tmp[n - 1 - i];
+        tmp[n - 1 - i] = swap;
+    }
+    return n;
+}
+
 /* ---------- 명령 ---------- */
 
 tr_store_cmd_check_t tr_store_command_check(tr_store_t *s, const char *command_id,

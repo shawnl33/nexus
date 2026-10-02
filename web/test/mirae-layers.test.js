@@ -173,6 +173,44 @@ test("mktStageColor: 단계별 색", () => {
   assert.equal(M.mktStageColor(0), "rgb(120,120,120)");
 });
 
+test("V16 회귀선은 이번 봉 색·굵기의 직선이고 마켓중심은 같은 값만 수평이다", () => {
+  const strokes = [];
+  const ctx = {
+    beginPath() {},
+    moveTo(x, y) { strokes.push(["m", x, y]); },
+    lineTo(x, y) { strokes.push(["l", x, y]); },
+    stroke() { strokes.push(["s", ctx.strokeStyle, ctx.lineWidth]); },
+  };
+  const target = { useMediaCoordinateSpace(fn) { fn({ context: ctx }); } };
+  const reg = M.createRegLinePaneView();
+  reg.update({
+    bars: [
+      { time: 0, x: 10, originalData: { value: 100, score: 5, r2: 0.2, finalState: 0 } },
+      { time: 1, x: 30, originalData: { value: 110, score: -5, r2: 0.8, finalState: 0 } },
+    ],
+    visibleRange: { from: 0, to: 2 },
+  });
+  reg.renderer().draw(target, (v) => v);
+  assert.deepEqual(strokes, [
+    ["m", 10, 100], ["l", 30, 110], ["s", "rgb(0,0,180)", 6],
+  ]);
+
+  strokes.length = 0;
+  const mkt = M.createMarketCenterPaneView();
+  mkt.update({
+    bars: [
+      { time: 0, x: 10, originalData: { value: 100, score: 5 } },
+      { time: 1, x: 30, originalData: { value: 100, score: 5 } },
+      { time: 2, x: 50, originalData: { value: 120, score: 5 } },
+    ],
+    visibleRange: { from: 0, to: 3 },
+  });
+  mkt.renderer().draw(target, (v) => v);
+  assert.deepEqual(strokes, [
+    ["m", 10, 100], ["l", 30, 100], ["s", "rgb(220,0,0)", 3],
+  ]);
+});
+
 test("커스텀 시리즈 pane view 기본 계약", () => {
   for (const view of [M.createRegLinePaneView(), M.createResultBandPaneView(),
                       M.createMarketCenterPaneView(), M.createStepLinesPaneView("mem"),
@@ -426,6 +464,34 @@ test("barInd 확장: sma/ob/regLine 필드가 시딩·라이브 공통 형태로
   assert.ok(bare.sma.every((v) => Number.isNaN(v)));
   assert.equal(bare.obValid, false);
   assert.ok(Number.isNaN(bare.regLine));
+  assert.equal(bare.fxMask, 0);
+  assert.equal(bare.fx.length, 24);
+  assert.ok(bare.fx.every((v) => Number.isNaN(v)));
+});
+
+test("parseInd/barInd: 해외선물 ind[32..56]과 라이브 fx 키", () => {
+  const ind = makeInd();
+  ind[32] = 5; // Plot1·Plot3 표시
+  ind[33] = 2;
+  ind[35] = 4500.25;
+  const d = M.parseInd(ind);
+  assert.equal(d.fxMask, 5);
+  assert.equal(d.fx[0], 2);
+  assert.equal(d.fx[2], 4500.25);
+  assert.equal(d.fx.length, 24);
+  const seeded = M.barIndFromInd(d);
+  assert.equal(seeded.fxMask, 5);
+  assert.equal(seeded.fx[2], 4500.25);
+
+  const live = M.barIndFromPayload({ fx: [5, 2, 0, 4500.25] });
+  assert.equal(live.fxMask, 5);
+  assert.equal(live.fx[0], 2);
+  assert.equal(live.fx[2], 4500.25);
+  assert.equal(live.fx.length, 24);
+
+  const domestic = M.parseInd(makeInd());
+  assert.equal(domestic.fxMask, 0);
+  assert.ok(domestic.fx.every((v) => Number.isNaN(v)));
 });
 
 test("memItemFromPayload/pstItemFromPayload: 라이브 mem/pst → 봉별 아이템 (캐시 계약)", () => {

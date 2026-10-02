@@ -10,10 +10,10 @@
 const WatchGuard = (() => {
   // 이 종목의 watch를 해지해야 하는가:
   // 어느 칸도 그 종목을 보지 않고(symbol), 진행 중인 다른 선택도 그 종목을
-  // 노리지 않을 때(selTarget)만 해지한다. 그 외는 다른 칸/선택이 이어받은
-  // watch이므로 건드리지 않는다. panes는 { symbol, selTarget } 목록.
+  // 노리지 않을 때(selTarget)만 해지한다. Data2 참조(data2)로 쓰는 종목도 유지한다.
+  // panes는 { symbol, selTarget, data2 } 목록.
   function staleWatchLeaks(shcode, panes) {
-    return !panes.some((p) => p.symbol === shcode || p.selTarget === shcode);
+    return !panes.some((p) => p.symbol === shcode || p.selTarget === shcode || p.data2 === shcode);
   }
 
   // 같은 종목의 watch/unwatch 요청을 직렬화하는 큐를 만든다.

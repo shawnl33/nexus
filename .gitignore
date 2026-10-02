@@ -4,6 +4,9 @@ build-windows-cross/
 node_modules/
 web/.runtime/
 .env
+engine.db
+engine.db-wal
+engine.db-shm
 *:Zone.Identifier
 *.user
 .vscode/

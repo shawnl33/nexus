@@ -55,6 +55,17 @@ tr_session_policy_t ls_ovsfut_session(void) {
     return s;
 }
 
+/* ASCII 대소문자 무시 접두 비교. 코드는 대문자로 저장된다. */
+static bool prefix_ci(const char *s, const char *q, size_t qlen) {
+    for (size_t i = 0; i < qlen; i++) {
+        if (s[i] == 0 ||
+            tolower((unsigned char)s[i]) != tolower((unsigned char)q[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* 이름의 단어 경계 부분 문자열 검색 (대소문자 무시, ASCII 기준): 매치 시작이 문자열
  * 처음이거나 비영숫자 직후여야 한다 ("es"가 "Jones"의 끝 두 글자에 걸리는 오탐 방지) */
 static bool name_contains_ci(const char *hay, const char *needle) {
@@ -86,8 +97,8 @@ size_t ls_ovsfut_search(const char *q, const ls_ovsfut_entry_t **out, size_t cap
     size_t qlen = q != 0 ? strlen(q) : 0;
     for (size_t i = 0; i < ls_ovsfut_count() && n < cap; i++) {
         const ls_ovsfut_entry_t *e = &OVSFUT_TABLE[i];
-        bool match = qlen == 0 || strncmp(e->prefix, q, qlen) == 0 ||
-                     strncmp(e->contract, q, qlen) == 0 || name_contains_ci(e->name, q);
+        bool match = qlen == 0 || prefix_ci(e->prefix, q, qlen) ||
+                     prefix_ci(e->contract, q, qlen) || name_contains_ci(e->name, q);
         if (match) {
             out[n++] = e;
         }

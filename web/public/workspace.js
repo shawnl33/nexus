@@ -15,6 +15,11 @@ const Workspace = (() => {
       height: p.height,
       symbol: typeof p.symbol === "string" ? p.symbol : "",
       panelOpen: p.panelOpen !== false, // 지표 패널 접힘만 false로 남긴다 (기본 열림)
+      data2: typeof p.data2 === "string" ? p.data2 : "",
+      candles: p.barStyle ? p.barStyle !== "none" : p.candles !== false,
+      barStyle: ["none", "candle", "outline", "bar", "line"].includes(p.barStyle)
+        ? p.barStyle
+        : (p.candleBody === "outline" ? "outline" : (p.candles === false ? "none" : "candle")),
       indicators: (p.indicators ?? []).map((i) => ({
         id: i.id,
         layers: { ...(i.layers ?? {}) },
@@ -49,9 +54,17 @@ const Workspace = (() => {
         for (const [k, v] of Object.entries(i.layers ?? {})) layers[k] = !!v;
         indicators.push({ id: i.id, layers });
       }
-      panels.push({ height, symbol, panelOpen: p?.panelOpen !== false, indicators });
+      const data2 = typeof p?.data2 === "string" ? p.data2 : "";
+      let barStyle = ["none", "candle", "outline", "bar", "line"].includes(p?.barStyle)
+        ? p.barStyle
+        : (p?.candles === false ? "none" : "candle");
+      if (barStyle === "candle" && p?.candleBody === "outline") barStyle = "outline";
+      panels.push({
+        height, symbol, panelOpen: p?.panelOpen !== false, data2,
+        candles: barStyle !== "none", barStyle, indicators,
+      });
     }
-    if (panels.length === 0) panels.push({ height: 1, symbol: fallbackSymbol, panelOpen: true, indicators: [] }); // 빈 화면틀 = 맨 차트 1칸
+    if (panels.length === 0) panels.push({ height: 1, symbol: fallbackSymbol, panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [] }); // 빈 화면틀 = 맨 차트 1칸
     return { symbol: fallbackSymbol, panels };
   }
 

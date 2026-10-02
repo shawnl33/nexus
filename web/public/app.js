@@ -52,7 +52,21 @@ function sameSession(src, cur) {
 // selTarget은 진행 중인 선택의 목표 종목 — 늦은 선택 완료를 폐기할 때 그 종목의
 // watch를 해지해도 되는지(WatchGuard.staleWatchLeaks) 판정에 쓴다.
 
-const RENDERERS = { mirae_v16: MiraeLayers.MiraeRenderer, sma: SmaLayers.SmaRenderer };
+const RENDERERS = {
+  mirae_v16: MiraeLayers.MiraeRenderer,
+  sma: SmaLayers.SmaRenderer,
+  fx_mirae_v1: FxLayers.FxRenderer,
+  fx_mirae_v3: Fx3Layers.Fx3Renderer,
+  fx_pgap3: PgapLayers.make("fx_pgap3", 0),
+  fx_pgap5: PgapLayers.make("fx_pgap5", 1),
+  fx_rgap: PgapLayers.makeSingle("fx_rgap", "rgap"),
+  fx_mgap: PgapLayers.makeSingle("fx_mgap", "mgap"),
+  fx_ugap: PgapLayers.makeUnion("fx_ugap"),
+  fx_ymae: YmaeLayers.YmaeRenderer,
+  fx_sniper: Data2Layers.Data2Renderer,
+  fx_pvc: PvcLayers.PvcRenderer,
+  fx_data2: Data2Layers.Data2Renderer,
+};
 
 // 지표 매니페스트 (엔진 스냅샷의 indicators 배열) — 시딩 전에는 비어 있다
 let indicatorManifest = [];
@@ -148,6 +162,13 @@ function syncPaneSize(pane) {
   pane.chart.resize(pane.chartEl.clientWidth, pane.chartEl.clientHeight);
 }
 
+// 칸 폭이 나중에 잡히거나 패널을 접으면 봉 간격이 달라진다. 그때 시간축을 다시 맞춘다.
+let alignFrame = 0;
+const paneResize = new ResizeObserver(() => {
+  cancelAnimationFrame(alignFrame);
+  alignFrame = requestAnimationFrame(() => alignAllPanes(false));
+});
+
 function createPane(heightFrac = 1) {
   const div = document.createElement("div");
   div.className = "pane";
@@ -169,14 +190,12 @@ function createPane(heightFrac = 1) {
     symbol: "", symName: "", selSeq: 0, selTarget: "", searchSeq: 0, searchTimer: null,
     active: new Map(), chart: null, candleSeries: null, syncHandle: null,
     pickerEl: null, symInput: null, symNameEl: null, symResults: null,
-    panelOpen: true, panelToggleEl: null, treeFold: {},
+    panelOpen: true, panelToggleEl: null, treeFold: {}, data2: "",
+    barStyle: "candle", barDraw: "candle",
   };
   pane.chart = LightweightCharts.createChart(chartHost, chartOptions(pane));
-  pane.candleSeries = pane.chart.addCandlestickSeries({
-    upColor: "#ef5350", downColor: "#2962ff",
-    borderUpColor: "#ef5350", borderDownColor: "#2962ff",
-    wickUpColor: "#ef5350", wickDownColor: "#2962ff",
-  });
+  paneResize.observe(chartHost);
+  pane.candleSeries = makePriceSeries(pane.chart, "candle", false);
   pane.syncHandle = paneSync.add(pane.chart, pane.candleSeries, {
     // 크로스헤어 가로선 값과 시간축 전파의 꼬리 판정·변환은 이 칸 자기 종목의 캐시 기준이다.
     // getPrice는 캐시의 봉 맵만 본다 — whitespace(구멍) 시각에는 항목이 없어 undefined가 나오고,
@@ -211,7 +230,15 @@ function createPane(heightFrac = 1) {
   // 전까지 차트 하단의 시간축이 잘린다 — bootstrap의 첫 칸·addPane의 새 칸 모두)
   syncPaneSize(pane);
   panes.push(pane);
+  pane.el.addEventListener("pointerdown", () => { currentPane = pane; });
   return pane;
+}
+
+let currentPane = null;
+
+function viewedPane() {
+  if (currentPane && panes.includes(currentPane) && currentPane.symbol) return currentPane;
+  return panes.find((p) => p.symbol) || null;
 }
 
 // 도구줄 버튼: ☰(지표 패널 접기/펼치기) + ×(칸 삭제). 트리 재구성 때 다시 만들지 않는다
@@ -234,6 +261,176 @@ function buildPaneToolButtons(pane) {
 
 // 칸별 지표 패널 접기/펼치기. 접으면 차트가 칸 전체 폭을 쓴다 — 호스트 폭이 바뀌므로
 // 차트 크기를 다시 맞춘다 (패널 DOM은 숨길 뿐, 트리 상태는 유지된다)
+const BAR_STYLES = [
+  { id: "none", name: "없음" },
+  { id: "candle", name: "캔들바" },
+  { id: "outline", name: "테두리" },
+  { id: "bar", name: "바" },
+  { id: "line", name: "종가선" },
+];
+
+function pricePoint(row, draw) {
+  if (!row || row.open == null) return { time: row.time };
+  if (draw === "line") return { time: row.time, value: row.close };
+  return row;
+}
+
+const CANDLE_UP = "#ef5350";
+const CANDLE_DN = "#2962ff";
+
+function candleBodyWidth(barSpacing, pixelRatio) {
+  if (barSpacing >= 2.5 && barSpacing <= 4) return Math.floor(3 * pixelRatio);
+  const coeff = 1 - 0.2 * Math.atan(Math.max(4, barSpacing) - 4) / (Math.PI * 0.5);
+  const scaled = Math.floor(barSpacing * pixelRatio);
+  return Math.max(Math.floor(pixelRatio), Math.min(Math.floor(barSpacing * coeff * pixelRatio), scaled));
+}
+
+function candleBorderPrimitive() {
+  const WIDTH = 2;
+  let chart = null;
+  let series = null;
+  return {
+    attached(param) {
+      chart = param.chart;
+      series = param.series;
+    },
+    detached() {
+      chart = null;
+      series = null;
+    },
+    updateAllViews() {},
+    paneViews() {
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!chart || !series) return;
+              const opt = typeof series.options === "function" ? series.options() : null;
+              if (opt && opt.visible === false) return;
+              const raw = series.data;
+              const bars = typeof raw === "function" ? raw.call(series) : [];
+              if (!bars.length) return;
+              target.useBitmapCoordinateSpace((scope) => {
+                const ctx = scope.context;
+                const hr = scope.horizontalPixelRatio;
+                const vr = scope.verticalPixelRatio;
+                const spacing = chart.timeScale().options().barSpacing;
+                const bw = candleBodyWidth(spacing, hr);
+                const border = Math.max(1, Math.round(WIDTH * hr));
+                for (const bar of bars) {
+                  if (bar.open == null || bar.close == null) continue;
+                  const x = chart.timeScale().timeToCoordinate(bar.time);
+                  const yo = series.priceToCoordinate(bar.open);
+                  const yc = series.priceToCoordinate(bar.close);
+                  if (x == null || yo == null || yc == null) continue;
+                  const left = Math.round(x * hr) - Math.floor(bw * 0.5);
+                  const right = left + bw - 1;
+                  let top = Math.round(Math.min(yo, yc) * vr);
+                  let bottom = Math.round(Math.max(yo, yc) * vr);
+                  if (bottom - top < border) bottom = top + border;
+                  ctx.beginPath();
+                  ctx.strokeStyle = bar.close >= bar.open ? CANDLE_UP : CANDLE_DN;
+                  ctx.lineWidth = border;
+                  const inset = border / 2;
+                  ctx.strokeRect(
+                    left + inset,
+                    top + inset,
+                    Math.max(border, right - left + 1 - border),
+                    Math.max(border, bottom - top + 1 - border),
+                  );
+                }
+              });
+            },
+          };
+        },
+      }];
+    },
+  };
+}
+
+function candleColors(body) {
+  const hollow = body === "outline";
+  return {
+    upColor: hollow ? "rgba(0,0,0,0)" : CANDLE_UP,
+    downColor: hollow ? "rgba(0,0,0,0)" : CANDLE_DN,
+    borderVisible: true,
+    borderUpColor: CANDLE_UP,
+    borderDownColor: CANDLE_DN,
+    wickUpColor: CANDLE_UP,
+    wickDownColor: CANDLE_DN,
+  };
+}
+
+function makePriceSeries(chart, draw, hollow) {
+  if (draw === "bar") {
+    return chart.addBarSeries({
+      upColor: CANDLE_UP, downColor: CANDLE_DN,
+      thinBars: false,
+    });
+  }
+  if (draw === "line") {
+    return chart.addLineSeries({
+      color: "#d1d4dc", lineWidth: 2,
+      priceLineVisible: true, lastValueVisible: true,
+    });
+  }
+  return chart.addCandlestickSeries(candleColors(hollow ? "outline" : "fill"));
+}
+
+function syncCandleBorder(pane, hollow) {
+  if (!pane.candleSeries || pane.barDraw !== "candle") {
+    pane.candleBorder = null;
+    return;
+  }
+  if (hollow && !pane.candleBorder) {
+    pane.candleBorder = candleBorderPrimitive();
+    pane.candleSeries.attachPrimitive(pane.candleBorder);
+  } else if (!hollow && pane.candleBorder) {
+    if (typeof pane.candleSeries.detachPrimitive === "function") {
+      pane.candleSeries.detachPrimitive(pane.candleBorder);
+    }
+    pane.candleBorder = null;
+  }
+}
+
+function setBarStyle(pane, style) {
+  const next = BAR_STYLES.some((s) => s.id === style) ? style : "candle";
+  const draw = next === "none" || next === "outline" ? "candle" : next;
+  const hollow = next === "outline";
+  pane.barStyle = next;
+  if (pane.barDraw !== draw) {
+    const cache = feed.get(pane.symbol);
+    const bars = cache ? cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean) : [];
+    const rows = bars.length ? Gaps.withWhitespace(bars).map((r) => pricePoint(r, draw)) : [];
+    mutePaneRange(pane);
+    if (pane.candleSeries) pane.chart.removeSeries(pane.candleSeries);
+    pane.candleBorder = null;
+    pane.candleSeries = makePriceSeries(pane.chart, draw, hollow);
+    pane.barDraw = draw;
+    if (pane.syncHandle) pane.syncHandle.candleSeries = pane.candleSeries;
+    if (rows.length) pane.candleSeries.setData(rows);
+  } else if (draw === "candle" && pane.candleSeries) {
+    pane.candleSeries.applyOptions(candleColors(hollow ? "outline" : "fill"));
+  }
+  if (draw === "candle") syncCandleBorder(pane, hollow);
+  pane.candleSeries.applyOptions({
+    visible: next !== "none",
+    priceScaleId: next === "none" ? "off" : "right",
+  });
+  // 분봉이 없으면 오른쪽 눈금은 지표 비율이다. 가격용 ÷100을 쓰면 80이 0.80으로 보인다.
+  pane.chart.applyOptions({
+    localization: {
+      priceFormatter: next === "none"
+        ? (p) => (Number.isFinite(p) ? String(Math.round(p * 100) / 100) : "-")
+        : (p) => fmtPrice(p, paneCache(pane)?.tickRaw ?? 5),
+    },
+  });
+  for (const { handle } of pane.active.values()) {
+    if (typeof handle.setAxis === "function") handle.setAxis(next === "none" ? "right" : null);
+  }
+  if (pane.barSelect) pane.barSelect.value = next;
+}
+
 function setPanelOpen(pane, open) {
   pane.panelOpen = open;
   pane.panelEl.hidden = !open;
@@ -245,6 +442,8 @@ function removePane(pane, { release = true } = {}) {
   const i = panes.indexOf(pane);
   if (i < 0) return;
   panes.splice(i, 1);
+  paneResize.unobserve(pane.chartEl);
+  if (currentPane === pane) currentPane = null;
   pane.selSeq++; // 진행 중인 종목 선택의 늦은 완료를 폐기한다
   clearTimeout(pane.searchTimer);
   pane.active.clear();
@@ -359,7 +558,15 @@ function buildPanePicker(pane) {
   pane.symNameEl = name;
   pane.symResults = results;
 
-  input.addEventListener("input", () => onPaneSymbolInput(pane));
+  input.addEventListener("input", () => {
+    const upper = input.value.toUpperCase();
+    if (upper !== input.value) {
+      const pos = input.selectionStart;
+      input.value = upper;
+      if (pos != null) input.setSelectionRange(pos, pos);
+    }
+    onPaneSymbolInput(pane);
+  });
   input.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") selectPaneSymbol(pane, input.value);
     if (ev.key === "Escape") hidePaneResults(pane);
@@ -415,8 +622,17 @@ function onPaneSymbolInput(pane) {
     const seq = ++pane.searchSeq;
     try {
       const res = await fetch(`/api/market?q=${encodeURIComponent(q)}&limit=20`);
-      if (!res.ok) return hidePaneResults(pane);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const why = data.error_code === "registry_unavailable"
+          ? "종목 목록을 아직 받지 못했습니다"
+          : "종목 검색 실패";
+        showPaneResults(pane, [], seq);
+        if (seq === pane.searchSeq && pane.symResults.firstChild) {
+          pane.symResults.firstChild.textContent = why;
+        }
+        return;
+      }
       showPaneResults(pane, data.payload?.items ?? [], seq);
     } catch {
       /* 검색 실패는 드롭다운만 닫는다 */
@@ -501,6 +717,43 @@ async function selectPaneSymbol(pane, shcode, name) {
   // 이전 종목은 새 watch가 붙은 뒤에 해제한다 (엔진의 마지막-watch 해지 거부를 피한다)
   if (prev) releaseSymbol(prev);
   await seedSymbol(shcode);
+  if (pane.active.has("fx_data2")) ensureDefaultData2(pane);
+}
+
+// 참조가 비어 있으면 ES↔NQ 같은 월물을 넣어 바로 관측한다.
+function ensureDefaultData2(pane) {
+  if (pane.data2 || !pane.symbol) return;
+  const code = Data2Layers.defaultCode(pane.symbol);
+  if (!code || code === pane.symbol) return;
+  setPaneData2(pane, code).catch(() => {});
+}
+
+// 스나이퍼 Data2: 참조 종목의 1분 비율을 이 칸 차트에 겹친다.
+async function setPaneData2(pane, code) {
+  const next = String(code ?? "").trim().toUpperCase();
+  const prev = pane.data2 || "";
+  pane.data2 = next;
+  if (!pane.active.has("fx_data2")) activateIndicator(pane, "fx_data2");
+  const entry = pane.active.get("fx_data2");
+  if (!next) {
+    if (entry) entry.handle.clear();
+    if (prev && WatchGuard.staleWatchLeaks(prev, panes)) releaseSymbol(prev);
+    buildPaneTools(pane);
+    return;
+  }
+  const w = await watchSymbol(next);
+  if (pane.data2 !== next) return;
+  if (!w.ok) {
+    pane.data2 = prev;
+    alert(`참조 종목 관측 실패 (${next}): ${w.error}`);
+    buildPaneTools(pane);
+    return;
+  }
+  if (w.name) feed.forSymbol(next).name = w.name;
+  await seedSymbol(next);
+  if (entry && pane.data2 === next) entry.handle.setSource(feed.get(next));
+  if (prev && prev !== next && WatchGuard.staleWatchLeaks(prev, panes)) releaseSymbol(prev);
+  buildPaneTools(pane);
 }
 
 function clearPaneData(pane) {
@@ -524,6 +777,7 @@ function buildPaneTools(pane) {
   const panel = pane.panelEl;
   panel.replaceChildren();
 
+  panel.append(buildChartControls(pane));
   if (!pane.symbol) {
     const hint = document.createElement("div");
     hint.className = "ind-hint";
@@ -535,6 +789,29 @@ function buildPaneTools(pane) {
   for (const cat of IndicatorTree.buildTree(indicatorManifest, (id) => id in RENDERERS)) {
     panel.append(buildCatNode(pane, cat));
   }
+}
+
+// 왼쪽 패널 위: 이 칸의 분봉 모양을 고른다. 칸을 더 여는 것은 위쪽 + 차트다.
+function buildChartControls(pane) {
+  const box = document.createElement("div");
+  box.className = "ind-chart-tools";
+  const label = document.createElement("label");
+  label.className = "bar-style";
+  label.append(document.createTextNode("분봉"));
+  const sel = document.createElement("select");
+  for (const s of BAR_STYLES) {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    opt.textContent = s.name;
+    sel.append(opt);
+  }
+  sel.value = pane.barStyle || "candle";
+  sel.title = "이 칸의 분봉 표시. 테두리는 캔들 속을 비운다. 없음이면 지표만 남는다";
+  sel.onchange = () => setBarStyle(pane, sel.value);
+  pane.barSelect = sel;
+  label.append(sel);
+  box.append(label);
+  return box;
 }
 
 // 트리 카테고리 노드: 머리(접기/펼치기 + 이름) + 지표 목록.
@@ -576,11 +853,32 @@ function buildIndNode(pane, meta) {
   box.onchange = () => {
     if (box.checked) activateIndicator(pane, meta.id);
     else deactivateIndicator(pane, meta.id);
+    if (box.checked && meta.id === "fx_data2" && !pane.data2) ensureDefaultData2(pane);
     buildPaneTools(pane);
     updateBadgeVisibility();
   };
   row.append(box, document.createTextNode(meta.name ?? meta.id));
   node.append(row);
+  if (meta.id === "fx_data2") {
+    const ref = document.createElement("input");
+    ref.className = "data2-ref";
+    ref.placeholder = "참조 코드";
+    ref.size = 8;
+    ref.value = pane.data2 || "";
+    ref.title = "이 칸에 겹칠 참조 종목. Enter로 적용";
+    ref.addEventListener("input", () => {
+      const upper = ref.value.toUpperCase();
+      if (upper !== ref.value) {
+        const pos = ref.selectionStart;
+        ref.value = upper;
+        if (pos != null) ref.setSelectionRange(pos, pos);
+      }
+    });
+    ref.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") setPaneData2(pane, ref.value);
+    });
+    node.append(ref);
+  }
 
   const entry = pane.active.get(meta.id);
   if (entry) {
@@ -612,14 +910,19 @@ function activateIndicator(pane, indId, savedLayers) {
   const renderer = RENDERERS[indId];
   if (!renderer) return;
   const handle = renderer.createHandle(pane.chart, pane.candleSeries);
+  if (pane.barStyle === "none" && typeof handle.setAxis === "function") handle.setAxis("right");
   const meta = indicatorManifest.find((m) => m.id === indId);
   const layers = {};
   for (const l of meta?.layers ?? []) layers[l.id] = savedLayers?.[l.id] ?? (l.defaultOn !== false);
   for (const [k, v] of Object.entries(savedLayers ?? {})) layers[k] = !!v; // 매니페스트에 없는 저장 키도 보존
   pane.active.set(indId, { renderer, handle, layers });
   handle.setLayers(layers);
-  const cache = pane.symbol ? feed.get(pane.symbol) : undefined;
-  if (cache) handle.applySeed(ctxFor(cache));
+  if (indId === "fx_data2") {
+    if (pane.data2) handle.setSource(feed.get(pane.data2));
+  } else {
+    const cache = pane.symbol ? feed.get(pane.symbol) : undefined;
+    if (cache) handle.applySeed(ctxFor(cache));
+  }
 }
 
 function deactivateIndicator(pane, indId) {
@@ -710,7 +1013,7 @@ function applyStatus(msg) {
     clearSymbolPanes(sh);
     // 세대 상승은 엔진 쪽 재구성 신호다 (종목 전환·RT 캐치업 병합). 비운 뒤 스냅샷을
     // 다시 가져와야 병합된 과거 봉(캐치업)까지 화면에 반영된다 — 라이브만으로는 구멍이 남는다
-    if (panes.some((pane) => pane.symbol === sh)) seedSymbol(sh);
+    if (panes.some((pane) => pane.symbol === sh || pane.data2 === sh)) seedSymbol(sh);
   }
   const t = Number(p.bar_open_time) / 1e6;
   if (!Number.isFinite(t) || t <= 0) return;
@@ -752,9 +1055,9 @@ function applyStatus(msg) {
           // 열리며 사용자의 줌/스크롤 이벤트를 삼키는 일을 피한다.
           if (barCode === 1) {
             mutePaneRange(pane);
-            for (const w of liveWs) pane.candleSeries.update(w);
+            for (const w of liveWs) pane.candleSeries.update(pricePoint(w, pane.barDraw));
           }
-          pane.candleSeries.update(cache.bars.get(t));
+          pane.candleSeries.update(pricePoint(cache.bars.get(t), pane.barDraw));
         } else {
           // 늦은 정정/구멍 채움(과거 시각): candleSeries.update()는 시리즈 마지막보다
           // 과거 시각에 throw("Cannot update oldest data")하므로 캐시에서 다시 깐다.
@@ -769,6 +1072,13 @@ function applyStatus(msg) {
     }
   }
   const ind = MiraeLayers.barIndFromPayload(p);
+  ind.fx3 = Fx3Layers.parseFx3(p.fx3);
+  ind.pgap = PgapLayers.parsePgap(p.pgap);
+  ind.rgap = PgapLayers.parseSide(p.rgap);
+  ind.mgap = PgapLayers.parseSide(p.mgap);
+  ind.ymae = YmaeLayers.parseYmae(p.ymae);
+  ind.sniper = SniperLayers.parseSniper(p.sniper);
+  ind.pvc = PvcLayers.parsePvc(p.pvc);
   ind.score = Number.isFinite(p.score) ? p.score : NaN;
   ind.pred = Array.isArray(p.pred) ? p.pred : undefined;
   ind.resid = p.resid ?? 0;
@@ -790,6 +1100,7 @@ function applyStatus(msg) {
   for (const pane of panes) {
     if (pane.symbol !== sh || seedingNow) continue;
     for (const [indId, { handle }] of pane.active) {
+      if (indId === "fx_data2" && pane.data2 && pane.data2 !== sh) continue;
       // 지표 시리즈도 칸별로 격리한다 — 한 지표의 실패가 다른 지표·칸으로 번지지 않게.
       try {
         // 정정(과거 시각) 틱에는 지표 시리즈의 update()도 같은 throw가 나므로
@@ -800,6 +1111,17 @@ function applyStatus(msg) {
       } catch (err) {
         console.error(`[${sh}] 지표(${indId}) 반영 실패 t=${t}`, err);
       }
+    }
+  }
+  for (const pane of panes) {
+    if (pane.data2 !== sh || pane.symbol === sh || seedingNow) continue;
+    const entry = pane.active.get("fx_data2");
+    if (!entry) continue;
+    try {
+      if (isTail) entry.handle.applyLive(p, ctx);
+      else entry.handle.applySeed(ctx);
+    } catch (err) {
+      console.error(`[${sh}] Data2 반영 실패 t=${t}`, err);
     }
   }
 
@@ -879,7 +1201,7 @@ function rebuildPaneCandles(pane, cache) {
   const rows = Gaps.withWhitespace(bars); // 균일 분 그리드 — renderSymbolPanes와 같은 계약
   const range = pane.chart.timeScale().getVisibleRange(); // 시각 창 (데이터 없으면 null)
   mutePaneRange(pane);
-  pane.candleSeries.setData(rows);
+  pane.candleSeries.setData(rows.map((r) => pricePoint(r, pane.barDraw)));
   cache.wsCount = rows.length - bars.length;
   cache.seriesTimes = rows.map((r) => r.time);
   if (range && rows.length) {
@@ -912,46 +1234,63 @@ function renderSymbolPanes(shcode) {
   cache.seriesTimes = rows.map((r) => r.time);
   const ctx = ctxFor(cache);
   const times = cache.seriesTimes;
+  // setVisibleLogicalRange는 다음 프레임에야 차트에 반영된다. 같은 루프에서
+  // getVisibleLogicalRange를 읽으면 방금 넣은 창이 아니라 이전 창이 나온다.
+  // 그래서 적용한 오른쪽 끝 시각과 px 봉 간격을 변수로 넘긴다.
+  let heldSpacing = 0;
+  let heldRight = 0;
   for (const pane of panes) {
     if (pane.symbol !== shcode) continue;
     // 시딩 적용(setData + 초기 범위 지정)은 프로그램적 변경 — 그 칸이 자기 최신 범위로
     // 돌아가며 내는 범위 이벤트가 다른 칸의 탐색 위치를 빼앗지 않게 뮤트한다
     mutePaneRangeForSeeding(pane);
-    pane.candleSeries.setData(rows);
-    // 초기 범위: 다른 칸이 이미 창을 갖고 있으면 그 칸의 px 봉 간격과 오른쪽 끝 시각을
-    // 이 칸 폭에 적용한다 (pane-sync와 같은 규칙 — 이 종목에 데이터가 없는 구간은 빈
-    // 영역으로 남고, 칸 폭이 달라도 공유 시각의 x가 일치한다). ref가 같은 종목 재시딩
-    // 중인 칸이어도 값은 유효하므로 그대로 쓴다. 아직 아무 칸도 창을 갖지 않았으면
-    // (첫 칸) 최근 380봉을 기본으로 한다.
-    let refSpacingPx = 0, refRightTime = 0;
-    for (const q of panes) {
-      if (q === pane || !q.symbol) continue;
-      const lr = q.chart.timeScale().getVisibleLogicalRange();
-      const qTimes = feed.get(q.symbol)?.seriesTimes;
-      if (lr && lr.to > lr.from && q.chartEl.clientWidth > 0
-          && Array.isArray(qTimes) && qTimes.length > 0) {
-        // px 봉 간격 = 폭/(슬롯 수+1) — 라이브러리 관계식 (pane-sync.js 주석 참조)
-        refSpacingPx = q.chartEl.clientWidth / (lr.to - lr.from + 1); // 한 번만 읽어 변수에 담는다
-        // 오른쪽 끝 앵커는 '논리 인덱스 → 시각' 환산으로 — getVisibleRange().to는
-        // floor/ceil 후 데이터 범위로 클램프되어, ref가 마지막 봉 뒤 여백으로 스크롤돼
-        // 있으면 어긋난다 (pane-sync의 tWin.to와 같은 timeAt 환산)
-        refRightTime = PaneSync.timeAt(qTimes, lr.to);
-        break;
+    pane.candleSeries.setData(rows.map((r) => pricePoint(r, pane.barDraw)));
+    const width = pane.chartEl.clientWidth;
+    if (!(heldSpacing > 0)) {
+      for (const q of panes) {
+        if (q === pane || !q.symbol) continue;
+        const lr = q.chart.timeScale().getVisibleLogicalRange();
+        const qTimes = feed.get(q.symbol)?.seriesTimes;
+        const qw = q.chartEl.clientWidth;
+        if (lr && lr.to > lr.from && qw > 0
+            && Array.isArray(qTimes) && qTimes.length > 0) {
+          heldSpacing = qw / (lr.to - lr.from + 1);
+          heldRight = PaneSync.timeAt(qTimes, lr.to);
+          break;
+        }
       }
     }
-    if (refSpacingPx > 0 && times.length && pane.chartEl.clientWidth > 0) {
-      const toM = PaneSync.logicalAt(times, refRightTime);
-      const fromM = toM - (pane.chartEl.clientWidth / refSpacingPx - 1);
+    if (heldSpacing > 0 && times.length && width > 0) {
+      const toM = PaneSync.logicalAt(times, heldRight);
+      const fromM = toM - (width / heldSpacing - 1);
       pane.chart.timeScale().setVisibleLogicalRange({ from: fromM, to: toM });
     } else if (rows.length) {
-      pane.chart.timeScale().setVisibleLogicalRange({
-        from: Math.max(0, rows.length - INITIAL_VISIBLE_BARS),
-        to: rows.length - 1,
-      });
+      const from = Math.max(0, rows.length - INITIAL_VISIBLE_BARS);
+      const to = rows.length - 1;
+      pane.chart.timeScale().setVisibleLogicalRange({ from, to });
+      if (width > 0 && times.length) {
+        heldSpacing = width / (to - from + 1);
+        heldRight = PaneSync.timeAt(times, to);
+      }
     }
     for (const { handle } of pane.active.values()) handle.applySeed(ctx);
   }
+  refreshData2(shcode);
   restoreHeaderBadges();
+}
+
+// 참조 종목 시딩이 끝나면, 그 종목을 Data2로 보는 칸의 비율선을 다시 그린다.
+function refreshData2(shcode) {
+  const cache = feed.get(shcode);
+  if (!cache) return;
+  for (const pane of panes) {
+    if (pane.data2 !== shcode) continue;
+    const entry = pane.active.get("fx_data2");
+    if (!entry) continue;
+    try { entry.handle.setSource(cache); } catch (err) {
+      console.error(`[${shcode}] Data2 반영 실패`, err);
+    }
+  }
 }
 
 // 과거 봉 시딩: PUB/SUB는 과거 메시지를 보존하지 않으므로 스냅샷을 가져온다.
@@ -981,11 +1320,12 @@ async function seedSymbolNow(shcode) {
       const pstEvents = [];
       const gapsSec = []; // 구멍 구간 누적 (µs → 초) — 페이지 경계 구멍은 엔진이 경계 쌍까지 검사해 준다
       let back = 0;
-      for (let pages = 0; pages < 16; pages++) {
+      for (let pages = 0; pages < 80; pages++) {
         const res = await fetch(`/api/chart?shcode=${encodeURIComponent(shcode)}&back_index=${back}`);
         if (!res.ok) return;
         const data = await res.json();
-        const p = data.payload ?? {};
+        const p = data.payload;
+        if (p == null || !Array.isArray(p.bars)) return;
         feed.noteGeneration(cache, p.generation);
         // 지표 매니페스트: 첫 페이지에서 한 번 받아 칸 지표 패널을 구성한다
         if (pages === 0 && Array.isArray(p.indicators)) setIndicatorManifest(p.indicators);
@@ -993,7 +1333,18 @@ async function seedSymbolNow(shcode) {
         const inds = p.ind ?? [];
         for (let ri = 0; ri < rows.length; ri++) {
           const [t, o, h, l, c] = rows[ri];
-          all.push({ time: Number(t) / 1e6, open: o, high: h, low: l, close: c, ind: inds[ri] });
+          const fx3rows = p.fx3 ?? [];
+          const pgrows = p.pgap ?? [];
+          const rgrows = p.rgap ?? [];
+          const mgrows = p.mgap ?? [];
+          const ymrows = p.ymae ?? [];
+          const snrows = p.sniper ?? [];
+          const pvcrows = p.pvc ?? [];
+          all.push({
+            time: Number(t) / 1e6, open: o, high: h, low: l, close: c,
+            ind: inds[ri], fx3: fx3rows[ri], pgap: pgrows[ri], rgap: rgrows[ri],
+            mgap: mgrows[ri], ymae: ymrows[ri], sniper: snrows[ri], pvc: pvcrows[ri],
+          });
         }
         // ⑥⑦ 갱신·저장 이벤트 (희소) — 페이지 경계에서 중복되지 않게 시각으로 모은다
         for (const e of p.mem ?? []) memEvents.push(e);
@@ -1021,6 +1372,13 @@ async function seedSymbolNow(shcode) {
         ind.pred = d.pred;
         ind.resid = d.resid;
         ind.pvol = d.pvol;
+        ind.fx3 = Fx3Layers.parseFx3(b.fx3);
+        ind.pgap = PgapLayers.parsePgap(b.pgap);
+        ind.rgap = PgapLayers.parseSide(b.rgap);
+        ind.mgap = PgapLayers.parseSide(b.mgap);
+        ind.ymae = YmaeLayers.parseYmae(b.ymae);
+        ind.sniper = SniperLayers.parseSniper(b.sniper);
+        ind.pvc = PvcLayers.parsePvc(b.pvc);
         cache.barInd.set(b.time, ind);
       }
       // ⑥⑦ 이벤트 → 봉별 아이템으로 변환해 캐시에 심는다 (렌더러가 applySeed에서 복원)
@@ -1086,6 +1444,34 @@ async function onStreamReset() {
   await Promise.all(targets.map((sh) => seedSymbol(sh)));
 }
 
+// 같은 종목·같은 봉의 틱은 마지막 것만 남긴다. 봉이 바뀐 메시지는 순서를 지킨다.
+// 그리기는 프레임당 한 번이라, 틱이 화면 갱신보다 빨라도 시각이 밀리지 않는다.
+const liveQueue = [];
+let liveFlush = false;
+function enqueueLive(msg) {
+  const p = msg?.payload ?? {};
+  const sh = typeof p.shcode === "string" && p.shcode !== "" ? p.shcode : "";
+  const bar = p.bar_open_time;
+  const prev = liveQueue.find((q) => q.sh === sh && q.bar === bar);
+  if (prev) prev.msg = msg;
+  else liveQueue.push({ sh, bar, msg });
+  if (!liveFlush) {
+    liveFlush = true;
+    requestAnimationFrame(flushLive);
+  }
+}
+function flushLive() {
+  liveFlush = false;
+  const batch = liveQueue.splice(0, liveQueue.length);
+  for (const item of batch) {
+    try {
+      applyStatus(item.msg);
+    } catch (err) {
+      console.error("status 적용 실패", err);
+    }
+  }
+}
+
 function connect() {
   const ws = new WebSocket(WS_URL);
   ws.onopen = () => {
@@ -1104,13 +1490,7 @@ function connect() {
     if (data.stream_event === "restart" || data.stream_event === "gap") {
       onStreamReset();
     }
-    try {
-      applyStatus(data.message ?? {});
-    } catch (err) {
-      // 칸·지표별 격리(applyStatus 내부 try/catch)까지 뚫고 온 예상 밖의 오류다.
-      // 조용히 삼키면 차트·캐시 발산 같은 결함이 숨으므로 콘솔에 남긴다 (스트림은 계속 받는다)
-      console.error("status 적용 실패", err);
-    }
+    enqueueLive(data.message ?? {});
   };
 }
 
@@ -1125,6 +1505,9 @@ function collectWorkspace() {
       height: pane.heightFrac,
       symbol: pane.symbol,
       panelOpen: pane.panelOpen, // 칸별 지표 패널 접기/펼치기
+      data2: pane.data2 || "",
+      candles: pane.barStyle !== "none",
+      barStyle: pane.barStyle || "candle",
       indicators: [...pane.active.entries()].map(([id, entry]) => ({ id, layers: { ...entry.layers } })),
     })));
 }
@@ -1137,6 +1520,42 @@ function normalizeHeights() {
   for (const p of panes) syncPaneSize(p);
 }
 
+// 기준 창: 봉이 두 개 이상 보이는 첫 칸. 1봉으로 찌그러진 창은 건너뛴다.
+function captureAlignView() {
+  for (const pane of panes) {
+    const times = feed.get(pane.symbol)?.seriesTimes;
+    const width = pane.chartEl?.clientWidth ?? 0;
+    if (!times?.length || !(width > 0)) continue;
+    const lr = pane.chart.timeScale().getVisibleLogicalRange();
+    if (!lr || !(lr.to > lr.from + 1)) continue;
+    return {
+      spacingPx: width / (lr.to - lr.from + 1),
+      rightTime: PaneSync.timeAt(times, lr.to),
+    };
+  }
+  return null;
+}
+
+// 모든 칸을 그 오른쪽 끝 시각과 px 봉 간격에 맞춘다.
+// settle이면 라이브러리가 범위를 고쳐 보내는 늦은 에코가 다시 퍼지지 않게 잠시 막는다.
+function applyAlignView(view, settle) {
+  if (!view || !(view.spacingPx > 0)) return;
+  for (const pane of panes) {
+    const times = feed.get(pane.symbol)?.seriesTimes;
+    const width = pane.chartEl?.clientWidth ?? 0;
+    if (!times?.length || !(width > 0)) continue;
+    const toM = PaneSync.logicalAt(times, view.rightTime);
+    const fromM = toM - (width / view.spacingPx - 1);
+    if (settle) mutePaneRangeForSeeding(pane);
+    else mutePaneRange(pane);
+    pane.chart.timeScale().setVisibleLogicalRange({ from: fromM, to: toM });
+  }
+}
+
+function alignAllPanes(settle) {
+  applyAlignView(captureAlignView(), settle);
+}
+
 // 화면틀 v2 적용: 칸을 재구성하고 칸별 종목은 watch→시딩으로 복원한다 (비동기 진행).
 // symbol 없는 칸(구 화면틀)은 parse 단에서 current_symbol로 폴백되어 들어온다.
 // 사라진 종목의 unwatch는 새 칸의 watch가 끝난 뒤에 한다 (엔진의 마지막-watch 해지 거부 회피).
@@ -1147,7 +1566,9 @@ async function applyWorkspace(parsed) {
   for (const spec of parsed.panels) {
     const pane = createPane(spec.height);
     setPanelOpen(pane, spec.panelOpen); // 구 화면틀은 parse가 기본값(열림)으로 정규화한다
+    setBarStyle(pane, spec.barStyle || (spec.candles === false ? "none" : "candle"));
     for (const ind of spec.indicators) activateIndicator(pane, ind.id, ind.layers);
+    if (spec.data2) jobs.push(setPaneData2(pane, spec.data2).catch(() => {}));
     buildPaneTools(pane);
     if (spec.symbol) jobs.push(selectPaneSymbol(pane, spec.symbol).catch(() => {}));
   }
@@ -1155,6 +1576,12 @@ async function applyWorkspace(parsed) {
   rebuildResizeBars();
   updateBadgeVisibility();
   await Promise.all(jobs);
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const view = captureAlignView();
+  applyAlignView(view, true);
+  // 라이브러리가 칸마다 범위를 한 번 고친 뒤에, 같은 기준으로 다시 덮는다.
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  applyAlignView(view, true);
   const after = new Set(panes.map((p) => p.symbol).filter(Boolean));
   for (const sh of before) {
     if (!after.has(sh)) await releaseSymbol(sh);
@@ -1215,16 +1642,25 @@ async function loadWorkspace() {
   alert(`화면틀 '${name}' 적용`);
 }
 
-// 칸 추가: 기존 칸 높이를 비율대로 줄여 새 칸 자리를 만든다 (새 칸은 종목 미선택)
-function addPane() {
+// 칸 추가. 지금 보고 있는 칸의 종목·지표·캔들·참조를 그대로 복사한다.
+async function addPane() {
+  const src = viewedPane();
   const newFrac = 1 / (panes.length + 1);
   const scale = 1 - newFrac; // 기존 칸 heightFrac 합은 ≈1
   for (const p of panes) {
     p.heightFrac *= scale;
     syncPaneSize(p);
   }
-  createPane(newFrac);
+  const pane = createPane(newFrac);
   rebuildResizeBars();
+  if (!src?.symbol) return;
+  await selectPaneSymbol(pane, src.symbol, src.symName);
+  if (pane.symbol !== src.symbol) return;
+  for (const [id, entry] of src.active) activateIndicator(pane, id, entry.layers);
+  if (src.data2) await setPaneData2(pane, src.data2);
+  setBarStyle(pane, src.barStyle || "candle");
+  buildPaneTools(pane);
+  currentPane = pane;
 }
 
 document.getElementById("pane-add").onclick = addPane;
@@ -1233,7 +1669,7 @@ document.getElementById("ws-load").onclick = loadWorkspace;
 
 // 창 크기가 바뀌면 각 칸의 차트 크기를 다시 맞춘다 (기준은 차트 호스트 — syncPaneSize와 같다)
 addEventListener("resize", () => {
-  for (const pane of panes) pane.chart.resize(pane.chartEl.clientWidth, pane.chartEl.clientHeight);
+  for (const pane of panes) syncPaneSize(pane);
 });
 
 // 드롭다운 바깥 클릭은 열린 검색 결과를 닫는다

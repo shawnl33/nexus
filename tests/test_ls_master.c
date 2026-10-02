@@ -81,6 +81,16 @@ static void test_search(void) {
     k = ls_master_search(m, "sk", hits, CAP); /* 대소문자 무시 */
     TR_CHECK(k == 1 && strcmp(hits[0]->shcode, "000660") == 0);
 
+    /* 종목코드 접두도 대소문자 무시 (해외선물 ESZ26) */
+    memset(&g_items[4], 0, sizeof(g_items[4]));
+    snprintf(g_items[4].shcode, sizeof(g_items[4].shcode), "ESZ26");
+    snprintf(g_items[4].name, sizeof(g_items[4].name), "E-mini S&P 500");
+    m->count = 5;
+    k = ls_master_search(m, "esz", hits, CAP);
+    TR_CHECK(k == 1 && strcmp(hits[0]->shcode, "ESZ26") == 0);
+    k = ls_master_search(m, "Esz26", hits, CAP);
+    TR_CHECK(k == 1 && strcmp(hits[0]->shcode, "ESZ26") == 0);
+
     /* 일치 없음, cap 제한 */
     TR_CHECK(ls_master_search(m, "없는종목", hits, CAP) == 0);
     TR_CHECK(ls_master_search(m, "", hits, 2) == 2);
@@ -177,7 +187,8 @@ static void test_ovsfut_static_search(void) {
     k = ls_ovsfut_search("jones", hits, CAP); /* "Mini Dow Jones"의 단어 시작 */
     TR_CHECK(k == 1 && strcmp(hits[0]->prefix, "YM") == 0);
     /* 단어 중간 매치는 오탐으로 거부 ("es"가 "Jones"의 끝 두 글자에 걸리던 문제) */
-    TR_CHECK(ls_ovsfut_search("es", hits, CAP) == 0);
+    k = ls_ovsfut_search("es", hits, CAP); /* 코드 접두도 대소문자 무시 */
+    TR_CHECK(k == 1 && strcmp(hits[0]->contract, "ESZ26") == 0);
     TR_CHECK(ls_ovsfut_search("ones", hits, CAP) == 0);
     /* 일치 없음·빈 검색어(전체) */
     TR_CHECK(ls_ovsfut_search("삼성전자", hits, CAP) == 0);

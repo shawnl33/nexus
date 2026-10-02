@@ -25,6 +25,11 @@ add_library(core STATIC
     src/core/functions/atr.c
     src/core/functions/auto_session_adx_v1.c
     src/core/functions/daily_align_v2.c
+    src/core/functions/fx_adx_v1.c
+    src/core/functions/fx_align_v1.c
+    src/core/functions/osf_clv_pressure_v1.c
+    src/core/functions/osf_clv_vol_flow_v1.c
+    src/core/functions/osf_vol_flow_v1.c
     src/core/functions/fx_session_key_v1.c
     src/core/functions/daily_linreg_trend_v1.c
     src/core/functions/daily_market_profile_v1.c
@@ -35,6 +40,10 @@ add_library(core STATIC
     src/core/functions/fx_reg_v1.c
     src/core/functions/fx_swing_v1.c
     src/core/functions/fx_synthetic_lines_v1.c
+    src/core/functions/fx_trend_state_v1.c
+    src/core/functions/fx_trend_v1.c
+    src/core/functions/fx_gap_v1.c
+    src/core/functions/fx_market_v1.c
     src/core/functions/gap_regime_v1.c
     src/core/functions/htf_curve_predict.c
     src/core/functions/linreg.c
@@ -43,6 +52,10 @@ add_library(core STATIC
     src/core/functions/orderbook_dir_v2.c
     src/core/functions/sma.c
     src/core/indicators/fx_mirae_v1.c
+    src/core/indicators/fx_mirae_v3.c
+    src/core/indicators/fx_persist_gap.c
+    src/core/indicators/fx_yangmae.c
+    src/core/indicators/fx_sniper.c
     src/core/indicators/market_profile.c
     src/core/indicators/memory_lines.c
     src/core/indicators/past_prediction.c
@@ -74,6 +87,7 @@ find_package(SQLite3 QUIET)
 if(SQLite3_FOUND)
     add_library(storage STATIC
         src/adapters/storage/store.c
+        src/adapters/storage/live_bars.c
     )
     target_link_libraries(storage PUBLIC core SQLite::SQLite3)
     target_include_directories(storage PUBLIC src)
@@ -155,6 +169,7 @@ endif()
 if(TR_IPC_FOUND)
     add_library(runtime STATIC
         src/runtime/engine.c
+        src/runtime/bar_cache.c
         src/adapters/history/csv_ticks.c
     )
     target_link_libraries(runtime PUBLIC core ipc history)
@@ -174,6 +189,10 @@ if(TR_IPC_FOUND)
     if(TR_LWS_FOUND)
         target_link_libraries(trading-engine PRIVATE lsrt)
     endif()
+    if(SQLite3_FOUND)
+        target_link_libraries(trading-engine PRIVATE storage)
+        target_compile_definitions(trading-engine PRIVATE TR_HAS_STORE=1)
+    endif()
 else()
     message(STATUS "libzmq not found: trading-engine은 건성한다 (미검증 기록)")
 endif()
@@ -181,12 +200,18 @@ endif()
 enable_testing()
 
 # 0개 테스트 실행을 통과로 간주하지 않는다(계획서 §25).
-foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict fx_curve fx_swing fx_future fx_synthetic fx_mirae)
+foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict fx_curve fx_swing fx_future fx_synthetic fx_mirae fx_mirae_v3 fx_persist_gap fx_yangmae fx_sniper osf_flow fx_trend_state fx_align fx_adx fx_gap fx_market fx_trend)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE core)
     target_compile_options(test_${t} PRIVATE ${TR_WARNINGS})
     add_test(NAME ${t} COMMAND test_${t})
 endforeach()
+
+add_executable(test_bar_cache tests/test_bar_cache.c src/runtime/bar_cache.c)
+target_link_libraries(test_bar_cache PRIVATE core)
+target_include_directories(test_bar_cache PRIVATE src)
+target_compile_options(test_bar_cache PRIVATE ${TR_WARNINGS})
+add_test(NAME bar_cache COMMAND test_bar_cache)
 
 add_executable(test_replay tests/test_replay.c)
 target_link_libraries(test_replay PRIVATE history)
@@ -210,6 +235,10 @@ if(TR_IPC_FOUND AND TR_LWS_FOUND)
         PRIVATE main=trading_engine_main TRADING_ENGINE_VERSION="${PROJECT_VERSION}")
     target_compile_options(appmain PRIVATE ${TR_WARNINGS})
     target_link_libraries(appmain PUBLIC runtime lsrt)
+    if(SQLite3_FOUND)
+        target_link_libraries(appmain PUBLIC storage)
+        target_compile_definitions(appmain PRIVATE TR_HAS_STORE=1)
+    endif()
 
     add_executable(test_backfill tests/test_backfill.c)
     target_link_libraries(test_backfill PRIVATE appmain)

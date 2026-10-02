@@ -163,7 +163,14 @@ int tr_ipc_poll(tr_ipc_t *ipc, int timeout_ms, int max_cmds, tr_ipc_command_fn o
         snprintf(reply.status, sizeof(reply.status), "%s", cmd.status);
         snprintf(reply.error_code, sizeof(reply.error_code), "%s", cmd.error_code);
         if (cmd.payload_json != 0) {
-            snprintf(reply.payload, sizeof(reply.payload), "%s", cmd.payload_json);
+            size_t plen = strlen(cmd.payload_json);
+            if (plen >= sizeof(reply.payload)) {
+                /* 잘라 보내면 JSON이 깨지고 클라이언트가 빈 차트로 리셋한다 */
+                snprintf(reply.status, sizeof(reply.status), "%s", "rejected");
+                snprintf(reply.error_code, sizeof(reply.error_code), "%s", "payload_too_large");
+            } else {
+                memcpy(reply.payload, cmd.payload_json, plen + 1);
+            }
         }
 
         static char out[TR_IPC_MSG_MAX_BYTES];

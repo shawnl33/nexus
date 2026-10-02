@@ -122,6 +122,14 @@ test("parse: 알 수 없는 지표는 걸러내고 레이어를 bool로 정규�
   assert.deepEqual(parsed.panels[0].indicators[0], { id: "mirae_v16", layers: { band: true, mktband: false } });
 });
 
+test("parse: 분봉 테두리는 유지하고, 예전 몸통 테두리는 분봉 테두리로 읽는다", () => {
+  const ws = W.serialize("테두리", [{ height: 1, symbol: "ESZ26", barStyle: "outline", indicators: [] }]);
+  assert.equal(ws.panels[0].barStyle, "outline");
+  assert.equal(W.parse(ws, known).panels[0].barStyle, "outline");
+  const old = W.parse({ schema_version: 2, panels: [{ height: 1, barStyle: "candle", candleBody: "outline", indicators: [] }] }, known);
+  assert.equal(old.panels[0].barStyle, "outline");
+});
+
 test("parse: 높이는 0.1~1로 클램프하고, 칸이 없으면 맨 차트 1칸이 기본이다", () => {
   assert.equal(W.MIN_HEIGHT, 0.1); // app.js 드래그 최소 높이(MIN_PANE_FRAC)와 같은 값이어야 한다
   const parsed = W.parse({
@@ -135,7 +143,7 @@ test("parse: 높이는 0.1~1로 클램프하고, 칸이 없으면 맨 차트 1�
 
   // 빈 화면틀의 기본 1칸도 current_symbol 폴백을 받는다
   const empty = W.parse({ schema_version: 2, current_symbol: "005930", panels: [] }, known);
-  assert.deepEqual(empty.panels, [{ height: 1, symbol: "005930", panelOpen: true, indicators: [] }]);
+  assert.deepEqual(empty.panels, [{ height: 1, symbol: "005930", panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [] }]);
 
   const sym = W.parse({ schema_version: 2, panels: [] }, known);
   assert.equal(sym.symbol, ""); // current_symbol 누락/비문자 허용
