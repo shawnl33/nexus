@@ -12,10 +12,16 @@
   .badge { padding: 2px 8px; border-radius: 4px; background: #2a2e39; font-size: 12px; }
   .badge.ok { background: #1e4d3b; }
   .badge.err { background: #5d2a2a; }
+  .badge.load { background: #3a3f1e; }
   #score { font-size: 18px; font-weight: 700; min-width: 3ch; text-align: center; }
   #mirae-badges { display: inline-flex; gap: 12px; align-items: baseline; }
   #mirae-badges[hidden] { display: none; }
-  #panes { width: 100vw; height: calc(100vh - 110px); display: flex; flex-direction: column; overflow: hidden; }
+  #panes { position: relative; width: 100vw; height: calc(100vh - 110px); display: flex; flex-direction: column; overflow: hidden; }
+  .pane-row { display: flex; flex-direction: row; width: 100%; min-height: 0; flex: none; position: relative; }
+  .frame { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: none; height: 100%; box-sizing: border-box; border-right: 1px solid #2a2e39; border-bottom: 1px solid #2a2e39; }
+  .frame-tools { flex: none; display: flex; gap: 5px; align-items: center; padding: 3px 6px; background: #18202c; border-bottom: 1px solid #2a2e39; }
+  .frame-tools .frame-close { margin-left: auto; }
+  .frame-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
   #panes .pane { width: 100%; position: relative; flex: none; display: flex; flex-direction: column; border-bottom: 1px solid #2a2e39; box-sizing: border-box; }
   /* 도구줄: 종목 입력 + ☰(지표 패널 접기) + ×(삭제, 오른쪽 끝) — 칸 상단 고정 행 */
   .pane .tools { flex: none; display: flex; gap: 5px; align-items: center; flex-wrap: wrap; background: #1c2330; border-bottom: 1px solid #2a2e39; padding: 3px 6px; }
@@ -23,6 +29,9 @@
   /* 도구줄 아래 칸 본문: [지표 패널 | 차트] 수평 분할 */
   .pane .pane-body { flex: 1 1 0; min-height: 0; display: flex; }
   .pane .chart-host { flex: 1 1 0; min-width: 0; position: relative; }
+  body.charts-locked .chart-host { pointer-events: none; }
+  #load-veil { display: none; position: fixed; inset: 0; z-index: 50; background: rgba(10, 12, 18, 0.62); cursor: wait; }
+  body.charts-locked #load-veil { display: flex; }
   /* 칸별 지표 패널 (트리) — ☰로 접으면 숨기고(hidden) 차트가 칸 전체 폭을 쓴다 */
   .ind-panel { flex: none; width: 200px; overflow-y: auto; background: #161b26; border-right: 1px solid #2a2e39; padding: 6px 8px; box-sizing: border-box; font-size: 12px; }
   .ind-panel[hidden] { display: none; }
@@ -44,6 +53,9 @@
   .chip.del { color: #ef5350; }
   .resizebar { position: absolute; bottom: -3px; left: 0; right: 0; height: 6px; z-index: 4; cursor: ns-resize; text-align: center; color: #434651; font-size: 9px; line-height: 6px; user-select: none; }
   .resizebar:hover { color: #26a69a; }
+  /* height:auto — 기본 .resizebar의 height:6px가 top/bottom과 겹치면 세로가 6px로 고정된다. */
+  .resizebar.col { position: absolute; top: 0; right: auto; bottom: 0; height: auto; width: 6px; margin-left: -3px; z-index: 5; cursor: ew-resize; }
+  .resizebar.row { position: absolute; left: 0; right: 0; bottom: -3px; height: 6px; z-index: 5; cursor: ns-resize; }
   input, button { background: #2a2e39; color: #d1d4dc; border: 1px solid #434651; border-radius: 4px; padding: 4px 8px; font: inherit; }
   button { cursor: pointer; }
   button:hover { background: #363c4a; }
@@ -51,9 +63,10 @@
   .pane .tools .chip.on { background: #14282c; }
   .pane .tools .chip:hover { background: #2a2e39; }
   #ws-state { margin-left: auto; }
-  #hint { font-size: 12px; color: #7d8590; }
+  #hint, label.hint { font-size: 12px; color: #7d8590; }
+  #bar-cap { width: 7ch; padding: 2px 6px; }
   .sym-picker { position: relative; display: inline-flex; gap: 4px; align-items: center; }
-  .sym-picker input { padding: 1px 6px; font-size: 12px; width: 11ch; }
+  .sym-picker input, .data2-ref { padding: 1px 6px; font-size: 12px; width: 11ch; text-transform: uppercase; }
   .sym-picker .sym-name { font-size: 11px; padding: 1px 6px; }
   .sym-results { position: absolute; top: calc(100% + 2px); left: 0; z-index: 10; background: #1c2330; border: 1px solid #434651; border-radius: 4px; max-height: 280px; overflow-y: auto; min-width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,.5); }
   .sym-results .row { padding: 4px 10px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
@@ -64,6 +77,7 @@
 </style>
 </head>
 <body>
+<div id="load-veil"></div>
 <header>
   <span class="title">C Trading Engine 대시보드</span>
   <span class="badge" id="mode">–</span>
@@ -74,7 +88,10 @@
     <span class="badge" id="final">상태: –</span>
     <span class="badge" id="ob">호가: –</span>
   </span>
-  <button id="pane-add" title="차트 칸을 추가한다">+ 차트</button>
+  <button id="row-add" title="맨 아래에 화면틀 행을 추가한다">행추가</button>
+  <button id="col-add" title="맨 오른쪽에 화면틀 열을 추가한다">열추가</button>
+  <label class="hint" for="bar-cap">상한</label>
+  <input id="bar-cap" type="number" min="16" max="8192" step="1" value="2560" title="차트가 다루는 1분봉 개수. 값을 바꾸면 과거 봉을 이 개수까지 다시 받습니다">
   <span id="ws-state" class="badge err">연결 끊김</span>
   <span id="hint">화면틀:</span>
   <input id="ws-name" value="default" size="10">
@@ -100,6 +117,7 @@
 <script src="indicator-tree.js"></script>
 <script src="pane-sync.js"></script>
 <script src="watch-guard.js"></script>
+<script src="symbol-pick.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

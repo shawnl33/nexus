@@ -74,6 +74,8 @@ before(async () => {
           }
           payload = { shcode: reqData.shcode, name: "테스트종목", generation: 1, backfilled: 1 };
         }
+      } else if (type === "chart.cap") {
+        payload = { bars: reqData.bars };
       } else if (type === "market.unwatch") {
         payload = { shcode: reqData.shcode, watches: 0 };
       } else {
@@ -247,6 +249,30 @@ test("POST /api/symbols/watch waits for a slow engine (backfill)", async (t) => 
   assert.equal(data.status, "applied");
   assert.equal(data.payload.shcode, "SLOW01");
   assert.ok(elapsed >= 3900, `stub delay should elapse (got ${elapsed}ms)`);
+});
+
+test("POST /api/chart/cap proxies chart.cap with token", async () => {
+  let res = await fetch(`${base}/api/chart/cap`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bars: 500 }),
+  });
+  assert.equal(res.status, 403);
+  res = await fetch(`${base}/api/chart/cap`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ bars: 500 }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.status, "applied");
+  assert.equal(body.payload.bars, 500);
+  res = await fetch(`${base}/api/chart/cap`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ bars: 1.5 }),
+  });
+  assert.equal(res.status, 400);
 });
 
 test("POST /api/symbols/unwatch proxies market.unwatch with token", async () => {

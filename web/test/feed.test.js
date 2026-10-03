@@ -28,6 +28,21 @@ test("forSymbol: 같은 종목은 같은 캐시, 종목끼리는 완전히 격�
   assert.equal(feed.get("999999"), undefined); // 생성 없이 조회
 });
 
+test("trimTo: 상한을 넘으면 가장 오래된 봉만 버린다", () => {
+  const feed = Feed.create();
+  const c = feed.forSymbol("A");
+  for (let i = 0; i < 5; i++) feed.noteBar(c, 1000 + i * 60, { time: 1000 + i * 60, close: i });
+  assert.equal(feed.trimTo(c, 3), true);
+  assert.deepEqual(c.barSeq, [1120, 1180, 1240]);
+  assert.equal(c.bars.has(1000), false);
+  assert.equal(c.barInd.has(1060), false);
+  assert.equal(c.barPos.get(1120), 0);
+  assert.equal(c.barPos.get(1240), 2);
+  assert.equal(c.bars.get(1240).close, 4);
+  assert.equal(feed.trimTo(c, 3), false);
+  assert.equal(feed.trimTo(c, 0), false);
+});
+
 test("noteBar: 뒤에 붙는 순서와 역행(이진 삽입) 모두 시각 오름차순을 유지한다", () => {
   const feed = Feed.create();
   const c = feed.forSymbol("005930");

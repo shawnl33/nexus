@@ -84,7 +84,7 @@ const Data2Layers = (() => {
     { key: "posHi", color: "#0000ff" },
     { key: "posLo", color: "#ff0000" },
     { key: "up", color: "#b40000", arrow: "up" },
-    { key: "down", color: "#000096", arrow: "down" },
+    { key: "down", color: "#87ceeb", arrow: "down" },
     { key: "compound", color: "#ff8c00" },
     { key: "squeezeUp", color: "#ff00ff" },
     { key: "squeezeDn", color: "#00a0a0" },

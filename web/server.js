@@ -15,13 +15,75 @@ import { WebSocketServer } from "ws";
 import * as zmq from "zeromq";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PUBLIC_DIR = join(__dirname, "public");
+
+// 윈도우가 WSL 폴더를 여는 이름이 여러 개다. 하나라도 열리는 경로를 쓴다.
+function pathAliases(p) {
+  const list = [];
+  const add = (x) => {
+    if (x && !list.includes(x)) list.push(x);
+  };
+  add(p);
+  if (process.platform !== "win32") return list;
+  const n = p.replaceAll("/", "\\");
+  add(n);
+  if (n.startsWith("\\\\") && !n.startsWith("\\\\?\\")) {
+    add("\\\\?\\UNC\\" + n.slice(2));
+  }
+  let m = n.match(/^\\\\wsl\.localhost\\([^\\]+)\\([\s\S]*)$/i);
+  if (m) {
+    add(`\\\\wsl$\\${m[1]}\\${m[2]}`);
+    add(`\\\\?\\UNC\\wsl$\\${m[1]}\\${m[2]}`);
+  }
+  m = n.match(/^\\\\wsl\$\\([^\\]+)\\([\s\S]*)$/i);
+  if (m) {
+    add(`\\\\wsl.localhost\\${m[1]}\\${m[2]}`);
+    add(`\\\\?\\UNC\\wsl.localhost\\${m[1]}\\${m[2]}`);
+  }
+  return list;
+}
+
+function firstExisting(file) {
+  for (const p of pathAliases(file)) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+const ROOT_CANDIDATES = [process.env.DASHBOARD_ROOT, __dirname, process.cwd()].filter(Boolean);
+let PUBLIC_DIR = join(__dirname, "public");
+let NODE_MODULES_DIR = join(__dirname, "node_modules");
+for (const root of ROOT_CANDIDATES) {
+  const index = firstExisting(join(root, "public", "index.html"));
+  if (index == null) continue;
+  PUBLIC_DIR = dirname(index);
+  const mods = firstExisting(join(root, "node_modules"));
+  if (mods != null) NODE_MODULES_DIR = mods;
+  break;
+}
+const INDEX_FILE = firstExisting(join(PUBLIC_DIR, "index.html"));
+if (INDEX_FILE == null) {
+  console.error("dashboard index.html 을 열 수 없습니다", ROOT_CANDIDATES.join(" | "));
+} else {
+  console.error("dashboard files:", INDEX_FILE);
+}
+
+async function readStatic(file) {
+  let last = new Error("not found");
+  for (const p of pathAliases(file)) {
+    try {
+      return await readFile(p);
+    } catch (err) {
+      last = err;
+    }
+  }
+  throw last;
+}
 const WORKSPACE_DIR = join(__dirname, ".runtime", "workspaces");
 const TOKEN_PATH = join(__dirname, ".runtime", "token");
 
 const CMD_ENDPOINT = process.env.ENGINE_CMD_ENDPOINT ?? "tcp://127.0.0.1:5555";
 const PUB_ENDPOINT = process.env.ENGINE_PUB_ENDPOINT ?? "tcp://127.0.0.1:5556";
-const PORT = Number(process.env.DASHBOARD_PORT ?? 8080);
+const PORT = Number(process.env.DASHBOARD_PORT ?? 18080);
 const HOST = "127.0.0.1";
 
 // 엔진 명령 응답 대기 상한. market.watch/select는 백필을 동기로 끝내고 나서야 응답한다
@@ -52,8 +114,11 @@ const AUTH_TOKEN = loadToken();
 
 // ---- 엔진 명령 채널 (ROUTER/DEALER) ----
 let reqSeq = 1;
-async function engineCommand(commandId, type, payloadJson) {
-  const dealer = new zmq.Dealer({ sendTimeout: 1000, receiveTimeout: CMD_TIMEOUT_MS });
+async function engineCommand(commandId, type, payloadJson, timeoutMs) {
+  const dealer = new zmq.Dealer({
+    sendTimeout: 1000,
+    receiveTimeout: timeoutMs > 0 ? timeoutMs : CMD_TIMEOUT_MS,
+  });
   try {
     dealer.connect(CMD_ENDPOINT);
     const payload =
@@ -105,7 +170,10 @@ async function saveWorkspace(name, data) {
 // ---- HTTP ----
 function json(res, code, obj) {
   const body = JSON.stringify(obj);
-  res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
+  res.writeHead(code, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
   res.end(body);
 }
 
@@ -203,6 +271,27 @@ const server = createServer(async (req, res) => {
       return json(res, code, reply);
     }
 
+    if (req.method === "POST" && path === "/api/chart/cap") {
+      // 차트 봉 상한. 엔진이 관측 중인 종목을 이 개수까지 다시 백필한다.
+      if (!mutationAllowed(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      let bars;
+      try {
+        bars = JSON.parse(body).bars;
+      } catch {
+        return json(res, 400, { error: "invalid_json" });
+      }
+      if (!Number.isInteger(bars)) return json(res, 400, { error: "invalid_cap" });
+      const reply = await engineCommand(
+        `dash-cap-${reqSeq}`,
+        "chart.cap",
+        JSON.stringify({ bars }),
+        300000,
+      );
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
     if (req.method === "GET" && path === "/api/chart") {
       // 읽기 전용: 늦은 접속자의 과거 봉 스냅샷 (엔진 봉 링 프록시, back_index로 페이지네이션)
       // shcode가 있으면 해당 종목 파이프라인의 봉을, 없으면 선택 종목(구 호환)을 가져온다
@@ -269,10 +358,14 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && (path === "/" || extname(path) !== "")) {
       const rel = path === "/" ? "index.html" : path.slice(1);
       if (rel.includes("..")) return json(res, 400, { error: "invalid_path" });
-      const candidates = [join(PUBLIC_DIR, rel), join(__dirname, "node_modules", rel)];
+      const candidates = [
+        join(PUBLIC_DIR, rel),
+        join(process.cwd(), "public", rel),
+        join(NODE_MODULES_DIR, rel),
+      ];
       for (const file of candidates) {
         try {
-          const data = await readFile(file);
+          const data = await readStatic(file);
           // 개발/라이브 대시보드: 정적 파일이 자주 바뀌므로 캐시를 끈다
           // (구버전 JS/HTML을 캐시한 브라우저가 새 서버와 엇갈리는 사고 방지)
           res.writeHead(200, {
@@ -282,9 +375,11 @@ const server = createServer(async (req, res) => {
           return res.end(data);
         } catch { /* try next */ }
       }
-      return json(res, 404, { error: "not_found" });
+      console.error("static 404", path, "cwd=", process.cwd(), "public=", PUBLIC_DIR);
+      return json(res, 404, { error: "not_found", path });
     }
 
+    console.error("http 404", req.method, path);
     json(res, 404, { error: "not_found" });
   } catch (e) {
     json(res, 500, { error: "internal", message: String(e) });

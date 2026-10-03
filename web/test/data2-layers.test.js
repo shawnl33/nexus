@@ -165,7 +165,7 @@ test("첫이탈 화살표는 그 봉에만 있고 직전범위 선은 그대로�
   const posHi = chart.made.find((s) => s.options.color === "#0000ff" && s.options.pointMarkersVisible !== true);
   const posLo = chart.made.find((s) => s.options.color === "#ff0000" && s.options.pointMarkersVisible !== true);
   const firstUp = chart.made.find((s) => s.options.color === "#b40000");
-  const firstDn = chart.made.find((s) => s.options.color === "#000096");
+  const firstDn = chart.made.find((s) => s.options.color === "#87ceeb");
   assert.equal(posHi.primitives.length, 1);
   assert.equal(posLo.primitives.length, 1);
   assert.equal(firstUp.primitives.length, 2);
@@ -256,7 +256,7 @@ test("라이브 틱은 마커 전체를 다시 깔지 않고 마지막 봉만 �
     barInd: new Map([[1000, row(-1, 0)], [1060, row(-1, 0)], [1120, row(-1, -1)]]),
   });
   const sets = chart.made.reduce((n, s) => n + s.sets, 0);
-  const firstDn = chart.made.find((s) => s.options.color === "#000096");
+  const firstDn = chart.made.find((s) => s.options.color === "#87ceeb");
   assert.equal(sets, 0);
   assert.equal(firstDn.data.length, 3);
   assert.equal(firstDn.data[2].value, 106);
