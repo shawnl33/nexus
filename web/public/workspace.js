@@ -71,7 +71,7 @@ const Workspace = (() => {
 
   // panels[i].symbol이 없는 구 화면틀은 current_symbol로 폴백한다.
   // panelOpen이 없으면 열림. 결과가 0칸이면 빈 차트 하나.
-  function readPanels(panels, fallbackSymbol, isKnownIndicator) {
+  function readPanels(panels, fallbackSymbol, isKnownIndicator, overlays) {
     const out = [];
     for (const p of Array.isArray(panels) ? panels : []) {
       const height = clampHeight(p?.height);
@@ -89,26 +89,88 @@ const Workspace = (() => {
         ? p.barStyle
         : (p?.candles === false ? "none" : "candle");
       if (barStyle === "candle" && p?.candleBody === "outline") barStyle = "outline";
+      const overlayStyles = p?.overlayStyles == null
+        ? null
+        : readOverlayStyles(p.overlayStyles, overlays);
       out.push({
         height, symbol, panelOpen: p?.panelOpen !== false, data2,
-        candles: barStyle !== "none", barStyle, indicators,
+        candles: barStyle !== "none", barStyle, indicators, overlayStyles,
       });
     }
     if (out.length === 0) {
-      out.push({ height: 1, symbol: fallbackSymbol, panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [] });
+      out.push({
+        height: 1, symbol: fallbackSymbol, panelOpen: true, data2: "",
+        candles: true, barStyle: "candle", indicators: [], overlayStyles: null,
+      });
     }
     return out;
   }
 
-  // frames: [{ height, panels }]. grid를 생략하면 cols 1, colWeights [1].
+  const OVERLAY_STYLES = ["candle", "outline", "bar", "line"];
+
+  // 겹침 종목. 비문자·빈 문자열은 버리고, 순서를 유지한 채 중복을 뺀다.
+  function readOverlays(list) {
+    const out = [];
+    for (const item of Array.isArray(list) ? list : []) {
+      const code = typeof item === "string" ? item.trim().toUpperCase() : "";
+      if (!code || out.includes(code)) continue;
+      out.push(code);
+    }
+    return out;
+  }
+
+  // 겹침 종목의 분봉 모양. 목록에 있는 종목만 남기고, 알 수 없는 값은 뺀다.
+  // 키가 없으면 화면은 캔들바로 본다.
+  // 겹침 눈금. price는 각자 가격, ratio는 첫 봉 100, shared는 메인과 같은 가격 눈금.
+  // 없거나 알 수 없는 값은 각자 가격이다.
+  function readOverlayScale(value) {
+    return value === "ratio" || value === "shared" ? value : "price";
+  }
+
+  function readOverlayStyles(styles, codes) {
+    const byCode = {};
+    if (styles && typeof styles === "object") {
+      for (const [key, style] of Object.entries(styles)) {
+        const code = String(key).trim().toUpperCase();
+        if (OVERLAY_STYLES.includes(style)) byCode[code] = style;
+      }
+    }
+    if (!codes) return byCode;
+    const out = {};
+    for (const code of codes) if (byCode[code]) out[code] = byCode[code];
+    return out;
+  }
+
+  // 칸에 overlayStyles가 없으면 화면틀 값을 칸마다 복사한다. 있으면 칸 값이 우선이다.
+  function panelsWithStyles(panels, frameStyles) {
+    return panels.map((panel) => (
+      panel.overlayStyles == null
+        ? { ...panel, overlayStyles: { ...frameStyles } }
+        : panel
+    ));
+  }
+
+  // frames: [{ height, panels, overlays, overlayStyles, overlayScale }]. grid를 생략하면 cols 1, colWeights [1].
   // current_symbol은 첫 화면틀의 첫 칸 종목이다 (구 독자 호환).
+  // overlays가 없는 문서는 빈 겹침이다. overlayStyles가 없는 종목은 캔들바다.
+  // overlayScale이 없는 문서는 각자 가격이다.
   function serialize(name, frames, grid) {
     const cols = Number.isInteger(grid?.cols) && grid.cols >= 1 ? grid.cols : 1;
     const colWeights = weightsOrEqual(grid?.colWeights, cols);
-    const outFrames = (frames ?? []).map((f) => ({
-      height: f?.height,
-      panels: (f?.panels ?? []).map((p) => panelRecord(p)),
-    }));
+    const outFrames = (frames ?? []).map((f) => {
+      const overlays = readOverlays(f?.overlays);
+      return {
+        height: f?.height,
+        overlays,
+        overlayStyles: readOverlayStyles(f?.overlayStyles, overlays),
+        overlayScale: readOverlayScale(f?.overlayScale),
+        panels: (f?.panels ?? []).map((p) => {
+          const panel = panelRecord(p);
+          if (p?.overlayStyles != null) panel.overlayStyles = readOverlayStyles(p.overlayStyles, overlays);
+          return panel;
+        }),
+      };
+    });
     return {
       schema_version: SCHEMA_VERSION,
       name,
@@ -121,14 +183,32 @@ const Workspace = (() => {
 
   // v2 검증·정규화. 구 스키마(schema_version != 2)면 null을 돌려준다.
   // frames가 비어 있지 않으면 그 격자를 읽고, 아니면 문서 panels를 화면틀 하나의 panels로 읽는다.
-  // 결과: { symbol, cols, colWeights, frames: [{ height, panels }] }
+  // 결과: { symbol, cols, colWeights, frames: [{ height, panels, overlays, overlayStyles, overlayScale }] }
   function parse(data, isKnownIndicator) {
     if (!data || data.schema_version !== SCHEMA_VERSION) return null;
     const fallbackSymbol = typeof data.current_symbol === "string" ? data.current_symbol : "";
     const useFrames = Array.isArray(data.frames) && data.frames.length > 0;
     const raw = useFrames
-      ? data.frames.map((f) => ({ height: f?.height, panels: readPanels(f?.panels, fallbackSymbol, isKnownIndicator) }))
-      : [{ height: 1, panels: readPanels(data.panels, fallbackSymbol, isKnownIndicator) }];
+      ? data.frames.map((f) => {
+          const overlays = readOverlays(f?.overlays);
+          return {
+            height: f?.height,
+            overlays,
+            overlayStyles: readOverlayStyles(f?.overlayStyles, overlays),
+            overlayScale: readOverlayScale(f?.overlayScale),
+            panels: panelsWithStyles(
+              readPanels(f?.panels, fallbackSymbol, isKnownIndicator, overlays),
+              readOverlayStyles(f?.overlayStyles, overlays),
+            ),
+          };
+        })
+      : [{
+          height: 1,
+          overlays: [],
+          overlayStyles: {},
+          overlayScale: "price",
+          panels: panelsWithStyles(readPanels(data.panels, fallbackSymbol, isKnownIndicator, []), {}),
+        }];
     let cols = Number.isInteger(data.cols) && data.cols >= 1 ? data.cols : 1;
     let keepWeights = true;
     if (raw.length % cols !== 0) {
@@ -139,7 +219,16 @@ const Workspace = (() => {
     const rows = raw.length / cols;
     for (let r = 0; r < rows; r++) {
       const height = clampHeight(raw[r * cols]?.height);
-      for (let c = 0; c < cols; c++) frames.push({ height, panels: raw[r * cols + c].panels });
+      for (let c = 0; c < cols; c++) {
+        const cell = raw[r * cols + c];
+        frames.push({
+          height,
+          overlays: cell.overlays,
+          overlayStyles: cell.overlayStyles,
+          overlayScale: cell.overlayScale,
+          panels: cell.panels,
+        });
+      }
     }
     return {
       symbol: fallbackSymbol,

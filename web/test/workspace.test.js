@@ -151,7 +151,7 @@ test("parse: 높이는 0.1~1로 클램프하고, 칸이 없으면 맨 차트 1�
 
   // 빈 화면틀의 기본 1칸도 current_symbol 폴백을 받는다
   const empty = W.parse({ schema_version: 2, current_symbol: "005930", panels: [] }, known);
-  assert.deepEqual(empty.frames[0].panels, [{ height: 1, symbol: "005930", panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [] }]);
+  assert.deepEqual(empty.frames[0].panels, [{ height: 1, symbol: "005930", panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [], overlayStyles: {} }]);
 
   const sym = W.parse({ schema_version: 2, panels: [] }, known);
   assert.equal(sym.symbol, ""); // current_symbol 누락/비문자 허용
@@ -177,6 +177,89 @@ test("serialize→parse: 2행 2열의 열 수·너비·행 높이·칸이 유지
   assert.equal(parsed.frames[2].panels[0].height, 0.4);
   assert.equal(parsed.frames[2].panels[1].symbol, "");
   assert.equal(parsed.frames[3].panels[0].barStyle, "line");
+});
+
+test("serialize→parse: 화면틀 겹침 종목은 순서를 유지하고 중복과 빈 값을 뺀다", () => {
+  const ws = W.serialize("겹침", [
+    { height: 1, overlays: ["nqz26", "ESZ26", "nqz26", "", "  "], panels: [{ height: 1, symbol: "ESZ26", indicators: [] }] },
+  ]);
+  assert.deepEqual(ws.frames[0].overlays, ["NQZ26", "ESZ26"]);
+  const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
+  assert.deepEqual(parsed.frames[0].overlays, ["NQZ26", "ESZ26"]);
+});
+
+test("parse: overlays가 없는 스키마 2는 빈 겹침이다", () => {
+  const parsed = W.parse({
+    schema_version: 2,
+    frames: [{ height: 1, panels: [{ height: 1, symbol: "ESZ26", indicators: [] }] }],
+  }, known);
+  assert.deepEqual(parsed.frames[0].overlays, []);
+  assert.deepEqual(parsed.frames[0].overlayStyles, {});
+  assert.equal(parsed.frames[0].overlayScale, "price");
+});
+
+test("serialize→parse: 겹침 눈금은 비율·같은 눈금만 유지하고 없으면 각자 가격이다", () => {
+  const ws = W.serialize("눈금", [
+    { height: 1, overlays: ["005930"], overlayScale: "shared", panels: [{ height: 1, symbol: "000660", indicators: [] }] },
+    { height: 1, overlays: ["NQZ26"], overlayScale: "nope", panels: [{ height: 1, symbol: "ESZ26", indicators: [] }] },
+  ], { cols: 2 });
+  assert.equal(ws.frames[0].overlayScale, "shared");
+  assert.equal(ws.frames[1].overlayScale, "price");
+  const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
+  assert.equal(parsed.frames[0].overlayScale, "shared");
+  assert.equal(parsed.frames[1].overlayScale, "price");
+  const ratio = W.parse({
+    schema_version: 2,
+    cols: 1,
+    frames: [{ height: 1, overlays: ["005930"], overlayScale: "ratio", panels: [{ height: 1, symbol: "000660", indicators: [] }] }],
+  }, known);
+  assert.equal(ratio.frames[0].overlayScale, "ratio");
+});
+
+test("serialize→parse: 겹침 분봉 모양은 종목별로 유지하고 알 수 없는 값은 버린다", () => {
+  const ws = W.serialize("모양", [
+    {
+      height: 1,
+      overlays: ["NQZ26", "RTYZ26"],
+      overlayStyles: { nqz26: "candle", RTYZ26: "nope", OTHER: "bar", ESZ26: "line" },
+      panels: [{ height: 1, symbol: "ESZ26", indicators: [] }],
+    },
+  ]);
+  assert.deepEqual(ws.frames[0].overlayStyles, { NQZ26: "candle" });
+  const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
+  assert.deepEqual(parsed.frames[0].overlayStyles, { NQZ26: "candle" });
+});
+
+test("serialize→parse: 칸마다 겹침 분봉을 유지하고 칸에 없으면 화면틀 값을 쓴다", () => {
+  const ws = W.serialize("칸", [
+    {
+      height: 1,
+      overlays: ["NQZ26"],
+      panels: [
+        { height: 0.5, symbol: "ESZ26", indicators: [], overlayStyles: { NQZ26: "candle" } },
+        { height: 0.5, symbol: "ESZ26", indicators: [], overlayStyles: { NQZ26: "line" } },
+      ],
+    },
+  ]);
+  assert.deepEqual(ws.frames[0].panels[0].overlayStyles, { NQZ26: "candle" });
+  assert.deepEqual(ws.frames[0].panels[1].overlayStyles, { NQZ26: "line" });
+  const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
+  assert.deepEqual(parsed.frames[0].panels[0].overlayStyles, { NQZ26: "candle" });
+  assert.deepEqual(parsed.frames[0].panels[1].overlayStyles, { NQZ26: "line" });
+  const legacy = W.parse({
+    schema_version: 2,
+    frames: [{
+      height: 1,
+      overlays: ["NQZ26"],
+      overlayStyles: { NQZ26: "outline" },
+      panels: [
+        { height: 1, symbol: "ESZ26", indicators: [] },
+        { height: 1, symbol: "ESZ26", indicators: [] },
+      ],
+    }],
+  }, known);
+  assert.deepEqual(legacy.frames[0].panels[0].overlayStyles, { NQZ26: "outline" });
+  assert.deepEqual(legacy.frames[0].panels[1].overlayStyles, { NQZ26: "outline" });
 });
 
 test("parse: frames가 없는 스키마 2는 화면틀 하나, 열 하나다", () => {
@@ -230,7 +313,7 @@ test("parse: panels가 없는 화면틀은 빈 차트 하나다", () => {
     frames: [{ height: 1 }],
   }, known);
   assert.deepEqual(parsed.frames[0].panels, [{
-    height: 1, symbol: "", panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [],
+    height: 1, symbol: "", panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [], overlayStyles: {},
   }]);
 });
 

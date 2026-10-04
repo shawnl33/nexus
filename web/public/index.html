@@ -19,11 +19,13 @@
   #panes { position: relative; width: 100vw; height: calc(100vh - 110px); display: flex; flex-direction: column; overflow: hidden; }
   .pane-row { display: flex; flex-direction: row; width: 100%; min-height: 0; flex: none; position: relative; }
   .frame { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: none; height: 100%; box-sizing: border-box; border-right: 1px solid #2a2e39; border-bottom: 1px solid #2a2e39; }
-  .frame-tools { flex: none; display: flex; gap: 5px; align-items: center; padding: 3px 6px; background: #18202c; border-bottom: 1px solid #2a2e39; }
+  .frame-tools { position: relative; z-index: 6; flex: none; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 3px 6px; background: #18202c; border-bottom: 1px solid #2a2e39; }
+  .frame-tools button { white-space: nowrap; flex: none; }
   .frame-tools .frame-close { margin-left: auto; }
+  .frame-tools .sym-picker { min-width: 0; }
   .frame-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
   #panes .pane { width: 100%; position: relative; flex: none; display: flex; flex-direction: column; border-bottom: 1px solid #2a2e39; box-sizing: border-box; }
-  /* 도구줄: 종목 입력 + ☰(지표 패널 접기) + ×(삭제, 오른쪽 끝) — 칸 상단 고정 행 */
+  /* 칸 도구줄: ☰(지표 패널 접기) + ×(삭제, 오른쪽 끝). 종목 입력은 화면틀에 하나다. */
   .pane .tools { flex: none; display: flex; gap: 5px; align-items: center; flex-wrap: wrap; background: #1c2330; border-bottom: 1px solid #2a2e39; padding: 3px 6px; }
   .pane .tools .chip.del { margin-left: auto; }
   /* 도구줄 아래 칸 본문: [지표 패널 | 차트] 수평 분할 */
@@ -65,9 +67,18 @@
   #ws-state { margin-left: auto; }
   #hint, label.hint { font-size: 12px; color: #7d8590; }
   #bar-cap { width: 7ch; padding: 2px 6px; }
-  .sym-picker { position: relative; display: inline-flex; gap: 4px; align-items: center; }
+  .sym-picker { position: relative; display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   .sym-picker input, .data2-ref { padding: 1px 6px; font-size: 12px; width: 11ch; text-transform: uppercase; }
-  .sym-picker .sym-name { font-size: 11px; padding: 1px 6px; }
+  .sym-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
+  .sym-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid #434651; border-radius: 999px; padding: 0 6px; font-size: 11px; line-height: 18px; }
+  .sym-chip-text { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; }
+  .sym-chip-name { color: #8a919c; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button.sym-chip { background: transparent; padding: 0 6px; font-size: 11px; line-height: 18px; cursor: pointer; }
+  button.sym-chip.main { border-color: #d1d4dc; }
+  button.sym-chip.replacing { border-color: #26a69a; color: #26a69a; }
+  .sym-chip .x { border: 0; background: transparent; color: #8a919c; padding: 0 2px; font-size: 12px; line-height: 16px; cursor: pointer; }
+  .sym-chips select.overlay-scale { background: #1c2330; color: #d1d4dc; border: 1px solid #434651; border-radius: 999px; padding: 0 6px; font-size: 11px; line-height: 18px; height: 20px; cursor: pointer; }
+  .sym-chip .x:hover { color: #ef5350; }
   .sym-results { position: absolute; top: calc(100% + 2px); left: 0; z-index: 10; background: #1c2330; border: 1px solid #434651; border-radius: 4px; max-height: 280px; overflow-y: auto; min-width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,.5); }
   .sym-results .row { padding: 4px 10px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
   .sym-results .row:hover, .sym-results .row.active { background: #363c4a; }
@@ -118,6 +129,7 @@
 <script src="pane-sync.js"></script>
 <script src="watch-guard.js"></script>
 <script src="symbol-pick.js"></script>
+<script src="overlay-ratio.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
