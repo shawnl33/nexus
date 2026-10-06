@@ -2,7 +2,7 @@
 
 명령 프롬프트(`cmd`)에서 저장소를 받아 `trading-engine.exe`까지 만드는 순서다. Visual Studio는 쓰지 않는다. 컴파일러는 MinGW-w64 GCC다.
 
-## 1. Git, CMake, Ninja, 컴파일러 설치
+## 1. Git, CMake, Ninja, 컴파일러, Node.js 설치
 
 명령 프롬프트를 열고 한 줄씩 실행한다.
 
@@ -11,7 +11,10 @@ winget install -e --id Git.Git
 winget install -e --id Kitware.CMake
 winget install -e --id Ninja-build.Ninja
 winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT
+winget install -e --id OpenJS.NodeJS.LTS
 ```
+
+Node.js는 빌드 자체에는 필요 없다. `traderctl up`이 엔진을 띄운 뒤 대시보드를 `node`로 실행하므로, 20 이상이 있어야 한다. 없으면 `error: node 를 찾지 못했습니다`로 끝난다.
 
 설치가 끝나면 창을 닫고 새로 연다. 아래 명령이 모두 버전을 출력해야 한다.
 
@@ -21,6 +24,7 @@ cmake --version
 ninja --version
 gcc --version
 g++ --version
+node --version
 ```
 
 `g++`도 필요하다. 정적 libzmq가 C++ 라이브러리다.
@@ -63,6 +67,14 @@ D:\dev\nexus\build-windows\traderctl.exe
 ```
 
 실행에 필요한 `libstdc++-6.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`은 빌드가 같은 폴더에 복사한다.
+
+엔진과 대시보드를 함께 띄운다.
+
+```bat
+.\build-windows\traderctl.exe up --live 005930
+```
+
+처음 만든 exe는 Windows가 실행을 막을 수 있다. 확인 창이 뜨면 허용을 누른 뒤 같은 명령을 다시 실행한다.
 
 테스트는 이렇게 실행한다.
 
