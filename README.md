@@ -32,6 +32,8 @@ cmake --build --preset windows
 ctest --preset windows
 ```
 
+정적 라이브러리 접두는 따로 넘기지 않는다. `MINGW_PREFIX`, 저장소 옆 `mingw-prefix`, `$HOME/mingw-prefix` 순으로 있으면 그 경로를 쓴다.
+
 빌드 디렉터리는 OS별로 분리된다: Linux는 `build/`, Windows는 `build-windows/`.
 WSL 공유 폴터처럼 양쪽 OS가 같은 소스를 보는 환경에서도 충돌하지 않는다.
 

@@ -13,6 +13,27 @@ else()
     set(TR_WARNINGS -Wall -Wextra -Wpedantic)
 endif()
 
+# Windows에서 빌드할 때 정적 의존성 접두를 자동으로 넣는다.
+# MINGW_PREFIX, 저장소 옆 mingw-prefix, $HOME/mingw-prefix, %USERPROFILE%\mingw-prefix 순이다.
+# 크로스 컴파일은 툴체인이 $HOME/mingw-prefix 를 따로 넣는다.
+if(WIN32 AND NOT CMAKE_CROSSCOMPILING)
+    set(_tr_mingw_prefix "")
+    if(DEFINED ENV{MINGW_PREFIX} AND NOT "$ENV{MINGW_PREFIX}" STREQUAL "")
+        set(_tr_mingw_prefix "$ENV{MINGW_PREFIX}")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/../mingw-prefix")
+        set(_tr_mingw_prefix "${CMAKE_SOURCE_DIR}/../mingw-prefix")
+    elseif(DEFINED ENV{HOME} AND EXISTS "$ENV{HOME}/mingw-prefix")
+        set(_tr_mingw_prefix "$ENV{HOME}/mingw-prefix")
+    elseif(DEFINED ENV{USERPROFILE} AND EXISTS "$ENV{USERPROFILE}/mingw-prefix")
+        set(_tr_mingw_prefix "$ENV{USERPROFILE}/mingw-prefix")
+    endif()
+    if(_tr_mingw_prefix AND EXISTS "${_tr_mingw_prefix}")
+        file(TO_CMAKE_PATH "${_tr_mingw_prefix}" _tr_mingw_prefix)
+        list(APPEND CMAKE_PREFIX_PATH "${_tr_mingw_prefix}")
+        message(STATUS "MinGW 의존성 접두: ${_tr_mingw_prefix}")
+    endif()
+endif()
+
 # core는 외부 라이브러리에 의존하지 않아야 하므로(계획서 §4),
 # 외부 의존성은 adapters 계층의 타겟에서만 링크한다.
 add_library(core STATIC
@@ -106,10 +127,14 @@ add_library(yyjson STATIC third_party/yyjson/yyjson.c)
 target_include_directories(yyjson PUBLIC third_party/yyjson)
 target_compile_options(yyjson PRIVATE -w) # 서드파티 코드에는 경고 플래그를 적용하지 않는다
 
-# libcurl: 시스템 패키지를 우선 찾고, 없으면 third_party/curl-linux 헤더 + 시스템 런타임을 사용한다
+# libcurl: 시스템 패키지를 우선 찾고, Linux에서는 없으면 third_party/curl-linux 헤더를 사용한다
 # (libcurl4-openssl-dev 미설치 환경의 경량 경로. 자세한 결정은 docs/THIRD_PARTY.md).
-find_path(CURL_INCLUDE_DIR NAMES curl/curl.h
-    PATHS /usr/include /usr/include/x86_64-linux-gnu ${CMAKE_SOURCE_DIR}/third_party/curl-linux/include)
+# curl-linux 는 Linux 헤더라 Windows 검색 경로에 넣지 않는다.
+set(TR_CURL_INCLUDE_PATHS /usr/include /usr/include/x86_64-linux-gnu)
+if(NOT WIN32)
+    list(APPEND TR_CURL_INCLUDE_PATHS ${CMAKE_SOURCE_DIR}/third_party/curl-linux/include)
+endif()
+find_path(CURL_INCLUDE_DIR NAMES curl/curl.h PATHS ${TR_CURL_INCLUDE_PATHS})
 find_library(CURL_LIBRARY NAMES curl libcurl libcurl.so.4
     PATHS /usr/lib /usr/lib/x86_64-linux-gnu)
 if(CURL_INCLUDE_DIR AND CURL_LIBRARY)
@@ -121,6 +146,10 @@ if(CURL_INCLUDE_DIR AND CURL_LIBRARY)
         src/adapters/ls/ls_ovsfut.c
     )
     target_link_libraries(ls PUBLIC core yyjson ${CURL_LIBRARY})
+    if(WIN32)
+        target_compile_definitions(ls PUBLIC CURL_STATICLIB)
+        target_link_libraries(ls PUBLIC ws2_32 crypt32 secur32 wldap32 winpthread)
+    endif()
     target_include_directories(ls PUBLIC src ${CURL_INCLUDE_DIR})
     target_compile_options(ls PRIVATE ${TR_WARNINGS})
     set(TR_LS_FOUND TRUE)
@@ -128,25 +157,51 @@ else()
     message(STATUS "libcurl not found: ls 어댑터와 ls 테스트는 건성한다 (미검증 기록)")
 endif()
 
-# libwebsockets: 시스템 패키지 우선, 없으면 third_party/lws-linux (deb 추출 정적 라이브러리).
-find_path(LWS_INCLUDE_DIR NAMES libwebsockets.h
-    PATHS /usr/include ${CMAKE_SOURCE_DIR}/third_party/lws-linux/include)
-find_library(LWS_LIBRARY NAMES websockets libwebsockets
-    PATHS /usr/lib /usr/lib/x86_64-linux-gnu ${CMAKE_SOURCE_DIR}/third_party/lws-linux/lib)
-if(NOT LWS_LIBRARY)
+# libwebsockets: 시스템 패키지 우선. Linux에서만 third_party/lws-linux (deb 추출 정적 라이브러리)를 쓴다.
+# 그 정적 라이브러리는 ELF라 Windows 링크에 넣지 않는다.
+set(TR_LWS_INCLUDE_PATHS /usr/include)
+set(TR_LWS_LIBRARY_PATHS /usr/lib /usr/lib/x86_64-linux-gnu)
+if(NOT WIN32)
+    list(APPEND TR_LWS_INCLUDE_PATHS ${CMAKE_SOURCE_DIR}/third_party/lws-linux/include)
+    list(APPEND TR_LWS_LIBRARY_PATHS ${CMAKE_SOURCE_DIR}/third_party/lws-linux/lib)
+endif()
+find_path(LWS_INCLUDE_DIR NAMES libwebsockets.h PATHS ${TR_LWS_INCLUDE_PATHS})
+find_library(LWS_LIBRARY NAMES websockets libwebsockets PATHS ${TR_LWS_LIBRARY_PATHS})
+if(NOT WIN32 AND NOT LWS_LIBRARY)
     find_library(LWS_LIBRARY NAMES libwebsockets.a
         PATHS ${CMAKE_SOURCE_DIR}/third_party/lws-linux/lib)
 endif()
+set(TR_LWS_READY FALSE)
 if(LWS_INCLUDE_DIR AND LWS_LIBRARY)
+    set(TR_LWS_READY TRUE)
+    if(WIN32)
+        find_library(MBEDTLS_LIBRARY NAMES mbedtls)
+        find_library(MBEDX509_LIBRARY NAMES mbedx509)
+        find_library(MBEDCRYPTO_LIBRARY NAMES mbedcrypto)
+        if(NOT MBEDTLS_LIBRARY OR NOT MBEDX509_LIBRARY OR NOT MBEDCRYPTO_LIBRARY)
+            set(TR_LWS_READY FALSE)
+            message(STATUS "mbedtls not found: 실시간 어댑터와 ls_rt 테스트는 건성한다 (미검증 기록)")
+        endif()
+    endif()
+endif()
+if(TR_LWS_READY)
     add_library(lsrt STATIC
         src/adapters/ls/ls_realtime.c
     )
-    target_link_libraries(lsrt PUBLIC ls ${LWS_LIBRARY} ssl crypto z cap)
+    if(WIN32)
+        target_link_libraries(lsrt PUBLIC ls ${LWS_LIBRARY}
+            ${MBEDTLS_LIBRARY} ${MBEDX509_LIBRARY} ${MBEDCRYPTO_LIBRARY}
+            ws2_32 crypt32 secur32 bcrypt)
+    else()
+        target_link_libraries(lsrt PUBLIC ls ${LWS_LIBRARY} ssl crypto z cap)
+    endif()
     target_include_directories(lsrt PUBLIC src ${LWS_INCLUDE_DIR})
     target_compile_options(lsrt PRIVATE ${TR_WARNINGS})
     set(TR_LWS_FOUND TRUE)
 else()
-    message(STATUS "libwebsockets not found: 실시간 어댑터와 ls_rt 테스트는 건성한다 (미검증 기록)")
+    if(NOT LWS_INCLUDE_DIR OR NOT LWS_LIBRARY)
+        message(STATUS "libwebsockets not found: 실시간 어댑터와 ls_rt 테스트는 건성한다 (미검증 기록)")
+    endif()
 endif()
 
 # IPC 어댑터: ZeroMQ는 시스템 패키지를 사용한다.
@@ -159,6 +214,10 @@ if(ZMQ_LIBRARY AND ZMQ_INCLUDE_DIR)
         src/adapters/ipc/ipc_msg.c
     )
     target_link_libraries(ipc PUBLIC core yyjson ${ZMQ_LIBRARY})
+    if(WIN32)
+        target_compile_definitions(ipc PUBLIC ZMQ_STATIC)
+        target_link_libraries(ipc PUBLIC ws2_32 iphlpapi winpthread stdc++)
+    endif()
     target_include_directories(ipc PUBLIC src ${ZMQ_INCLUDE_DIR})
     target_compile_options(ipc PRIVATE ${TR_WARNINGS})
     set(TR_IPC_FOUND TRUE)
@@ -197,6 +256,27 @@ if(TR_IPC_FOUND)
     if(SQLite3_FOUND)
         target_link_libraries(trading-engine PRIVATE storage)
         target_compile_definitions(trading-engine PRIVATE TR_HAS_STORE=1)
+    endif()
+    if(WIN32)
+        # third_party/windows-runtime 에 보관한 MinGW 런타임을 exe 옆으로 복사한다.
+        set(TR_WIN_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/third_party/windows-runtime")
+        set(TR_WIN_RUNTIME_DLLS
+            "${TR_WIN_RUNTIME_DIR}/libgcc_s_seh-1.dll"
+            "${TR_WIN_RUNTIME_DIR}/libstdc++-6.dll"
+            "${TR_WIN_RUNTIME_DIR}/libwinpthread-1.dll"
+        )
+        foreach(_dll ${TR_WIN_RUNTIME_DLLS})
+            if(NOT EXISTS "${_dll}")
+                message(FATAL_ERROR "윈도우 런타임 DLL 없음: ${_dll}")
+            endif()
+        endforeach()
+        foreach(_tgt traderctl trading-engine)
+            add_custom_command(TARGET ${_tgt} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${TR_WIN_RUNTIME_DLLS} $<TARGET_FILE_DIR:${_tgt}>
+                COMMENT "윈도우 런타임 DLL 복사"
+                VERBATIM
+            )
+        endforeach()
     endif()
 else()
     message(STATUS "libzmq not found: trading-engine은 건성한다 (미검증 기록)")
