@@ -792,7 +792,9 @@ static int web_modules_ok(const char *web) {
 
 static int web_npm_install(const char *web) {
 #ifdef _WIN32
-    const char *av[] = {"cmd.exe", "/d", "/s", "/c", "npm install", 0};
+    /* "npm install"을 한 칸으로 묶으면 cmd가 '"npm install' 이라는 프로그램으로 본다.
+     * npm은 npm.cmd라 CreateProcess가 직접 실행하지 못하므로 cmd /c 로 나눈다. */
+    const char *av[] = {"cmd.exe", "/d", "/c", "npm", "install", 0};
 #else
     const char *av[] = {"npm", "install", 0};
 #endif
