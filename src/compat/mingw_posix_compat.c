@@ -1,6 +1,5 @@
 /* third_party/mingw-prefix 의 libzmq 는 win32 스레드 GCC 로 만들어져
  * __gthr_win32_* 를 부른다. WinLibs POSIX GCC 에는 그 심볼이 없다.
- * libmbedcrypto 는 옛 UCRT 의 vsnprintf_s 를 부른다. GCC 16 은 그 이름을 안 준다.
  * 이 파일은 POSIX 스레드 MinGW 에서만 링크한다. win32 스레드 GCC 는 이미 갖고 있다.
  */
 #ifndef _WIN32_WINNT
@@ -10,9 +9,6 @@
 #include <windows.h>
 
 #include <errno.h>
-#include <stdarg.h>
-#include <stddef.h>
-#include <stdio.h>
 
 struct tr_abs_time {
     long long sec;
@@ -70,16 +66,4 @@ __gthr_win32_cond_timedwait(CONDITION_VARIABLE *cond, CRITICAL_SECTION *mutex,
     if (!SleepConditionVariableCS(cond, mutex, ms))
         return GetLastError() == ERROR_TIMEOUT ? ETIMEDOUT : EINVAL;
     return 0;
-}
-
-int
-vsnprintf_s(char *buffer, size_t size_of_buffer, size_t count,
-            const char *format, va_list argptr)
-{
-    size_t n;
-    if (size_of_buffer == 0) return -1;
-    /* _TRUNCATE */
-    n = count == (size_t)-1 ? size_of_buffer : count + 1;
-    if (n > size_of_buffer) n = size_of_buffer;
-    return vsnprintf(buffer, n, format, argptr);
 }

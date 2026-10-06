@@ -241,7 +241,10 @@ if(ZMQ_LIBRARY AND ZMQ_INCLUDE_DIR)
         target_compile_definitions(ipc PUBLIC ZMQ_STATIC)
         target_link_libraries(ipc PUBLIC ws2_32 iphlpapi winpthread stdc++)
         if(TR_MINGW_POSIX_THREADS)
-            target_sources(ipc PRIVATE src/compat/mingw_posix_compat.c)
+            target_sources(ipc PRIVATE
+                src/compat/mingw_posix_compat.c
+                src/compat/mingw_vsnprintf_s.c
+            )
         endif()
     endif()
     target_include_directories(ipc PUBLIC src ${ZMQ_INCLUDE_DIR})
