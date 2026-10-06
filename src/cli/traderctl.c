@@ -792,9 +792,25 @@ static int web_modules_ok(const char *web) {
 
 static int web_npm_install(const char *web) {
 #ifdef _WIN32
-    /* "npm install"을 한 칸으로 묶으면 cmd가 '"npm install' 이라는 프로그램으로 본다.
-     * npm은 npm.cmd라 CreateProcess가 직접 실행하지 못하므로 cmd /c 로 나눈다. */
-    const char *av[] = {"cmd.exe", "/d", "/c", "npm", "install", 0};
+    /* npm.cmd는 %~dp0를 자기 위치로 쓴다. cmd가 PATH에서 찾으면 %~dp0가
+     * web 작업 폴더가 되어 web\node_modules\npm 을 찾다 실패한다.
+     * node.exe와 같은 폴더의 npm-cli.js를 node로 직접 실행한다. */
+    char node_exe[MAX_PATH];
+    char npm_cli[MAX_PATH + 64];
+    DWORD n = SearchPathA(NULL, "node.exe", NULL, (DWORD)sizeof(node_exe), node_exe, NULL);
+    if (n == 0 || n >= sizeof(node_exe)) {
+        return 1;
+    }
+    char *slash = strrchr(node_exe, '\\');
+    if (slash == 0) {
+        return 1;
+    }
+    int wn = snprintf(npm_cli, sizeof(npm_cli), "%.*s\\node_modules\\npm\\bin\\npm-cli.js",
+                      (int)(slash - node_exe), node_exe);
+    if (wn < 0 || (size_t)wn >= sizeof(npm_cli)) {
+        return 1;
+    }
+    const char *av[] = {node_exe, npm_cli, "install", 0};
 #else
     const char *av[] = {"npm", "install", 0};
 #endif
