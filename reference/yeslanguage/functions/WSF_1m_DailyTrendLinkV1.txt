@@ -1,4 +1,3 @@
-
 Input : 일봉회귀기간입력(Numeric),
         최소신뢰도입력(Numeric),
         일봉회귀선(NumericRef),

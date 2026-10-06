@@ -66,7 +66,14 @@ const RENDERERS = {
   fx_sniper: Data2Layers.Data2Renderer,
   fx_pvc: PvcLayers.PvcRenderer,
   fx_data2: Data2Layers.Data2Renderer,
+  ks_data2: Data2Layers.Data2Renderer,
+  w_ret_long: WplotLayers.RetLong,
+  w_ret_short: WplotLayers.RetShort,
+  w_link_long: WplotLayers.LinkLong,
+  w_link_short: WplotLayers.LinkShort,
 };
+
+const WPLOT_IDS = ["w_ret_long", "w_ret_short", "w_link_long", "w_link_short"];
 
 // 지표 매니페스트 (엔진 스냅샷의 indicators 배열) — 시딩 전에는 비어 있다
 let indicatorManifest = [];
@@ -241,10 +248,11 @@ function createFrame(row) {
     pickerEl: null, symInput: null, symResults: null, chipsEl: null,
     searchSeq: 0, searchTimer: null, symActive: -1,
     symCandidates: null, symCandidateQuery: "", symSearch: null,
-    overlays: [], overlayNames: {}, overlayColors: {}, overlayStyles: {}, overlayScale: "price",
+    overlays: [], overlayNames: {}, overlayColors: {}, overlayStyles: {}, overlayScale: "shared",
     mainColor: "",
     overlayTargets: new Set(),
     replacingMain: false,
+    pairOpp: "", pairOppName: "", pairFut: "", pairFutName: "",
   };
   tools.append(addBtn, buildFramePicker(frame), closeBtn);
   addBtn.onclick = () => addChart(frame);
@@ -321,7 +329,15 @@ function createPane(frame, heightFrac = 1) {
     active: new Map(), chart: null, candleSeries: null, syncHandle: null,
     overlaySeries: new Map(),
     panelOpen: true, panelToggleEl: null, treeFold: {}, data2: "",
+    linkLegs: WeeklyLegs.empty(),
+    systems: new Set(),
+    systemVars: {},
+    systemBasis: {},
     barStyle: "candle", barDraw: "candle", overlayStyles: {},
+    pairSide: 1,
+    pairOpp: frame.pairOpp || "", pairOppName: frame.pairOppName || "",
+    pairFut: frame.pairFut || "", pairFutName: frame.pairFutName || "",
+    pairEvents: [], pairStatus: "", pairLast: null, pairBusy: false,
   };
   pane.chart = LightweightCharts.createChart(chartHost, chartOptions(pane));
   hideCrosshairMarkers(pane.chart);
@@ -577,6 +593,7 @@ function setBarStyle(pane, style) {
     if (typeof handle.setAxis === "function") handle.setAxis(next === "none" ? "right" : null);
   }
   if (pane.barSelect) pane.barSelect.value = next;
+  applyPairMarkers(pane);
 }
 
 function setPanelOpen(pane, open) {
@@ -622,6 +639,11 @@ async function addChart(frame) {
       if (!frame.panes.includes(pane)) return;
       if (pane.symbol !== src.symbol) return;
       for (const [id, entry] of src.active) activateIndicator(pane, id, entry.layers);
+      pane.systems = new Set(src.systems || []);
+      pane.systemVars = JSON.parse(JSON.stringify(src.systemVars || {}));
+      pane.systemBasis = { ...(src.systemBasis || {}) };
+      pane.linkLegs = WeeklyLegs.copy(src.linkLegs);
+      refreshWeeklyPlots(pane);
       if (src.data2) await setPaneData2(pane, src.data2);
       setBarStyle(pane, src.barStyle || "candle");
       buildPaneTools(pane);
@@ -644,7 +666,9 @@ function clearPaneContent(pane) {
   pane.selTarget = "";
   pane.data2 = "";
   clearPaneData(pane);
+  pane.systems.clear();
   for (const id of [...pane.active.keys()]) deactivateIndicator(pane, id);
+  refreshWeeklyPlots(pane);
   setBarStyle(pane, "candle");
   setPanelOpen(pane, true);
   syncFrameSymbolUi(pane);
@@ -907,7 +931,13 @@ function buildFramePicker(frame) {
   const results = document.createElement("div");
   results.className = "sym-results";
   results.hidden = true;
-  picker.append(chips, input, results);
+  const browseBtn = document.createElement("button");
+  browseBtn.type = "button";
+  browseBtn.className = "sym-browse-btn";
+  browseBtn.title = "종목 찾기";
+  browseBtn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.4 10.4 L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  browseBtn.onclick = () => openSymbolBrowse(frame);
+  picker.append(chips, input, browseBtn, results);
   frame.pickerEl = picker;
   frame.chipsEl = chips;
   frame.symInput = input;
@@ -933,6 +963,13 @@ function buildFramePicker(frame) {
   });
   syncFrameChips(frame);
   return picker;
+}
+
+let symbolBrowse = null;
+function openSymbolBrowse(frame) {
+  hideFrameResults(frame);
+  if (!symbolBrowse) symbolBrowse = SymbolBrowse.mount(document.body);
+  symbolBrowse.open((code, name) => applyFrameCode(frame, code, name));
 }
 
 function releaseFrameSearch(frame) {
@@ -964,6 +1001,13 @@ function syncFrameChips(frame) {
     chip.type = "button";
     chip.className = `sym-chip main${frame.replacingMain ? " replacing" : ""}`;
     chip.append(symbolChipText(main, mainName));
+    const mainRole = orderChipRole(frame, main);
+    if (mainRole) {
+      const badge = document.createElement("span");
+      badge.className = "sym-chip-role";
+      badge.textContent = mainRole;
+      chip.append(badge);
+    }
     if (frame.mainColor && !frame.replacingMain) chip.style.borderColor = frame.mainColor;
     chip.title = `${mainName ? `${mainName}. ` : ""}클릭하면 메인 종목을 바꿉니다`;
     chip.onclick = () => {
@@ -980,13 +1024,21 @@ function syncFrameChips(frame) {
     const overlayName = frame.overlayNames[code] || feed.get(code)?.name || "";
     chip.title = overlayName || code;
     const label = symbolChipText(code, overlayName);
+    const role = orderChipRole(frame, code);
     const close = document.createElement("button");
     close.type = "button";
     close.className = "x";
     close.textContent = "×";
     close.title = "이 겹침 종목을 지운다";
     close.onclick = () => removeFrameOverlay(frame, code);
-    chip.append(label, close);
+    chip.append(label);
+    if (role) {
+      const badge = document.createElement("span");
+      badge.className = "sym-chip-role";
+      badge.textContent = role;
+      chip.append(badge);
+    }
+    chip.append(close);
     frame.chipsEl.append(chip);
   }
   if (frame.overlays.length) {
@@ -1069,7 +1121,7 @@ function showFrameResults(frame, items, seq) {
     const mkt = document.createElement("span");
     mkt.className = "mkt";
     // fut: 0=주식, 1=국내선물, 2=해외선물 (엔진 market.instruments)
-    mkt.textContent = it.fut === 2 ? "해외" : it.fut ? "선물" : "";
+    mkt.textContent = it.fut === 2 ? "해외" : it.fut === 3 ? "옵션" : it.fut ? "선물" : "";
     row.append(code, name, mkt);
     row.onmouseenter = () => {
       frame.symActive = i;
@@ -1156,6 +1208,7 @@ async function applyFrameCode(frame, code, pickedName) {
       delete frame.overlayColors[code];
       delete frame.overlayStyles[code];
       for (const other of frame.panes) dropOverlaySeries(other, code);
+      forgetPairCode(frame, code);
     }
     await selectPaneSymbol(pane, code, pickedName);
     syncFrameChips(frame);
@@ -1224,6 +1277,7 @@ function adoptFrameSymbol(pane) {
     other.symbol = pane.symbol;
     other.symName = pane.symName;
     other.selTarget = "";
+    clearPairSim(other);
     clearPaneData(other);
     buildPaneTools(other);
     if (prev) releaseSymbol(prev);
@@ -1248,6 +1302,7 @@ async function selectPaneSymbol(pane, shcode, name) {
     return;
   }
   if (shcode === pane.symbol) {
+    forgetPairCode(pane.frame, shcode);
     syncFrameSymbolUi(pane);
     if (adoptFrameSymbol(pane)) await seedSymbol(shcode);
     return;
@@ -1277,6 +1332,9 @@ async function selectPaneSymbol(pane, shcode, name) {
     const prev = pane.symbol;
     pane.symbol = shcode;
     pane.symName = name ?? "";
+    clearPairSim(pane);
+    forgetPairCode(pane.frame, shcode);
+    syncPairLegs(pane.frame);
     clearPaneData(pane); // 이전 종목의 잔여 표시를 지운다
     const cache = feed.forSymbol(shcode);
     if (w.name) {
@@ -1348,12 +1406,10 @@ function clearSymbolPanes(shcode) {
   }
 }
 
-// 칸 지표 패널 트리: 카테고리 ▸ 지표 체크박스 ▸ 그 지표의 레이어 체크박스들.
-// 종목 미선택 칸은 안내 문구만 보인다 (빈 차트 원칙 — 지표는 종목이 있어야 동작한다).
-// 트리 구조(카테고리 분류)는 indicator-tree.js가 매니페스트에서 만들고,
-// 체크 상태는 항상 이 칸의 pane.active·layers를 그대로 반영한다 — 상태를 바꾸는 모든 경로
-// (토글·종목 변경·화면틀 복원·매니페스트 갱신)에서 이 함수를 다시 불러 트리를 재구성한다
-// (칩 시절 buildPaneTools의 호출 지점과 같은 계약).
+// 칸 왼쪽 패널: 분봉 모양, 그 아래 예스랭귀지 원본 폴더와 파일 이름(확장자 없음).
+// 종목 미선택 칸은 안내 문구만 보인다. 체크 상태는 pane.active·systems 를 다시 읽는다.
+let ylCatalog = { dirs: [] };
+
 function buildPaneTools(pane) {
   const panel = pane.panelEl;
   panel.replaceChildren();
@@ -1362,17 +1418,290 @@ function buildPaneTools(pane) {
   if (!pane.symbol) {
     const hint = document.createElement("div");
     hint.className = "ind-hint";
-    hint.textContent = "종목을 선택하면 지표를 고를 수 있습니다";
+    hint.textContent = "종목을 선택하면 원본 항목을 고를 수 있습니다";
     panel.append(hint);
     return;
   }
 
-  for (const cat of IndicatorTree.buildTree(indicatorManifest, (id) => id in RENDERERS)) {
-    panel.append(buildCatNode(pane, cat));
+  for (const dir of YlTree.build(ylCatalog)) panel.append(buildSourceDir(pane, dir));
+  const covered = YlTree.indicatorIds();
+  for (const meta of indicatorManifest) {
+    if (!meta || covered.has(meta.id) || !(meta.id in RENDERERS)) continue;
+    panel.append(buildIndNode(pane, meta));
   }
 }
 
-// 왼쪽 패널 위: 이 칸의 분봉 모양을 고른다. 칸을 더 여는 것은 위쪽 + 차트다.
+async function loadYlCatalog() {
+  // /api/yeslang 은 원본 디렉터리를 그대로 읽는다. 그 라우트가 없는 프로세스는
+  // 같은 내용의 정적 목록으로 넘어간다.
+  for (const url of ["/api/yeslang", "/yl-catalog.json"]) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!data || !Array.isArray(data.dirs)) continue;
+      ylCatalog = data;
+      for (const pane of panes) buildPaneTools(pane);
+      return;
+    } catch (err) {
+      console.error("원본 목록을 읽지 못했습니다", url, err);
+    }
+  }
+}
+
+function optionLetter(name) {
+  const s = String(name || "").trim();
+  if (/^P\b/.test(s)) return "P";
+  if (/^C\b/.test(s)) return "C";
+  return "";
+}
+
+function codeName(pane, code) {
+  if (!code) return "";
+  if (code === pane.symbol) return pane.symName || feed.get(code)?.name || "";
+  return pane.frame?.overlayNames?.[code] || feed.get(code)?.name || "";
+}
+
+// 주문은 시스템을 올린 옵션 차트(Data1)에만 그린다. 콜 차트면 콜, 풋 차트면 풋.
+function pairOptionCharts(pane, systemId) {
+  const codes = frameSymbolCodes(pane.frame);
+  const letters = codes.map((code) => optionLetter(codeName(pane, code)));
+  const basis = pane.systemBasis?.[systemId] === "P" ? "P" : "C";
+  return WeeklyLegs.optionCharts(codes, letters, basis);
+}
+
+function paintPairSeries(pane, series, key, marks) {
+  if (!series || typeof series.setMarkers !== "function") return;
+  if (!pane.pairLabelBy) pane.pairLabelBy = new Map();
+  // 눈금·분봉 모양이 바뀌면 시리즈가 새로 생긴다. 글자는 그 시리즈에 다시 붙인다.
+  let slot = pane.pairLabelBy.get(key);
+  if (!slot || slot.series !== series) {
+    if (slot?.labels && slot.series && typeof slot.series.detachPrimitive === "function") {
+      try { slot.series.detachPrimitive(slot.labels); } catch { /* 이미 제거된 시리즈 */ }
+    }
+    slot = { series, labels: PairMarkers.labels() };
+    pane.pairLabelBy.set(key, slot);
+    if (typeof series.attachPrimitive === "function") series.attachPrimitive(slot.labels);
+  }
+  slot.labels.setMarks(marks);
+  series.setMarkers(PairMarkers.seriesMarkers(marks));
+}
+
+function applyPairMarkers(pane) {
+  const markers = PairMarkers.fromEvents(pane.pairEvents);
+  const groups = new Map();
+  for (const mark of markers) {
+    const key = mark.symbol || pane.symbol || "";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(mark);
+  }
+  try {
+    paintPairSeries(pane, pane.candleSeries, pane.symbol || "", groups.get(pane.symbol || "") || []);
+    for (const [code, series] of pane.overlaySeries || []) {
+      paintPairSeries(pane, series, code, groups.get(code) || []);
+    }
+  } catch (err) {
+    console.error("페어 신호 표시 실패", err);
+  }
+}
+
+function clearPairSim(pane) {
+  pane.pairEvents = [];
+  pane.pairStatus = "";
+  pane.pairLast = null;
+  applyPairMarkers(pane);
+}
+
+function frameSymbolCodes(frame) {
+  const main = frameSymbolPane(frame)?.symbol || "";
+  const codes = [];
+  if (main) codes.push(main);
+  for (const code of frame?.overlays || []) {
+    if (code && !codes.includes(code)) codes.push(code);
+  }
+  return codes;
+}
+
+function framePairOrderOn(frame) {
+  return (frame?.panes || []).some((pane) =>
+    (pane.systems && pane.systems.size > 0) || WPLOT_IDS.some((id) => pane.active.has(id)));
+}
+
+// 페어를 쓰는 화면틀만 첫 종목부터 지수, 콜, 풋으로 보여 준다.
+function orderChipRole(frame, code) {
+  if (!code || !framePairOrderOn(frame)) return "";
+  const codes = frameSymbolCodes(frame);
+  if (codes[0] === code) return "지수";
+  if (codes[1] === code) return "콜";
+  if (codes[2] === code) return "풋";
+  return "";
+}
+
+function syncPairLegs(frame) {
+  if (!frame) return;
+  const legs = WeeklyLegs.fromSymbolOrder(frameSymbolCodes(frame));
+  for (const pane of frame.panes || []) {
+    pane.linkLegs = WeeklyLegs.copy(legs);
+    refreshWeeklyPlots(pane);
+    refreshKsData2(pane);
+  }
+  syncFrameChips(frame);
+}
+
+function forgetPairCode(frame, code) {
+  if (!frame || !code) return;
+  if (frame.pairOpp === code) {
+    frame.pairOpp = "";
+    frame.pairOppName = "";
+  }
+  if (frame.pairFut === code) {
+    frame.pairFut = "";
+    frame.pairFutName = "";
+  }
+  let changed = false;
+  for (const pane of frame.panes || []) {
+    if (!pane.linkLegs) continue;
+    const next = WeeklyLegs.forgetCode(pane.linkLegs, code);
+    const prevLong = WeeklyLegs.legForIndicator(pane.linkLegs, "w_link_long");
+    const prevShort = WeeklyLegs.legForIndicator(pane.linkLegs, "w_link_short");
+    const nextLong = WeeklyLegs.legForIndicator(next, "w_link_long");
+    const nextShort = WeeklyLegs.legForIndicator(next, "w_link_short");
+    if (prevLong.opp === nextLong.opp && prevLong.fut === nextLong.fut &&
+        prevShort.opp === nextShort.opp && prevShort.fut === nextShort.fut) {
+      continue;
+    }
+    pane.linkLegs = next;
+    changed = true;
+    refreshWeeklyPlots(pane);
+    refreshKsData2(pane);
+  }
+  if (changed) syncFrameChips(frame);
+}
+
+function paneWantsWeekly(pane) {
+  return WPLOT_IDS.some((id) => pane.active.has(id)) || (pane.systems && pane.systems.size > 0);
+}
+
+function setWeeklySide(pane, ids, payload) {
+  for (const id of ids) {
+    const entry = pane.active.get(id);
+    if (entry && typeof entry.handle.setPlots === "function") entry.handle.setPlots(payload);
+  }
+}
+
+function refreshWeeklyPlots(pane) {
+  if (!pane) return;
+  clearTimeout(pane.wplotTimer);
+  if (!paneWantsWeekly(pane)) {
+    pane.pairEvents = [];
+    applyPairMarkers(pane);
+    return;
+  }
+  pane.wplotTimer = setTimeout(() => {
+    loadWeeklyPlots(pane);
+  }, 200);
+}
+
+function refreshFrameWeekly(frame) {
+  for (const pane of panes) if (pane.frame === frame) refreshWeeklyPlots(pane);
+}
+
+function refreshWeeklyForSymbol(shcode) {
+  for (const pane of panes) {
+    const long = WeeklyLegs.legForIndicator(pane.linkLegs, "w_link_long");
+    const short = WeeklyLegs.legForIndicator(pane.linkLegs, "w_link_short");
+    if (pane.symbol === shcode || long.opp === shcode || long.fut === shcode ||
+        short.opp === shcode || short.fut === shcode) {
+      refreshWeeklyPlots(pane);
+    }
+    if (long.fut === shcode || short.fut === shcode) refreshKsData2(pane);
+  }
+}
+
+async function loadWeeklyPlots(pane) {
+  const codes = frameSymbolCodes(pane.frame);
+  const sides = [
+    { leg: "w_link_long", ids: ["w_ret_long", "w_link_long"], side: 1, systemId: "pair-long" },
+    { leg: "w_link_short", ids: ["w_ret_short", "w_link_short"], side: -1, systemId: "pair-short" },
+  ];
+  const wanted = sides.filter((side) =>
+    side.ids.some((id) => pane.active.has(id)) || pane.systems?.has(side.systemId));
+  if (!wanted.length) {
+    pane.pairEvents = [];
+    applyPairMarkers(pane);
+    return;
+  }
+  // 지수·콜·풋이 다 붙기 전의 갱신은 선을 지우지 않는다. 지우면 영점만 남고
+  // 나중에 도착한 막대 응답은 번호가 밀려 버려진다.
+  const readySides = wanted.filter((side) => {
+    const leg = WeeklyLegs.legForIndicator(WeeklyLegs.fromSymbolOrder(codes), side.leg);
+    const self = WeeklyLegs.selfFor(codes, side.side);
+    side.legNow = leg;
+    side.self = self;
+    side.plotted = side.ids.some((id) => pane.active.has(id));
+    side.systemOn = !!pane.systems?.has(side.systemId);
+    return self.length >= 4 && leg.opp.length >= 4 && leg.fut.length >= 4;
+  });
+  if (!readySides.length) return;
+  const seq = (pane.wplotSeq = (pane.wplotSeq || 0) + 1);
+  const marks = [];
+  await Promise.all(readySides.map(async (side) => {
+    const leg = side.legNow;
+    const self = side.self;
+    const plotted = side.plotted;
+    const systemOn = side.systemOn;
+    const jobs = [];
+    if (plotted) {
+      jobs.push((async () => {
+        try {
+          const q = new URLSearchParams({ self, opp: leg.opp, fut: leg.fut });
+          const res = await fetch(`/api/pair/plots?${q}`);
+          const data = await res.json().catch(() => ({}));
+          if (pane.wplotSeq !== seq) return;
+          if (!res.ok || data.status === "rejected" || data.error) {
+            setWeeklySide(pane, side.ids, null);
+            return;
+          }
+          setWeeklySide(pane, side.ids, data.payload || null);
+        } catch (err) {
+          console.error(err);
+          if (pane.wplotSeq === seq) setWeeklySide(pane, side.ids, null);
+        }
+      })());
+    }
+    if (systemOn) {
+      const charts = pairOptionCharts(pane, side.systemId);
+      for (const chart of charts) {
+        jobs.push((async () => {
+          try {
+            const q = new URLSearchParams({
+              side: String(side.side), self: chart.self, opp: chart.opp, fut: chart.fut,
+            });
+            const vars = pane.systemVars?.[side.systemId];
+            if (vars && Object.keys(vars).length) q.set("cfg", JSON.stringify(vars));
+            const res = await fetch(`/api/pair/sim?${q}`);
+            const data = await res.json().catch(() => ({}));
+            if (pane.wplotSeq !== seq) return;
+            const payload = data.payload && typeof data.payload === "object" ? data.payload : null;
+            const events = res.ok && payload && Array.isArray(payload.events) ? payload.events : [];
+            for (const ev of events) {
+              if (ev.p) continue;
+              marks.push({ t: ev.t, k: ev.k, side: side.side, n: ev.n, q: ev.q, symbol: chart.self });
+            }
+          } catch (err) {
+            console.error(err);
+          }
+        })());
+      }
+    }
+    await Promise.all(jobs);
+  }));
+  if (pane.wplotSeq !== seq) return;
+  pane.pairEvents = marks;
+  applyPairMarkers(pane);
+}
+
+// 왼쪽 패널 위: 이 칸의 분봉 모양을 고른다. 칸을 더 여는 것은 위쪽 행추가·열추가다.
 function buildChartControls(pane) {
   const box = document.createElement("div");
   box.className = "ind-chart-tools";
@@ -1398,7 +1727,9 @@ function buildChartControls(pane) {
   sel.onchange = () => setBarStyle(pane, sel.value);
   pane.barSelect = sel;
   label.append(sel);
-  box.append(label);
+  const styles = document.createElement("div");
+  styles.className = "bar-styles";
+  styles.append(label);
   for (const code of pane.frame?.overlays || []) {
     const row = document.createElement("label");
     row.className = "bar-style";
@@ -1409,55 +1740,212 @@ function buildChartControls(pane) {
     const color = pane.frame.overlayColors?.[code];
     if (color) name.style.color = color;
     const ov = document.createElement("select");
-    for (const item of [
-      { id: "candle", name: "캔들바" },
-      { id: "outline", name: "테두리" },
-      { id: "bar", name: "바" },
-      { id: "line", name: "종가선" },
-    ]) {
+    for (const item of BAR_STYLES) {
       const opt = document.createElement("option");
       opt.value = item.id;
       opt.textContent = item.name;
       ov.append(opt);
     }
     ov.value = overlayStyle(pane, code);
-    ov.title = "이 칸에서 이 종목의 봉";
+    ov.title = "이 칸에서 이 종목의 봉. 없음이면 이 종목 봉을 숨긴다";
     ov.onchange = () => setOverlayStyle(pane, code, ov.value);
     row.append(name, ov);
-    box.append(row);
+    styles.append(row);
   }
+  box.append(styles);
   return box;
 }
 
-// 트리 카테고리 노드: 머리(접기/펼치기 + 이름) + 지표 목록.
-// 접힘 상태는 pane.treeFold에 칸 UI 로컬로 둔다 (직렬화하지 않는다).
-function buildCatNode(pane, cat) {
+// 원본 폴더 하나. 접힘 상태는 pane.treeFold에 칸 UI 로컬로 둔다.
+function buildSourceDir(pane, dir) {
   const node = document.createElement("div");
   node.className = "ind-cat";
-  const folded = !!pane.treeFold[cat.id];
+  const folded = !!pane.treeFold[dir.id];
   const head = document.createElement("div");
   head.className = "ind-cat-head";
-  head.textContent = `${folded ? "▸" : "▾"} ${cat.name}`;
+  head.textContent = `${folded ? "▸" : "▾"} ${dir.name}`;
   head.title = folded ? "펼치기" : "접기";
   head.onclick = () => {
-    pane.treeFold[cat.id] = !folded;
+    pane.treeFold[dir.id] = !folded;
     buildPaneTools(pane);
   };
   node.append(head);
   if (!folded) {
     const body = document.createElement("div");
     body.className = "ind-cat-body";
-    for (const meta of cat.indicators) body.append(buildIndNode(pane, meta));
+    for (const item of dir.items) body.append(buildSourceItem(pane, item));
     node.append(body);
   }
   return node;
+}
+
+function sourceTitle(item) {
+  const path = `${item.dir}/${item.label}`;
+  return item.port?.note ? `${path}. ${item.port.note}` : path;
+}
+
+function buildSourceItem(pane, item) {
+  if (item.port?.kind === "system") return buildSystemNode(pane, item);
+  if (item.port?.kind === "indicator" && item.port.id in RENDERERS) {
+    const meta = indicatorManifest.find((m) => m.id === item.port.id) || { id: item.port.id, layers: [] };
+    return buildIndNode(pane, meta, item);
+  }
+  const row = document.createElement("div");
+  row.className = "ind-row src-plain";
+  row.textContent = item.label;
+  row.title = `${sourceTitle(item)}. 차트에 따로 연결되지 않은 원본입니다`;
+  return row;
+}
+
+function buildSystemNode(pane, item) {
+  const node = document.createElement("div");
+  node.className = "ind-item";
+  const row = document.createElement("div");
+  row.className = "ind-row";
+  const label = document.createElement("label");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = pane.systems.has(item.port.id);
+  box.onchange = () => {
+    if (box.checked) pane.systems.add(item.port.id);
+    else pane.systems.delete(item.port.id);
+    syncPairLegs(pane.frame);
+    buildPaneTools(pane);
+  };
+  const name = document.createElement("span");
+  name.className = "src-name";
+  name.textContent = item.label;
+  name.title = `${sourceTitle(item)}. 종목 순서: 지수, 콜, 풋`;
+  label.append(box, name);
+  const gear = document.createElement("button");
+  gear.type = "button";
+  gear.className = "src-gear";
+  gear.title = "변수 설정";
+  gear.setAttribute("aria-label", "변수 설정");
+  gear.innerHTML = GEAR_SVG;
+  gear.onclick = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    openSystemVars(pane, item);
+  };
+  row.append(label, gear);
+  node.append(row);
+  return node;
+}
+
+const GEAR_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.22-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.39-.96c.5.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.22 1.13-.54 1.63-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>`;
+
+function systemVarValues(pane, id) {
+  const saved = pane.systemVars?.[id] || {};
+  const out = {};
+  for (const [name, fallback] of YlTree.inputsFor(id)) {
+    const n = Number(saved[name]);
+    out[name] = Number.isFinite(n) ? n : fallback;
+  }
+  return out;
+}
+
+function openSystemVars(pane, item) {
+  const id = item.port.id;
+  const fields = YlTree.inputsFor(id);
+  document.getElementById("sysvar-back")?.remove();
+  const back = document.createElement("div");
+  back.id = "sysvar-back";
+  back.className = "sysvar-back";
+  const box = document.createElement("div");
+  box.className = "sysvar-box";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", "시스템 변수 설정");
+  const title = document.createElement("div");
+  title.className = "sysvar-title";
+  title.textContent = `시스템 트레이딩 설정 - ${item.label}`;
+  const note = document.createElement("div");
+  note.className = "sysvar-note";
+  note.textContent = "시스템의 변수를 설정합니다";
+  const table = document.createElement("div");
+  table.className = "sysvar-table";
+  const basisLine = document.createElement("label");
+  basisLine.className = "sysvar-line";
+  const basisName = document.createElement("span");
+  basisName.textContent = "기준";
+  const basis = document.createElement("select");
+  basis.dataset.name = "기준";
+  for (const opt of [["C", "콜"], ["P", "풋"]]) {
+    const o = document.createElement("option");
+    o.value = opt[0];
+    o.textContent = opt[1];
+    basis.append(o);
+  }
+  basis.value = pane.systemBasis?.[id] === "P" ? "P" : "C";
+  basisLine.append(basisName, basis);
+  const head = document.createElement("div");
+  head.className = "sysvar-head";
+  head.innerHTML = "<span>변수이름</span><span>변수값</span>";
+  table.append(basisLine, head);
+  const values = systemVarValues(pane, id);
+  const inputs = [];
+  for (const [name] of fields) {
+    const line = document.createElement("label");
+    line.className = "sysvar-line";
+    const lab = document.createElement("span");
+    lab.textContent = name;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "any";
+    input.value = String(values[name]);
+    input.dataset.name = name;
+    line.append(lab, input);
+    table.append(line);
+    inputs.push(input);
+  }
+  const actions = document.createElement("div");
+  actions.className = "sysvar-actions";
+  const ok = document.createElement("button");
+  ok.type = "button";
+  ok.textContent = "확인";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "취소";
+  actions.append(ok, cancel);
+  box.append(title, note, table, actions);
+  back.append(box);
+  const close = () => back.remove();
+  cancel.onclick = close;
+  back.addEventListener("mousedown", (ev) => {
+    if (ev.target === back) close();
+  });
+  ok.onclick = () => {
+    const next = {};
+    for (const input of inputs) {
+      const n = Number(input.value);
+      if (!Number.isFinite(n)) {
+        input.focus();
+        return;
+      }
+      next[input.dataset.name] = n;
+    }
+    if (!pane.systemVars) pane.systemVars = {};
+    if (!pane.systemBasis) pane.systemBasis = {};
+    pane.systemVars[id] = next;
+    pane.systemBasis[id] = basis.value === "P" ? "P" : "C";
+    close();
+    refreshWeeklyPlots(pane);
+    if (el.wsName.value.trim()) saveWorkspace({ quiet: true });
+  };
+  document.body.append(back);
+  back.tabIndex = -1;
+  back.onkeydown = (ev) => {
+    if (ev.key === "Escape") close();
+  };
+  inputs[0]?.focus();
+  inputs[0]?.select();
 }
 
 // 트리 지표 노드: 지표 체크박스 + (켜져 있으면) 그 지표의 레이어 체크박스들.
 // 지표 체크는 activateIndicator/deactivateIndicator를 그대로 부르고 트리를 재구성한다
 // (칩 시절과 같은 경로). 레이어 체크는 handle.setLayers만 반영한다 — 체크박스 자체가
 // 상태 표시라 트리 재구성은 필요 없다 (칩 시절 classList.toggle과 같은 계약).
-function buildIndNode(pane, meta) {
+function buildIndNode(pane, meta, source) {
   const node = document.createElement("div");
   node.className = "ind-item";
   const row = document.createElement("label");
@@ -1469,10 +1957,15 @@ function buildIndNode(pane, meta) {
     if (box.checked) activateIndicator(pane, meta.id);
     else deactivateIndicator(pane, meta.id);
     if (box.checked && meta.id === "fx_data2" && !pane.data2) ensureDefaultData2(pane);
+    if (WPLOT_IDS.includes(meta.id)) syncPairLegs(pane.frame);
     buildPaneTools(pane);
     updateBadgeVisibility();
   };
-  row.append(box, document.createTextNode(meta.name ?? meta.id));
+  const name = document.createElement("span");
+  name.className = "src-name";
+  name.textContent = source?.label || meta.name || meta.id;
+  if (source) name.title = sourceTitle(source);
+  row.append(box, name);
   node.append(row);
   if (meta.id === "fx_data2") {
     const ref = document.createElement("input");
@@ -1526,10 +2019,14 @@ function activateIndicator(pane, indId, savedLayers) {
   handle.setLayers(layers);
   if (indId === "fx_data2") {
     if (pane.data2) handle.setSource(feed.get(pane.data2));
+  } else if (indId === "ks_data2") {
+    const fut = WeeklyLegs.futForData2(pane.linkLegs);
+    if (fut) handle.setSource(feed.get(fut));
   } else {
     const cache = pane.symbol ? feed.get(pane.symbol) : undefined;
     if (cache) handle.applySeed(ctxFor(cache));
   }
+  if (WPLOT_IDS.includes(indId)) refreshWeeklyPlots(pane);
 }
 
 function deactivateIndicator(pane, indId) {
@@ -1538,6 +2035,7 @@ function deactivateIndicator(pane, indId) {
   pane.active.delete(indId);
   if (typeof entry.handle.destroy === "function") entry.handle.destroy();
   else entry.handle.clear();
+  if (WPLOT_IDS.includes(indId)) refreshWeeklyPlots(pane);
 }
 
 // 헤더 배지의 출처: mirae_v16이 켜진 첫 칸이 보는 캐시
@@ -1714,6 +2212,7 @@ function applyStatus(msg) {
     if (pane.symbol !== sh || seedingNow) continue;
     for (const [indId, { handle }] of pane.active) {
       if (indId === "fx_data2" && pane.data2 && pane.data2 !== sh) continue;
+      if (indId === "ks_data2") continue;
       // 지표 시리즈도 칸별로 격리한다 — 한 지표의 실패가 다른 지표·칸으로 번지지 않게.
       try {
         // 정정(과거 시각) 틱에는 지표 시리즈의 update()도 같은 throw가 나므로
@@ -1735,6 +2234,18 @@ function applyStatus(msg) {
       else entry.handle.applyLive(p, ctx);
     } catch (err) {
       console.error(`[${sh}] Data2 반영 실패 t=${t}`, err);
+    }
+  }
+  for (const pane of panes) {
+    if (seedingNow) continue;
+    if (WeeklyLegs.futForData2(pane.linkLegs) !== sh) continue;
+    const entry = pane.active.get("ks_data2");
+    if (!entry) continue;
+    try {
+      if (trimmed || !isTail) entry.handle.applySeed(ctx);
+      else entry.handle.applyLive(p, ctx);
+    } catch (err) {
+      console.error(`[${sh}] 국내선물 Data2 반영 실패 t=${t}`, err);
     }
   }
 
@@ -1836,6 +2347,7 @@ function rebuildPaneCandles(pane, cache) {
   const range = pane.chart.timeScale().getVisibleRange(); // 시각 창 (데이터 없으면 null)
   mutePaneRange(pane);
   pane.candleSeries.setData(rows.map((r) => pricePoint(r, pane.barDraw)));
+  applyPairMarkers(pane);
   cache.wsCount = rows.length - bars.length;
   cache.seriesTimes = rows.map((r) => r.time);
   if (range && rows.length) {
@@ -1888,12 +2400,14 @@ function renderSymbolPanes(shcode) {
     }
     // 겹침선은 이 칸 메인 분 그리드에만 올린다. 보이는 창을 지정하기 전에 깔아야
     // 선이 되돌린 이전 창이 시딩 창을 덮지 않는다.
+    // 겹침 시리즈를 다시 만든 뒤에 주문 글자를 붙여야 화살표만 남지 않는다.
     for (const code of pane.frame?.overlays ?? []) {
       const overlayCache = feed.get(code);
       if (!overlayCache) continue;
       ensureOverlaySeries(pane, code);
       setOverlayData(pane, code, overlayCache);
     }
+    applyPairMarkers(pane);
     const width = pane.chartEl.clientWidth;
     const view = pane.frame ? frameViews.get(pane.frame) : null;
     if (view && view.spacingPx > 0 && times.length && width > 0) {
@@ -1910,8 +2424,10 @@ function renderSymbolPanes(shcode) {
     applyPaneSeed(pane, ctx);
   }
   refreshData2(shcode);
+  refreshKsData2ForSymbol(shcode);
   paintOverlaySymbol(shcode);
   restoreHeaderBadges();
+  refreshWeeklyForSymbol(shcode);
 }
 
 // 이 칸의 지표를 종목 캐시로 채운다. fx_data2는 참조 종목 캐시를 쓰므로
@@ -1920,6 +2436,7 @@ function renderSymbolPanes(shcode) {
 function applyPaneSeed(pane, ctx) {
   for (const [indId, { handle }] of pane.active) {
     if (indId === "fx_data2" && pane.data2 && pane.data2 !== pane.symbol) continue;
+    if (indId === "ks_data2") continue;
     try {
       handle.applySeed(ctx);
     } catch (err) {
@@ -1929,12 +2446,12 @@ function applyPaneSeed(pane, ctx) {
 }
 
 // 참조 종목 시딩이 끝나면, 그 종목을 Data2로 보는 칸의 비율선을 다시 그린다.
-// 겹친 종목은 상승·하락이 둘 다 선명한 쌍이다. 앞의 둘은 비교 차트 예시와 같다.
-// 메인은 하늘/남색, 첫 추가 종목은 빨강/노랑.
+// 겹친 종목은 상승·하락이 둘 다 선명한 쌍이다.
+// 넣은 순서: 연두/짙은초록, 빨강/노랑, 하늘/남색.
 const SYMBOL_PAIRS = [
-  { up: "#00ccff", down: "#0000ce" },
+  { up: "#d4ff4a", down: "#0e7a32" },
   { up: "#df0202", down: "#ffcc00" },
-  { up: "#00e676", down: "#00c853" },
+  { up: "#00ccff", down: "#0000ce" },
   { up: "#ff6d00", down: "#ffab40" },
   { up: "#e040fb", down: "#7c4dff" },
   { up: "#ff4081", down: "#f48fb1" },
@@ -2002,12 +2519,13 @@ function syncMainBarColors(frame) {
 
 function overlayStyle(pane, code) {
   const style = pane?.overlayStyles?.[code] ?? pane?.frame?.overlayStyles?.[code];
-  return style === "candle" || style === "outline" || style === "bar" || style === "line" ? style : "candle";
+  return BAR_STYLES.some((s) => s.id === style) ? style : "candle";
 }
 
 function overlayScaleMode(frame) {
   const mode = frame?.overlayScale;
-  return mode === "ratio" || mode === "shared" ? mode : "price";
+  if (mode === "price" || mode === "ratio" || mode === "shared") return mode;
+  return "shared";
 }
 
 // 각자 가격: 첫 추가 종목은 왼쪽 눈금, 그 다음 종목은 자기 가격 범위(눈금 칸은 좌우뿐).
@@ -2074,6 +2592,10 @@ function ensureOverlaySeries(pane, shcode) {
   if (!pane.overlayDrawn) pane.overlayDrawn = new Map();
   const frame = pane.frame;
   const style = overlayStyle(pane, shcode);
+  if (style === "none") {
+    dropOverlaySeries(pane, shcode);
+    return null;
+  }
   const scaleId = overlayPriceScaleId(frame, shcode);
   const drawnKey = `${style}|${overlayScaleMode(frame)}|${scaleId}`;
   const existing = pane.overlaySeries.get(shcode);
@@ -2135,6 +2657,7 @@ function mountFrameOverlays(pane) {
     if (cache) setOverlayData(pane, sh, cache);
   }
   applyMainBarColors(pane);
+  if (pane.pairEvents?.length) applyPairMarkers(pane);
 }
 
 function paintOverlaySymbol(shcode) {
@@ -2144,6 +2667,7 @@ function paintOverlaySymbol(shcode) {
     if (!pane.frame?.overlays?.includes(shcode)) continue;
     ensureOverlaySeries(pane, shcode);
     setOverlayData(pane, shcode, cache);
+    if (pane.pairEvents?.length) applyPairMarkers(pane);
   }
 }
 
@@ -2197,6 +2721,7 @@ function repaintFrameOverlays(frame) {
       if (cache) setOverlayData(pane, code, cache);
     }
     syncOverlayScale(pane);
+    if (pane.pairEvents?.length) applyPairMarkers(pane);
   }
 }
 
@@ -2209,18 +2734,20 @@ function repaintPaneOverlays(pane) {
     if (cache) setOverlayData(pane, code, cache);
   }
   syncOverlayScale(pane);
+  if (pane.pairEvents?.length) applyPairMarkers(pane);
 }
 
 function setOverlayStyle(pane, code, style) {
   const frame = pane?.frame;
   if (!frame?.overlays?.includes(code)) return;
-  if (!["candle", "outline", "bar", "line"].includes(style)) return;
+  if (!BAR_STYLES.some((s) => s.id === style)) return;
   if (!pane.overlayStyles) pane.overlayStyles = {};
   if (pane.overlayStyles[code] === style) return;
   pane.overlayStyles[code] = style;
   ensureOverlaySeries(pane, code);
   const cache = feed.get(code);
   if (cache) setOverlayData(pane, code, cache);
+  if (pane.pairEvents?.length) applyPairMarkers(pane);
 }
 
 function setOverlayScale(frame, mode) {
@@ -2233,12 +2760,16 @@ function setOverlayScale(frame, mode) {
 
 function clearFrameOverlays(frame) {
   if (!frame) return;
+  frame.pairOpp = "";
+  frame.pairOppName = "";
+  frame.pairFut = "";
+  frame.pairFutName = "";
   const codes = takeFrameOverlays(frame);
   for (const pane of frame.panes) {
     for (const sh of codes) dropOverlaySeries(pane, sh);
   }
   syncMainBarColors(frame);
-  syncFrameChips(frame);
+  syncPairLegs(frame);
   for (const pane of frame.panes) buildPaneTools(pane);
   for (const sh of codes) releaseSymbol(sh);
 }
@@ -2251,6 +2782,8 @@ async function removeFrameOverlay(frame, shcode) {
   delete frame.overlayNames[shcode];
   delete frame.overlayColors[shcode];
   delete frame.overlayStyles[shcode];
+  forgetPairCode(frame, shcode);
+  syncPairLegs(frame);
   for (const pane of frame.panes) {
     if (pane.overlayStyles) delete pane.overlayStyles[shcode];
     dropOverlaySeries(pane, shcode);
@@ -2300,7 +2833,7 @@ async function addFrameOverlay(frame, shcode, name) {
       buildPaneTools(pane);
     }
     syncMainBarColors(frame);
-    syncFrameChips(frame);
+    syncPairLegs(frame);
     await seedSymbol(shcode);
   });
   if (fail) alert(fail);
@@ -2316,6 +2849,22 @@ function refreshData2(shcode) {
     try { entry.handle.setSource(cache); } catch (err) {
       console.error(`[${shcode}] Data2 반영 실패`, err);
     }
+  }
+}
+
+function refreshKsData2(pane) {
+  const entry = pane?.active?.get("ks_data2");
+  if (!entry) return;
+  const fut = WeeklyLegs.futForData2(pane.linkLegs);
+  const cache = fut ? feed.get(fut) : null;
+  try { entry.handle.setSource(cache || null); } catch (err) {
+    console.error(`[${fut || ""}] 국내선물 Data2 반영 실패`, err);
+  }
+}
+
+function refreshKsData2ForSymbol(shcode) {
+  for (const pane of panes) {
+    if (WeeklyLegs.futForData2(pane.linkLegs) === shcode) refreshKsData2(pane);
   }
 }
 
@@ -2457,7 +3006,7 @@ async function onStreamReset() {
   for (const sh of feed.symbols()) feed.reset(feed.get(sh));
   for (const pane of panes) clearPaneData(pane);
   await refreshEngineWatches();
-  const targets = [...new Set(panes.map((p) => p.symbol).filter(Boolean))];
+  const targets = [...new Set(panes.flatMap((p) => [p.symbol, ...(p.frame?.overlays || [])]).filter(Boolean))];
   for (const sh of targets) {
     const w = await watchSymbol(sh);
     if (!w.ok) continue;
@@ -2561,8 +3110,8 @@ function connect() {
 }
 
 // ---- 화면틀 v2 ----
-// 화면틀에는 레이아웃·칸별 지표 집합(레이어 설정)·칸별 종목 바인딩만 저장한다.
-// 전략 자동 시작·주문 상태는 넣지 않는다 (계획서 §18).
+// 화면틀에는 레이아웃·칸별 지표·고른 원본 시그널·상대/선물·시스템 기준과 변수값을 저장한다.
+// 실계좌 주문 자동 시작은 넣지 않는다.
 // 직렬화/검증은 workspace.js의 순수 함수가 담당한다 (node:test 대상).
 
 function collectWorkspace() {
@@ -2580,6 +3129,10 @@ function collectWorkspace() {
       barStyle: pane.barStyle || "candle",
       overlayStyles: { ...(pane.overlayStyles || {}) },
       indicators: [...pane.active.entries()].map(([id, entry]) => ({ id, layers: { ...entry.layers } })),
+      systems: [...(pane.systems || [])],
+      systemVars: pane.systemVars,
+      systemBasis: pane.systemBasis,
+      linkLegs: pane.linkLegs,
     })),
   }));
   return Workspace.serialize(el.wsName.value.trim(), frames, {
@@ -2692,7 +3245,8 @@ async function applyWorkspace(parsed) {
       let row = gridRows[gridRows.length - 1];
       if (index % cols === 0) row = makeRow(spec.height);
       const frame = createFrame(row);
-      frame.overlayScale = spec.overlayScale === "ratio" || spec.overlayScale === "shared" ? spec.overlayScale : "price";
+      frame.overlayScale = spec.overlayScale === "price" || spec.overlayScale === "ratio" || spec.overlayScale === "shared"
+        ? spec.overlayScale : "shared";
       frame.pendingOverlays = Array.isArray(spec.overlays) ? spec.overlays.slice() : [];
       frame.pendingOverlayStyles = spec.overlayStyles && typeof spec.overlayStyles === "object"
         ? { ...spec.overlayStyles } : {};
@@ -2705,6 +3259,10 @@ async function applyWorkspace(parsed) {
         setPanelOpen(pane, panel.panelOpen); // 구 화면틀은 parse가 기본값(열림)으로 정규화한다
         setBarStyle(pane, panel.barStyle || (panel.candles === false ? "none" : "candle"));
         for (const ind of panel.indicators ?? []) activateIndicator(pane, ind.id, ind.layers);
+        pane.systems = new Set(panel.systems || []);
+        pane.systemVars = panel.systemVars ? JSON.parse(JSON.stringify(panel.systemVars)) : {};
+        pane.systemBasis = { ...(panel.systemBasis || {}) };
+        if (panel.linkLegs) pane.linkLegs = WeeklyLegs.copy(panel.linkLegs);
         // 참조 코드를 먼저 적어 두면 종목 시딩이 기본 참조를 따로 걸지 않는다.
         // 참조 시딩은 그 종목 시딩이 끝난 뒤에 한다. 같이 돌리면 메인 시딩이
         // 방금 그린 참조 지표를 지우거나, 참조가 빈 채로 남는다.
@@ -2741,6 +3299,7 @@ async function applyWorkspace(parsed) {
           console.error(`화면틀 겹침 적용 실패 (${code})`, err);
         }
       }
+      for (const pane of frame.panes || []) refreshWeeklyPlots(pane);
     }
     for (const pane of panes) {
       const w = pane.chartEl.clientWidth;
@@ -2792,10 +3351,11 @@ function resetToken() {
   localStorage.removeItem("trader_token");
 }
 
-async function saveWorkspace() {
+async function saveWorkspace(opts) {
   const token = await apiToken();
   if (!token) return alert("토큰이 필요합니다.");
   const name = el.wsName.value.trim();
+  if (!name) return alert("화면틀 이름이 필요합니다.");
   const res = await fetch(`/api/workspaces/${encodeURIComponent(name)}`, {
     method: "PUT",
     headers: { "content-type": "application/json", "x-trader-token": token },
@@ -2806,7 +3366,7 @@ async function saveWorkspace() {
     if (res.status === 403) resetToken();
     return alert(`저장 실패: ${data.error}`);
   }
-  alert(`화면틀 '${name}' 저장됨`);
+  if (!opts?.quiet) alert(`화면틀 '${name}' 저장됨`);
 }
 
 async function loadWorkspace() {
@@ -2906,5 +3466,6 @@ async function bootstrap() {
     await selectPaneSymbol(panes[0], engineWatches[0]);
   }
   connect();
+  loadYlCatalog();
 }
 bootstrap();

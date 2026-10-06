@@ -1,4 +1,3 @@
-
 Input : ADX기간입력(Numeric),
         ADX출력(NumericRef),
         상승DI출력(NumericRef),

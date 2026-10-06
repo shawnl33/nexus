@@ -150,6 +150,18 @@ static bool pipe_init(tr_engine_t *e, tr_pipeline_t *p, const tr_engine_config_t
         /* 호가 모듈과 같은 관심 10 / 강세 35. 흐름 기간 20은 호출 원본이 없어 엔진 기본값. */
         tr_osf_combo_init(&p->osf, 10.0, 35.0, 0, 20);
     }
+    /* 국내선물 1분 스나이퍼 Data2. 옵션·주식·해외선물은 이 상태를 평가하지 않는다. */
+    p->ks_bdate = 0;
+    p->ks_day_index = 0;
+    p->ks_current = 0;
+    p->ks_has_date = false;
+    if (cfg->is_futures && !cfg->is_ovs) {
+        tr_ksscore_config_t kcfg;
+        tr_ksscore_default_config(&kcfg, tick_scale(p));
+        if (!tr_ksscore_init(&p->ks, &kcfg)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -266,6 +278,9 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
         if (e->pipe0.is_ovs) {
             tr_fxmirae_relink(&e->pipe0.fx);
             tr_fxv3_run_relink(&e->pipe0.fx3);
+        }
+        if (e->pipe0.is_futures && !e->pipe0.is_ovs) {
+            tr_ksscore_relink(&e->pipe0.ks);
         }
         /* score의 mid_hist(yl_var)는 relink 불필요: 저장소가 기증 슬롯 남부가 아니라
          * 호출자 소유 외부 버퍼(score_mid_storage)라 복사된 포인터가 그대로 올바르고,
@@ -404,7 +419,7 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
                            const uint32_t *fx3_rgb, const uint8_t *fx3_w,
                            const tr_fxpgap_out_t *pg3, const tr_fxpgap_out_t *pg5,
                            const tr_fxpgap_out_t *rg, const tr_fxpgap_out_t *mg,
-                           const tr_fxymae_out_t *ym, const tr_fxsniper_out_t *sn,
+                           const tr_fxymae_out_t *ym, const tr_fxsniper_out_t *sn, int emit_pvc,
                            int ray_on, int ray_sign, const double *ray_px, const double *ray_up,
                            const double *ray_dn, const int8_t *ray_dir,
                            int ob_valid, double ob_score, const tr_bar_status_t *frozen) {
@@ -595,7 +610,7 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
     }
     char pvcbuf[160];
     pvcbuf[0] = '\0';
-    if (ym != 0) {
+    if (emit_pvc && ym != 0) {
         int m = snprintf(pvcbuf, sizeof(pvcbuf),
                          "\"pvc\":[%d,%.10g,%d,%.10g,%d],",
                          ym->show_price, ym->show_price_ratio, ym->show_vol, ym->show_vol_ratio,
@@ -783,6 +798,63 @@ int tr_bar_status_format_fx3(const tr_bar_status_t *st, bool first, char *buf, s
         n += 1;
     }
     return n;
+}
+
+/* 국내선물 Data2 점수를 기존 pgap/rgap/mgap/ymae/sniper 슬롯에 담는다.
+ * 차트는 이 배열로 삼선·회귀·마켓·이탈을 그린다. */
+static void ks_fill_scope(const tr_ksscore_out_t *o, tr_fxpgap_out_t pg[2], tr_fxpgap_out_t *rg,
+                          tr_fxpgap_out_t *mg, tr_fxymae_out_t *ym, tr_fxsniper_out_t *sn) {
+    memset(pg, 0, sizeof(tr_fxpgap_out_t) * 2);
+    memset(rg, 0, sizeof(*rg));
+    memset(mg, 0, sizeof(*mg));
+    memset(ym, 0, sizeof(*ym));
+    memset(sn, 0, sizeof(*sn));
+    pg[0].ready = o->three_ready;
+    pg[0].gap = o->three_gap;
+    pg[0].peak = o->three_peak;
+    pg[0].prev_peak = o->three_prev_peak;
+    pg[0].ratio = o->three_ratio;
+    pg[0].cnt = o->three_cnt;
+    pg[0].rgb4 = o->three_rgb;
+    pg[0].width4 = o->three_width;
+    pg[1].ready = o->five_ready;
+    pg[1].gap = o->five_gap;
+    pg[1].peak = o->five_peak;
+    pg[1].prev_peak = o->five_prev_peak;
+    pg[1].ratio = o->five_ratio;
+    pg[1].cnt = o->five_cnt;
+    pg[1].rgb4 = o->five_rgb;
+    rg->ready = o->reg_ready;
+    rg->gap = o->reg_gap;
+    rg->peak = o->reg_peak;
+    rg->prev_peak = o->reg_prev_peak;
+    rg->ratio = o->reg_ratio;
+    rg->cnt = o->reg_cnt;
+    mg->ready = o->mkt_ready;
+    mg->gap = o->mkt_gap;
+    mg->peak = o->mkt_peak;
+    mg->prev_peak = o->mkt_prev_peak;
+    mg->ratio = o->mkt_ratio;
+    mg->cnt = o->mkt_cnt;
+    ym->pos = o->pos;
+    ym->prev_valid = o->prev_valid;
+    ym->prev_hi = o->prev_hi;
+    ym->prev_lo = o->prev_lo;
+    ym->two_hi = o->two_hi;
+    ym->two_lo = o->two_lo;
+    ym->show_first = o->first_break;
+    sn->calc_ready = o->calc_ready;
+    sn->score = o->score;
+    sn->score_ex = o->score_ex;
+    sn->ratio_score = o->ratio_score;
+    sn->compound = o->compound_show;
+    sn->target_ratio = o->three_ratio;
+    sn->price_ratio = o->price_ratio;
+    sn->rgb = o->score_rgb;
+    sn->px_exit = o->px_cond;
+    sn->below = o->three_below;
+    sn->above = o->three_above;
+    sn->session_reset = o->session_reset;
 }
 
 /* 상태 링에서 이 봉의 슬롯을 찾는다. 최신→과거 순이고, 목표보다 과거로 내려가면 없다. */
@@ -1230,6 +1302,37 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
                 ray_dir[k] = (int8_t)p->fx3.pred.pred_dir[k];
             }
         }
+    } else if (p->is_futures && !p->is_ovs && e->cfg.timeframe_sec == 60 && !is_correction) {
+        /* 국내선물만. 날짜가 바뀌면 당일 봉 순번을 0으로 되돌린다. */
+        if (is_new_bar) {
+            int64_t ymd = 0;
+            int64_t tod = 0;
+            civil_stamp(bar->open_time_us, p->session.utc_offset_min, &ymd, &tod);
+            if (!p->ks_has_date || ymd != p->ks_bdate) {
+                p->ks_day_index = 0;
+                p->ks_bdate = ymd;
+                p->ks_has_date = true;
+            } else {
+                p->ks_day_index++;
+            }
+            p->ks_current++;
+        }
+        int64_t ymd = 0;
+        int64_t tod = 0;
+        civil_stamp(bar->open_time_us, p->session.utc_offset_min, &ymd, &tod);
+        tr_ksscore_input_t kin;
+        memset(&kin, 0, sizeof(kin));
+        kin.bdate = ymd;
+        kin.day_index = p->ks_day_index;
+        kin.current_bar = p->ks_current > 0 ? p->ks_current : 1;
+        kin.bar_open = bar->open_time_us;
+        kin.cur_time = tod;
+        kin.high = (double)bar->high;
+        kin.low = (double)bar->low;
+        kin.close = (double)bar->close;
+        kin.volume = (double)bar->volume;
+        tr_ksscore_eval(&p->ks, &kin);
+        ks_fill_scope(&p->ks.out, pgout, &rgout, &mgout, &ymout, &snout);
     } else if (is_correction && p->status_ring_on) {
         /* 정정 봉은 모듈을 다시 돌리지 않는다. 그 슬롯에 이미 있던 fx를 유지한다 */
         size_t nslot = tr_ring_count(&p->status_ring);
@@ -1518,19 +1621,24 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         }
     }
 
+    /* 비율 배열은 해외 1분과 국내선물 1분이 같이 쓴다. 미래 광선은 해외만. */
+    int ovs_scope = p->is_ovs && e->cfg.timeframe_sec == 60;
+    int ks_scope = p->is_futures && !p->is_ovs && e->cfg.timeframe_sec == 60;
+    int scope_on = ovs_scope || ks_scope;
     publish_status(e, p, bar, closed, day, fx_on, fx_mask, fx_plot,
                    fx3_on, fx3_n, fx3_id, fx3_v, fx3_rgb, fx3_w,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &pgout[0] : 0,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &pgout[1] : 0,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &rgout : 0,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &mgout : 0,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &ymout : 0,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? &snout : 0,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_on : 0, ray_sign,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_px : 0,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_up : 0,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_dn : 0,
-                   p->is_ovs && e->cfg.timeframe_sec == 60 ? ray_dir : 0,
+                   scope_on ? &pgout[0] : 0,
+                   scope_on ? &pgout[1] : 0,
+                   scope_on ? &rgout : 0,
+                   scope_on ? &mgout : 0,
+                   scope_on ? &ymout : 0,
+                   scope_on ? &snout : 0,
+                   ovs_scope,
+                   ovs_scope ? ray_on : 0, ray_sign,
+                   ovs_scope ? ray_px : 0,
+                   ovs_scope ? ray_up : 0,
+                   ovs_scope ? ray_dn : 0,
+                   ovs_scope ? ray_dir : 0,
                    bar_ob_valid, bar_ob_score, have_frozen ? &frozen : 0);
 
     /* 스트림 위치 마커는 현재 봉 이벤트에서만 전진한다. 과거 봉 정정(늦은 틱)이
@@ -1832,5 +1940,28 @@ bool tr_engine_select_symbol(tr_engine_t *e, uint64_t instrument_id, bool is_fut
     e->status_cb = cb;
     e->status_cb_ctx = cb_ctx;
     p0->generation = gen + 1;
+    return true;
+}
+
+bool tr_engine_pipe_resize(tr_engine_t *e, tr_pipeline_t *p, size_t bb_capacity) {
+    if (e == 0 || p == 0 || p->bb_storage == 0 || p->score_mid_storage == 0 || bb_capacity == 0) {
+        return false;
+    }
+    uint32_t gen = p->generation;
+    tr_engine_config_t cfg = e->cfg;
+    cfg.instrument_id = p->instrument_id;
+    sanitize_shcode(cfg.shcode, p->shcode);
+    cfg.is_futures = p->is_futures;
+    cfg.session = p->session;
+    cfg.tick_raw = p->tick_raw;
+    cfg.is_ovs = p->is_ovs;
+    if (!pipe_init(e, p, &cfg, p->bb_storage, bb_capacity, p->score_mid_storage,
+                   p->score_mid_capacity)) {
+        return false;
+    }
+    p->generation = gen + 1;
+    if (p->generation == 0) {
+        p->generation = 1;
+    }
     return true;
 }

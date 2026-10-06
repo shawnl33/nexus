@@ -1,0 +1,11 @@
+// 장 식별자: 새 봉에서만 갱신. 같은 장 시작봉 반복평가는 동일 키 반환.
+Input : 날짜입력(Numeric), 시각입력(Numeric);
+Var : 최근처리봉(-1), 장번호(0);
+If Index != 최근처리봉 Then
+{
+    최근처리봉 = Index;
+    If CurrentBar == 1 Then 장번호 = 1;
+    Else If BDate != BDate[1] || DayIndex < DayIndex[1] || (DayIndex == 0 && DayIndex[1] != 0) Then
+        장번호 = 장번호+1;
+};
+WSF_KSSession1mV1 = 장번호;

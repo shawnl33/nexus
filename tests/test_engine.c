@@ -1818,6 +1818,91 @@ static void test_fx_transplant_relink(void) {
     TR_CHECK(strstr(last, "ESZ26") != 0);
 }
 
+/* 국내선물 1분봉은 스나이퍼 Data2 삼선 비율을 상태 링에 남긴다.
+ * 주식(is_futures 아님)은 같은 봉에도 비율을 남기지 않는다. */
+static void feed_minute(tr_engine_t *e, int minute_from_9, unsigned sec, tr_price_t price, uint64_t *id) {
+    tr_event_envelope_t env;
+    memset(&env, 0, sizeof(env));
+    env.kind = TR_EVENT_TICK;
+    env.event_time_us = kst(9 + (unsigned)(minute_from_9 / 60), (unsigned)(minute_from_9 % 60), sec);
+    env.received_time_us = env.event_time_us;
+    tr_tick_t tk;
+    memset(&tk, 0, sizeof(tk));
+    tk.instrument_id = e->cfg.instrument_id;
+    tk.price = price;
+    tk.qty = 10;
+    tk.source_exec_id = (*id)++;
+    tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+    TR_CHECK(tr_engine_on_tick(e, &env, &tk) != TR_BB_ERROR);
+}
+
+static void feed_rise(tr_engine_t *e, int bars) {
+    uint64_t id = 1;
+    for (int i = 0; i < bars; i++) {
+        tr_price_t base = 30000 + i * 20;
+        feed_minute(e, i, 1, base - 25, &id);
+        feed_minute(e, i, 20, base + 40, &id);
+        feed_minute(e, i, 40, base + 10, &id);
+    }
+}
+
+static void test_ks_domestic_futures_three_ratio(void) {
+    tr_engine_t fut;
+    tr_engine_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.engine_instance_id = 1;
+    cfg.instrument_id = 11;
+    snprintf(cfg.shcode, sizeof(cfg.shcode), "A016C000");
+    cfg.session = TEST_SESS;
+    cfg.timeframe_sec = 60;
+    cfg.no_trade = TR_NO_TRADE_SKIP;
+    cfg.predict_bars[0] = 5;
+    cfg.predict_bars[1] = 10;
+    cfg.predict_bars[2] = 15;
+    cfg.htf_ticks = 10;
+    cfg.min_r2 = 0.40;
+    cfg.market_period = 20;
+    cfg.is_futures = true;
+    cfg.is_ovs = false;
+    static tr_candle_t fut_bb[BB_CAP];
+    static double fut_mid[32];
+    static tr_bar_status_t fut_ring[BB_CAP];
+    TR_CHECK(tr_engine_init(&fut, &cfg, fut_bb, BB_CAP, fut_mid, 32));
+    TR_CHECK(tr_engine_attach_status_ring(&fut, fut_ring, BB_CAP));
+    feed_rise(&fut, 240);
+    tr_bar_status_t st;
+    TR_CHECK(tr_engine_status_at(&fut, 0, &st));
+    TR_CHECK(st.fx_on == 0);
+    TR_CHECK(st.pg_ready[0] == 1);
+    TR_CHECK(st.pg_v[0][3] > 0.0);
+
+    tr_engine_t stock;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.engine_instance_id = 1;
+    cfg.instrument_id = 12;
+    snprintf(cfg.shcode, sizeof(cfg.shcode), "005930");
+    cfg.session = TEST_SESS;
+    cfg.timeframe_sec = 60;
+    cfg.no_trade = TR_NO_TRADE_SKIP;
+    cfg.predict_bars[0] = 5;
+    cfg.predict_bars[1] = 10;
+    cfg.predict_bars[2] = 15;
+    cfg.htf_ticks = 10;
+    cfg.min_r2 = 0.40;
+    cfg.market_period = 20;
+    cfg.is_futures = false;
+    cfg.is_ovs = false;
+    static tr_candle_t stk_bb[BB_CAP];
+    static double stk_mid[32];
+    static tr_bar_status_t stk_ring[BB_CAP];
+    TR_CHECK(tr_engine_init(&stock, &cfg, stk_bb, BB_CAP, stk_mid, 32));
+    TR_CHECK(tr_engine_attach_status_ring(&stock, stk_ring, BB_CAP));
+    feed_rise(&stock, 240);
+    TR_CHECK(tr_engine_status_at(&stock, 0, &st));
+    TR_CHECK(st.pg_ready[0] == 0);
+    TR_CHECK(st.pg_v[0][3] == 0.0);
+}
+
 int main(void) {
     test_merge_bars_catchup();
     test_merge_bars_keeps_live_open();
@@ -1844,5 +1929,6 @@ int main(void) {
     test_ovs_ob_uses_osf();
     test_ovs_correction_keeps_saved_ob();
     test_fx_transplant_relink();
+    test_ks_domestic_futures_three_ratio();
     TR_TEST_SUMMARY();
 }

@@ -29,6 +29,37 @@ static void test_parse_s3_tick(void) {
     TR_CHECK(strcmp(ev.tr_cd, "S3_") == 0);
 }
 
+static void test_parse_oc0_opt_tick(void) {
+    /* KOSPI200 옵션 체결: price/cvolume/chetime은 FC9와 같은 이름 (명세 OC0) */
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"OC0\",\"tr_key\":\"B016A745\"},"
+        "\"body\":{\"price\":\"2.55\",\"cvolume\":\"3\",\"chetime\":\"090010\"}}";
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 9, 1790567100000000LL, &ev));
+    TR_CHECK(ev.kind == LS_RT_TICK);
+    TR_CHECK(ev.price == 255);
+    TR_CHECK(ev.qty == 3);
+    TR_CHECK(strcmp(ev.tr_cd, "OC0") == 0);
+    TR_CHECK(ls_rt_key_pad_width("OC0") == 0);
+}
+
+static void test_parse_oh0_opt_orderbook(void) {
+    /* KOSPI200 옵션 호가: totbidrem/bidho1은 H1_·FH9와 같은 이름 (명세 OH0) */
+    const char *msg =
+        "{\"header\":{\"tr_cd\":\"OH0\",\"tr_key\":\"B016A745\"},"
+        "\"body\":{\"hotime\":\"090010\",\"totbidrem\":\"40\",\"totofferrem\":\"12\","
+        "\"bidho1\":\"2.50\",\"bidrem1\":\"10\",\"offerho1\":\"2.55\",\"offerrem1\":\"4\"}}";
+    ls_rt_event_t ev;
+    TR_CHECK(tr_ls_rt_parse_message(msg, strlen(msg), 9, 1790567100000000LL, &ev));
+    TR_CHECK(ev.kind == LS_RT_ORDERBOOK);
+    TR_CHECK(ev.bid_total == 40);
+    TR_CHECK(ev.ask_total == 12);
+    TR_CHECK(ev.level_count == 1);
+    TR_CHECK(ev.levels[0].price == 250);
+    TR_CHECK(ev.levels[5].price == 255);
+    TR_CHECK(ls_rt_key_pad_width("OH0") == 0);
+}
+
 static void test_parse_fut_tick(void) {
     const char *msg =
         "{\"header\":{\"tr_cd\":\"FC9\",\"tr_key\":\"A016C000\"},"
@@ -291,6 +322,8 @@ static void test_sub_ack_rejected(void) {
 int main(void) {
     test_parse_s3_tick();
     test_parse_fut_tick();
+    test_parse_oc0_opt_tick();
+    test_parse_oh0_opt_orderbook();
     test_parse_us3_tick();
     test_parse_dc0_night_fut_tick();
     test_parse_orderbook();

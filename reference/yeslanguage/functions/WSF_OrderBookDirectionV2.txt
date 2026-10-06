@@ -1,4 +1,3 @@
-
 Input : 관심기준입력(Numeric),
         강세기준입력(Numeric),
         부호반전입력(Numeric),

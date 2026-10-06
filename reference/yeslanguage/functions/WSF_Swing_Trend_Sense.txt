@@ -1,0 +1,96 @@
+Input : 기간(Numeric),
+        방향(NumericRef), 척후(NumericRef),
+		상태_주(NumericRef), 상태_보조(NumericRef);
+Var : RSI_Period(0), RSI_Period2(0);
+RSI_Period =  기간;
+RSI_Period2 = 기간;
+Var : SF(5),QQE(3),ThreshHold(3);
+var : src(0),Wilders_Period(0),RSIv(0),RsiMa(0),AtrRSI(0),MaAtrRsi(0),dar(0);
+var : longband(0),shortband(0),trend(0);
+var : DeltaFastAtrRsi(0),RSIndex(0),newshortband(0),newlongband(0),cross_1(false),FastAtrRsiTL(0);
+Var : length(50),mult(0.35);
+var : basis(0),dev(0),upper(0),lower(0);
+var : QQEzlong(0),QQEzshort(0),Zero(0);
+ 
+src = close;
+Wilders_Period = RSI_Period * 2 - 1;
+Rsiv = rsi(RSI_Period);
+RsiMa = ema(Rsiv, SF);
+AtrRsi = abs(RsiMa[1] - RsiMa);
+MaAtrRsi = ema(AtrRsi, Wilders_Period);
+dar = ema(MaAtrRsi, Wilders_Period) * QQE;
+ 
+longband = 0.0;
+shortband = 0.0;
+trend = 0;
+ 
+DeltaFastAtrRsi = dar;
+RSIndex = RsiMa;
+newshortband = RSIndex + DeltaFastAtrRsi;
+newlongband = RSIndex - DeltaFastAtrRsi;
+longband = iff(RSIndex[1] > longband[1] and RSIndex > longband[1],max(longband[1], newlongband),newlongband);
+shortband = iff(RSIndex[1] < shortband[1] and RSIndex < shortband[1],min(shortband[1], newshortband),newshortband);
+cross_1 = crossup(longband[1], RSIndex) or CrossDown(longband[1], RSIndex);
+trend = iff(crossup(RSIndex, shortband[1]) or CrossDown(RSIndex, shortband[1]), 1 ,iff(cross_1, -1 ,trend[1]));
+FastAtrRsiTL = iff(trend == 1 , longband , shortband);
+////////////////////
+ 
+ 
+ 
+basis = ma(FastAtrRsiTL - 50, length);
+dev = mult * std(FastAtrRsiTL - 50, length);
+upper = basis + dev;
+lower = basis - dev;
+상태_보조 = iff(RsiMa - 50 > upper ,1,iff(RsiMa - 50 < lower,-1,0));
+ 
+
+QQEzlong = 0;
+QQEzlong = QQEzlong[1];
+QQEzshort = 0;
+QQEzshort = QQEzshort[1];
+QQEzlong = iff(RSIndex >= 50 , QQEzlong + 1 , 0);
+QQEzshort = iff(RSIndex < 50 , QQEzshort + 1 , 0);
+
+ 
+Var : SF2(5),QQE2(1.61),ThreshHold2(3);
+var : src2(0),Wilders_Period2(0),Rsi2(0),RsiMa2(0),AtrRsi2(0),MaAtrRsi2(0);
+var : dar2(0),longband2(0),shortband2(0),trend2(0),DeltaFastAtrRsi2(0);
+var : RSIndex2(0),newshortband2(0),newlongband2(0);
+var : cross_2(false),FastAtrRsi2TL(0);
+ 
+src2 = close;
+Wilders_Period2 = RSI_Period2 * 2 - 1;
+Rsi2 = rsi(RSI_Period2);
+RsiMa2 = ema(Rsi2, SF2);
+AtrRsi2 = abs(RsiMa2[1] - RsiMa2);
+MaAtrRsi2 = ema(AtrRsi2, Wilders_Period2);
+dar2 = ema(MaAtrRsi2, Wilders_Period2) * QQE2;
+longband2 = 0.0;
+shortband2 = 0.0;
+trend2 = 0;
+DeltaFastAtrRsi2 = dar2;
+RSIndex2 = RsiMa2;
+newshortband2 = RSIndex2 + DeltaFastAtrRsi2;
+newlongband2 = RSIndex2 - DeltaFastAtrRsi2;
+longband2 = iff(RSIndex2[1] > longband2[1] and RSIndex2 > longband2[1] ,max(longband2[1], newlongband2) , newlongband2);
+shortband2 = iff(RSIndex2[1] < shortband2[1] and RSIndex2 < shortband2[1] ,min(shortband2[1], newshortband2) , newshortband2);
+cross_2 = crossup(longband2[1], RSIndex2) or CrossDown(longband2[1], RSIndex2);
+trend2 = iff(crossup(RSIndex2, shortband2[1]) or CrossDown(RSIndex2, shortband2[1]) , 1 , iff(cross_2 , -1 , trend2[1]));
+FastAtrRsi2TL = iff(trend2 == 1 , longband2 , shortband2);
+ 
+ 
+var : QQE2zlong(0),QQE2zshort(0);
+var : Greenbar1(false),Greenbar2(false),Redbar1(false),Redbar2(false);
+QQE2zlong = 0;
+QQE2zlong = QQE2zlong[1];
+QQE2zshort = 0;
+QQE2zshort = QQE2zshort[1];
+QQE2zlong = iff(RSIndex2 >= 50 , QQE2zlong + 1 , 0);
+QQE2zshort = iff(RSIndex2 < 50 , QQE2zshort + 1 , 0);
+ 
+상태_주 = iff(RsiMa2 - 50 > ThreshHold2 ,1, 
+          iff(RsiMa2 - 50 < 0 - ThreshHold2 ,-1,0));
+방향 = RsiMa2 - 50;
+척후 = FastAtrRsi2TL - 50;
+
+WSF_Swing_Trend_Sense = 1;

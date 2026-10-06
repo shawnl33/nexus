@@ -1,6 +1,6 @@
 // 화면틀 v2 직렬화/파싱 — DOM 없는 순수 함수 (node:test 단위 테스트 대상).
-// 화면틀에는 레이아웃·칸별 지표 집합(레이어 설정 포함)·칸별 종목 바인딩만 저장한다
-// (계획서 §18: 전략 자동 시작·주문 상태는 넣지 않는다).
+// 화면틀에는 레이아웃·칸별 지표·고른 원본 시그널·그 상대/선물만 저장한다.
+// 실계좌 주문 자동 시작은 넣지 않는다.
 // 문서는 열 수·열 너비·화면틀 목록이다. frames가 없는 스키마 2는 화면틀 하나, 열 하나다.
 // 브라우저에서는 전역 Workspace, node:test에서는 globalThis.Workspace로 쓴다.
 "use strict";
@@ -53,7 +53,7 @@ const Workspace = (() => {
   }
 
   function panelRecord(p) {
-    return {
+    const rec = {
       height: p.height,
       symbol: typeof p.symbol === "string" ? p.symbol : "",
       panelOpen: p.panelOpen !== false, // 지표 패널 접힘만 false로 남긴다 (기본 열림)
@@ -66,7 +66,63 @@ const Workspace = (() => {
         id: i.id,
         layers: { ...(i.layers ?? {}) },
       })),
+      systems: readSystems(p.systems),
+      linkLegs: readLegs(p.linkLegs),
     };
+    const systemVars = readSystemVars(p.systemVars);
+    if (Object.keys(systemVars).length) rec.systemVars = systemVars;
+    const systemBasis = readSystemBasis(p.systemBasis);
+    if (Object.keys(systemBasis).length) rec.systemBasis = systemBasis;
+    return rec;
+  }
+
+  const SYSTEM_IDS = ["pair-long", "pair-short"];
+
+  function readSystems(list) {
+    const out = [];
+    for (const id of Array.isArray(list) ? list : []) {
+      if (SYSTEM_IDS.includes(id) && !out.includes(id)) out.push(id);
+    }
+    return out;
+  }
+
+  function readLegCode(value) {
+    return typeof value === "string" ? value.trim().toUpperCase() : "";
+  }
+
+  function readSystemVars(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object") return out;
+    for (const id of SYSTEM_IDS) {
+      const src = raw[id];
+      if (!src || typeof src !== "object") continue;
+      const vars = {};
+      for (const [key, value] of Object.entries(src)) {
+        if (typeof key !== "string" || !key || key.length > 40) continue;
+        const n = Number(value);
+        if (!Number.isFinite(n)) continue;
+        vars[key] = n;
+      }
+      if (Object.keys(vars).length) out[id] = vars;
+    }
+    return out;
+  }
+
+  function readSystemBasis(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object") return out;
+    for (const id of SYSTEM_IDS) {
+      if (raw[id] === "C" || raw[id] === "P") out[id] = raw[id];
+    }
+    return out;
+  }
+
+  function readLegs(raw) {
+    const out = {};
+    for (const id of ["w_link_long", "w_link_short"]) {
+      out[id] = { opp: readLegCode(raw?.[id]?.opp), fut: readLegCode(raw?.[id]?.fut) };
+    }
+    return out;
   }
 
   // panels[i].symbol이 없는 구 화면틀은 current_symbol로 폴백한다.
@@ -95,18 +151,28 @@ const Workspace = (() => {
       out.push({
         height, symbol, panelOpen: p?.panelOpen !== false, data2,
         candles: barStyle !== "none", barStyle, indicators, overlayStyles,
+        systems: readSystems(p?.systems),
+        linkLegs: readLegs(p?.linkLegs),
+        ...(Object.keys(readSystemVars(p?.systemVars)).length
+          ? { systemVars: readSystemVars(p?.systemVars) }
+          : {}),
+        ...(Object.keys(readSystemBasis(p?.systemBasis)).length
+          ? { systemBasis: readSystemBasis(p?.systemBasis) }
+          : {}),
       });
     }
     if (out.length === 0) {
       out.push({
         height: 1, symbol: fallbackSymbol, panelOpen: true, data2: "",
         candles: true, barStyle: "candle", indicators: [], overlayStyles: null,
+        systems: [],
+        linkLegs: readLegs(null),
       });
     }
     return out;
   }
 
-  const OVERLAY_STYLES = ["candle", "outline", "bar", "line"];
+  const OVERLAY_STYLES = ["none", "candle", "outline", "bar", "line"];
 
   // 겹침 종목. 비문자·빈 문자열은 버리고, 순서를 유지한 채 중복을 뺀다.
   function readOverlays(list) {
@@ -122,9 +188,10 @@ const Workspace = (() => {
   // 겹침 종목의 분봉 모양. 목록에 있는 종목만 남기고, 알 수 없는 값은 뺀다.
   // 키가 없으면 화면은 캔들바로 본다.
   // 겹침 눈금. price는 각자 가격, ratio는 첫 봉 100, shared는 메인과 같은 가격 눈금.
-  // 없거나 알 수 없는 값은 각자 가격이다.
+  // 없거나 알 수 없는 값은 같은 눈금이다.
   function readOverlayScale(value) {
-    return value === "ratio" || value === "shared" ? value : "price";
+    if (value === "price" || value === "ratio" || value === "shared") return value;
+    return "shared";
   }
 
   function readOverlayStyles(styles, codes) {
@@ -153,7 +220,7 @@ const Workspace = (() => {
   // frames: [{ height, panels, overlays, overlayStyles, overlayScale }]. grid를 생략하면 cols 1, colWeights [1].
   // current_symbol은 첫 화면틀의 첫 칸 종목이다 (구 독자 호환).
   // overlays가 없는 문서는 빈 겹침이다. overlayStyles가 없는 종목은 캔들바다.
-  // overlayScale이 없는 문서는 각자 가격이다.
+  // overlayScale이 없는 문서는 같은 눈금이다.
   function serialize(name, frames, grid) {
     const cols = Number.isInteger(grid?.cols) && grid.cols >= 1 ? grid.cols : 1;
     const colWeights = weightsOrEqual(grid?.colWeights, cols);
@@ -206,7 +273,7 @@ const Workspace = (() => {
           height: 1,
           overlays: [],
           overlayStyles: {},
-          overlayScale: "price",
+          overlayScale: "shared",
           panels: panelsWithStyles(readPanels(data.panels, fallbackSymbol, isKnownIndicator, []), {}),
         }];
     let cols = Number.isInteger(data.cols) && data.cols >= 1 ? data.cols : 1;

@@ -3,7 +3,8 @@
 
 /* LS 종목 레지스트리 (계획서 §15, docs/ls_api_mapping.md §3).
  *
- * - t8436(주식 종목조회, 코스피/코스닥)과 t8467(코스피200선물 마스터)로 종목 메타데이터를 구성한다.
+ * - t8436(주식 종목조회, 코스피/코스닥), t8467(코스피200선물 마스터),
+ *   t8433(지수옵션 마스터), t8435(코스피200 위클리, gubun WK)로 종목 메타데이터를 구성한다.
  * - 해외선물은 o3101(해외선물마스터조회 — 이 계정은 HKEX/LME만 온다)을 있으면 로딩하고,
  *   CME 계열은 내장 정적 표(ls_ovsfut)를 레지스트리에 등록한다 (2026-10-01 실측 참조).
  * - 종목 유형(주식/선물/해외선물)을 코드 길이 추정이 아니라 마스터 데이터로 판별한다.
@@ -20,7 +21,7 @@ typedef struct {
     char shcode[12];
     char name[64];
     char expcode[20];
-    int market;        /* 1=코스피, 2=코스닥, 3=코스피200선물, 4=해외선물 */
+    int market;        /* 1=코스피, 2=코스닥, 3=코스피200선물, 4=해외선물, 5=코스피200옵션 */
     bool is_futures;
     double tick_raw;   /* 1틱의 raw 크기 (실제 × 100). 0이면 자동(선물 5, 주식 100) — 해외선물만 채운다 */
 } ls_instrument_info_t;
@@ -29,6 +30,7 @@ typedef struct {
 #define LS_MARKET_KOSDAQ 2
 #define LS_MARKET_KP200_FUT 3
 #define LS_MARKET_OVS_FUT 4
+#define LS_MARKET_KP200_OPT 5 /* 지수옵션. 선물 채널(FC9/t8465 야간)로 합치지 않는다 */
 
 /* 레지스트리 본체. 직접 필드 접근보다 아래 접근자(ls_master_find/at/count) 사용을 권장한다. */
 typedef struct tr_ls_master {
@@ -50,8 +52,22 @@ const ls_instrument_info_t *ls_master_at(tr_ls_master_t *m, size_t index);
 size_t ls_master_search(const tr_ls_master_t *m, const char *q,
                         const ls_instrument_info_t **out, size_t cap);
 
+/* 옵션 표시 이름. "C 2610   745.0" → C / 2610 / 745.
+ * "C 월 W1 1,140.0" → C / "월 W1" / 1140. 형식이 아니면 false. */
+bool ls_opt_parse_name(const char *name, char *cp_out, char *expiry, size_t expiry_cap,
+                       double *strike_out);
+
+/* kind: -1=전체, 0=주식, 1=국내선물, 2=해외선물, 3=지수옵션.
+ * expiry가 비어 있지 않으면 옵션 만기 키가 같은 종목만. q가 비면 등록 순. */
+size_t ls_master_collect(const tr_ls_master_t *m, int kind, const char *q, const char *expiry,
+                         const ls_instrument_info_t **out, size_t cap);
+
+/* 지수옵션 만기 키. 월물(YYMM)이 앞, 위클리가 뒤. out_stride는 각 키의 바이트 폭. */
+size_t ls_master_option_expiries(const tr_ls_master_t *m, char *out, size_t out_stride, size_t cap);
+
 /* 파서 (테스트 가능하도록 분리). 반환값은 기록된 종목 수, 실패 시 -1. */
 int ls_master_parse_stock(const char *body, size_t len, ls_instrument_info_t *out, size_t cap);
 int ls_master_parse_fut(const char *body, size_t len, ls_instrument_info_t *out, size_t cap);
+int ls_master_parse_opt(const char *body, size_t len, ls_instrument_info_t *out, size_t cap);
 
 #endif

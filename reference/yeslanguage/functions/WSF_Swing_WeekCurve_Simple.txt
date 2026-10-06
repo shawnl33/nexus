@@ -1,0 +1,50 @@
+Inputs : 곡선상(NumericRef),곡선하(NumericRef);
+
+Var:n(19),j(0),k(0),계산주기(0),X(0),sumXY(0),sumX(0),sumY(0),sumX²(0), 
+MinLRS(0),MinB(0);
+Array:MinClose[100](0),MinLRL[100](0);
+Var : 미반영LRL(0), 기울기LRS(0);
+
+
+k = k + 1;
+if DayOfWeek(Bdate) < DayOfWeek(Bdate[1]) then 
+{
+   for j = 98 downto 0 
+   {
+       MinClose[j+1] = MinClose[j];
+         MinLRL[j+1] = MinLRL[j];
+   }
+   X = X + 1;
+   k = 0;
+}
+MinClose[0] = C;
+
+if MinClose[n-1] > 0 Then
+{
+      sumXY = 0; 
+      sumX = 0; 
+      sumY = 0; 
+      sumX² = 0;
+      For j = 0 To n-1 
+      {
+          sumXY = sumXY + (X-j)*MinClose[j];
+          sumX  = sumX  + (X-j);
+          sumY  = sumY  + MinClose[j];
+          sumX²= sumX²+ (X-j)^2;
+      }
+      
+      MinLRS = (n*sumXY - sumX*sumY)/(n*sumX²- sumX^2);     
+      MinB   = (sumY*sumX²-sumX*sumXY)/(n*sumX²- sumX^2);  
+      MinLRL[0] = MinLRS * X + MinB;
+  
+
+
+기울기LRS = MinLRL[0];
+미반영LRL = 기울기LRS[k+1];
+
+곡선상 = 기울기LRS;
+곡선하 = 미반영LRL;
+}  
+WSF_Swing_WeekCurve_Simple = 1;
+
+ 

@@ -1,0 +1,47 @@
+Input : 자산구분출력(NumericRef),
+        주기구분출력(NumericRef),
+        자동모드출력(NumericRef);
+
+Var : 현재종목구분(0),
+      현재상세종목구분(0);
+
+/*
+   자산구분출력 : 1 주식, 2 선물, 0 그 외
+   주기구분출력 : 1 일봉, 2 1분봉, 0 그 외
+   자동모드출력 : 11 주식일봉, 12 주식1분, 21 선물일봉, 22 선물1분
+*/
+현재종목구분 = CodeCategory;
+현재상세종목구분 = CodeCategoryEx;
+
+자산구분출력 = 0;
+주기구분출력 = 0;
+자동모드출력 = 0;
+
+/* CodeCategory: 1 KOSPI, 2 KOSDAQ, 3 제3시장 */
+If 현재종목구분 == 1 || 현재종목구분 == 2 || 현재종목구분 == 3 Then
+    자산구분출력 = 1;
+
+/* CodeCategory: 4 선물 */
+If 현재종목구분 == 4 Then
+    자산구분출력 = 2;
+
+If DataCompress == 3 Then
+    주기구분출력 = 1;
+
+If DataCompress == 2 && BarInterval == 1 Then
+    주기구분출력 = 2;
+
+If 자산구분출력 == 1 && 주기구분출력 == 1 Then
+    자동모드출력 = 11;
+
+If 자산구분출력 == 1 && 주기구분출력 == 2 Then
+    자동모드출력 = 12;
+
+If 자산구분출력 == 2 && 주기구분출력 == 1 Then
+    자동모드출력 = 21;
+
+If 자산구분출력 == 2 && 주기구분출력 == 2 Then
+    자동모드출력 = 22;
+
+Value1 = 자동모드출력;
+WSF_AutoChartModeV1 = Value1;

@@ -1,4 +1,3 @@
-
 Input : 변동기간입력(Numeric),
         중간갭기준입력(Numeric),
         큰갭기준입력(Numeric),

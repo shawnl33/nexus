@@ -1,0 +1,292 @@
+//=====================================================================
+// WSF_Htf_VolProfileV4
+// 원본: WSF_Htf_VolProfileV3 (동일 프로젝트 폴더) ? 그리드반경 "자동 산정" 추가판.
+// 2026-09-08, 사용자 요청("그리드반경틱을 자동으로 안되나?")으로 신규 작성.
+// V1/V2/V3는 원본 그대로 유지(비교/롤백용 베이스라인) ? 이 파일만 자동화 추가.
+//
+// 요지: 매일 장 시작(Bdate 변경) 시점에 최근 N거래일의 일중변동폭(HighD(i)-LowD(i))
+// 평균을 계산해서, 그 절반(한쪽 방향 반경) × 안전배수만큼을 그리드반경틱으로 자동
+// 설정. HighD(N)/LowD(N)은 1분봉 차트에서도 해당 차트 데이터를 분석해 일간 고저를
+// 정확히 계산해주는 내장함수(YLHelp.doc 매뉴얼 확인)라 별도 참조데이터 없이 계산 가능.
+// 데이터가 부족한 날(신규 로드 등, IsNan==true)은 그 날을 평균에서 제외하고, 참조
+// 가능한 날이 하나도 없으면 수동값(그리드반경틱)으로 안전하게 폴백.
+//
+// 신규 Input:
+//  - 자동그리드사용(1) : 1=자동산정(기본), 0=수동(V3처럼 그리드반경틱 값 그대로 사용)
+//  - 변동성참조일수(20) : 자동산정에 쓸 최근 거래일수
+//  - 그리드안전배수(1.5) : 평균 일중변동폭의 절반에 곱하는 여유배수(평소보다 변동성
+//    커지는 날 대비 여유폭 확보 ? 1.0이면 딱 평균치만큼만 확보)
+//  - 그리드반경틱(150) : 수동모드 값 겸, 자동모드에서 참조 데이터가 전혀 없을 때의 폴백값
+//
+// 자동/수동 무관하게 "실제반경"은 여전히 1~최대반경틱(300)으로 자동 클램프됩니다.
+// 그 외 로직(①~⑦ 개선, 옵션3 그리드 확장 메커니즘)은 V3와 완전히 동일합니다.
+//=====================================================================
+
+Input: 중심가격(NumericRef), 가치영역상(NumericRef), 가치영역하(NumericRef),
+       윗꼬리상단(NumericRef), 아랫꼬리하단(NumericRef),
+       그리드이탈여부(NumericRef);
+Var : 그리드반경틱(150), 자동그리드사용(1), 변동성참조일수(10), 그리드안전배수(1.5);
+
+var:arr(0),k(0),tick(0),chk_cnt(0),ttm(0),t_val(0),max_tpo(0),tot_tpo(0),
+     sum(0),acc(0),mdl_prc(0),mdl_arr(0),range_u(0),range_d(0),base(0),Start(420),
+     cal_tpo(0),up_tpo(0),dn_tpo(0),up_tail_u(0),up_tail_d(0),dn_tail_u(0),dn_tail_d(0),
+     var2(0),var3(0),
+     이전_tot_tpo(-1),
+     배열단위(200), 최대반경틱(300), 실제반경(150), 총그리드폭(300), 그리드하단가(0),
+     u상한(199), m상한(-1), d상한(-1),
+     일중변동폭합(0), 유효일수(0), 자동반경틱(0);
+ array:price_u[200](0),price_m[200](0),price_d[200](0),
+       status_u[200](0),status_m[200](0),status_d[200](0),
+       tpo_u[200](0),tpo_m[200](0),tpo_d[200](0);
+
+ tick = PriceScale;
+
+
+ if Bdate != Bdate[1] then              //매일 첫번째 봉에서 해당 변수들의 값을 0으로 초기화
+{
+    Start = TimeToMinutes(stime);
+    for arr = 0 to 199 {
+        price_u[arr]  = 0;
+        price_m[arr]  = 0;
+        price_d[arr]  = 0;
+        status_u[arr] = 0;
+        status_m[arr] = 0;
+        status_d[arr] = 0;
+        tpo_u[arr]    = 0;
+        tpo_m[arr]    = 0;
+        tpo_d[arr]    = 0;
+        }
+    max_tpo           = 0;
+    tot_tpo           = 0;
+    sum               = 0;
+    acc               = 0;
+    mdl_prc           = 0;
+    mdl_arr           = 0;
+    range_u           = 0;
+    range_d           = 0;
+    이전_tot_tpo      = -1;
+    윗꼬리상단        = 0;
+    아랫꼬리하단      = 0;
+    그리드이탈여부    = 0;
+
+    // [신규] 그리드반경 자동 산정 (자동그리드사용==1일 때)
+    If 자동그리드사용 == 1 Then
+    {
+        일중변동폭합 = 0;
+        유효일수 = 0;
+        for arr = 1 to 변동성참조일수 {
+            if IsNan(HighD(arr)) == false and IsNan(LowD(arr)) == false then
+            {
+                일중변동폭합 = 일중변동폭합 + (HighD(arr) - LowD(arr));
+                유효일수 = 유효일수 + 1;
+            }
+        }
+        If 유효일수 > 0 Then
+            자동반경틱 = Round((일중변동폭합 / 유효일수) * 그리드안전배수 / 2 / tick, 0);
+        Else
+            자동반경틱 = 그리드반경틱;             // 참조 가능한 과거 데이터가 전혀 없으면 수동값으로 폴백
+
+        실제반경 = IFF(자동반경틱 > 최대반경틱, 최대반경틱, IFF(자동반경틱 < 1, 1, 자동반경틱));
+    }
+    Else
+    {
+        실제반경 = IFF(그리드반경틱 > 최대반경틱, 최대반경틱, IFF(그리드반경틱 < 1, 1, 그리드반경틱));
+    }
+    총그리드폭 = 실제반경 * 2;
+
+    u상한 = IFF(총그리드폭-1 < 배열단위, 총그리드폭-1, 배열단위-1);
+    m상한 = IFF(총그리드폭 <= 배열단위, -1, IFF(총그리드폭-1-배열단위 < 배열단위, 총그리드폭-1-배열단위, 배열단위-1));
+    d상한 = IFF(총그리드폭 <= 배열단위*2, -1, IFF(총그리드폭-1-배열단위*2 < 배열단위, 총그리드폭-1-배열단위*2, 배열단위-1));
+
+    base = dayopen() + tick * (실제반경 - 1);
+    그리드하단가 = base - (총그리드폭-1) * tick;
+
+   price_u[0] = base;                            //지수 배열 상단
+   for arr = 1 to 199 {
+        price_u[arr] = price_u[arr-1] - tick;
+        }
+
+    price_m[0] = price_u[199] - tick;             //지수 배열 중단
+   for arr = 1 to 199 {
+        price_m[arr] = price_m[arr-1] - tick;
+        }
+
+    price_d[0] = price_m[199] - tick;             //지수 배열 하단
+   for arr = 1 to 199 {
+        price_d[arr] = price_d[arr-1] - tick;
+        }
+    }
+
+ if stime >= 0 and stime < 080000 then
+       ttm = timetominutes(stime)+1440-Start;
+ else
+       ttm = timetominutes(stime)-Start;
+
+t_val = int((ttm)/interval) + 1;
+
+if L > price_u[0] or H < 그리드하단가 then
+    그리드이탈여부 = 1;
+
+for arr = 0 to 199 {
+     if arr <= u상한 then {
+     if l <= price_u[arr] and price_u[arr] <= h then
+        {
+        if status_u[arr] < t_val then                    //A가 찍혔는데 또 A를 찍을 필요가 없음. 그걸 확인
+          {
+           status_u[arr] = t_val;                        //중복을 막기 위해 마지막 time value 저장
+          tpo_u[arr] = tpo_u[arr] + 1;                  //현재 가격대의 TPO 누적
+          tot_tpo = tot_tpo + 1;                        //전체 TPO 누적
+          if max_tpo < tpo_u[arr] then                  //TPO 최빈값
+             {
+              max_tpo = tpo_u[arr];
+              sum = 0;                                   //TPO가 동일한 가격대가 여러가격일 경우
+             acc = 0;                                   //평균값을 구하기 위해 가격 누적변수와 가격대 수 초기화
+             }
+           if max_tpo == tpo_u[arr] then                 //최빈값과 동일하면
+             {
+              sum = sum + price_u[arr];                  //해당 가격을 누적
+             acc = acc + 1;                             //가격대 개수 누적
+             }
+           }
+        }
+     }
+
+ //3개의 동일 성격을 지닌 배열에 대해 한꺼번에 처리 못하므로 동일 루틴으로 3회 처리
+     if arr <= m상한 then {
+     if l <= price_m[arr] and price_m[arr] <= h then
+        {
+        if status_m[arr] < t_val then
+           {
+           status_m[arr] = t_val;
+           tpo_m[arr] = tpo_m[arr] + 1;
+           tot_tpo = tot_tpo + 1;
+
+           if max_tpo < tpo_m[arr] then
+              {
+              max_tpo = tpo_m[arr];
+              sum = 0;
+              acc = 0;
+              }
+           if max_tpo == tpo_m[arr] then
+              {
+              sum = sum + price_m[arr];
+              acc = acc + 1;
+              }
+           }
+        }
+     }
+     if arr <= d상한 then {
+     if l <= price_d[arr] and price_d[arr] <= h then
+        {
+        if status_d[arr] < t_val then
+           {
+           status_d[arr] = t_val;
+           tpo_d[arr] = tpo_d[arr] + 1;
+           tot_tpo = tot_tpo + 1;
+
+           if max_tpo < tpo_d[arr] then
+              {
+              max_tpo = tpo_d[arr];
+              sum = 0;
+              acc = 0;
+              }
+           if max_tpo == tpo_d[arr] then
+              {
+              sum = sum + price_d[arr];
+              acc = acc + 1;
+              }
+           }
+        }
+     }
+     }
+
+if tot_tpo <> 이전_tot_tpo && acc > 0 then
+{
+    mdl_prc = round(sum/acc/tick,0)*tick;              //평균하여 중심가격으로 삼음
+    mdl_arr = int((base-mdl_prc)/tick);                //배열변수의 첨자는 정수이어야 함
+
+    range_u = mdl_arr;
+    range_d = mdl_arr;
+
+    // 전체 TPO의 70%가 될 때까지 상하값을 비교하면서 누적
+    cal_tpo = iff(mdl_arr<200,tpo_u[mdl_arr],iff(mdl_arr<400,tpo_m[mdl_arr-200],tpo_d[mdl_arr-400]));
+
+    for k = 0 to 실제반경 {
+    // range_u는 한단위씩 위로(-1), range_d는 한단위씩 아래로(+1)
+    // TPO가 많은 쪽의 TPO를 먼저 누적한다
+       var2 = IFF(range_u > 0, iff(range_u-1<200,tpo_u[range_u-1],iff(range_u-1<400,tpo_m[range_u-1-200],tpo_d[range_u-1-400])), 0);
+        var3 = IFF(range_d < 총그리드폭-1, iff(range_d+1<200,tpo_u[range_d+1],iff(range_d+1<400,tpo_m[range_d+1-200],tpo_d[range_d+1-400])), 0);
+        if var2 > var3 then
+           {
+           cal_tpo = cal_tpo + var2;
+           range_u = range_u - 1;
+           }
+        else if var2 < var3 then
+           {
+           cal_tpo = cal_tpo + var3;
+           range_d = range_d + 1;
+           }
+        else if var2 == var3 and var2 > 0 and var3 > 0 then
+           {
+           cal_tpo = cal_tpo + var2;
+           range_u = range_u - 1;
+           }
+        if cal_tpo >= tot_tpo * 0.7 or var2 + var3 == 0 then
+           k = 실제반경;
+        }
+    up_tpo = 0;                             //중심가격의 상위 TPO
+    if tpo_u[0] == 1 then up_tail_u = 0;    //윗꼬리 상단 경계선
+    else up_tail_u = 총그리드폭-1;
+    up_tail_d = 0;                          //윗꼬리 하단 경계선
+
+    for arr = 0 to mdl_arr-1 {
+        if iff(arr<200,tpo_u[arr],iff(arr<400,tpo_m[arr-200],tpo_d[arr-400])) == 0 and
+            iff(arr+1<200,tpo_u[arr+1],iff(arr+1<400,tpo_m[arr-200+1],tpo_d[arr-400+1])) == 1 then
+            up_tail_u = arr + 1;
+
+        if iff(arr<200,tpo_u[arr],iff(arr<400,tpo_m[arr-200],tpo_d[arr-400])) == 1 and
+            iff(arr+1<200,tpo_u[arr+1],iff(arr+1<400,tpo_m[arr-200+1],tpo_d[arr-400+1])) > 1 and
+            up_tail_d == 0 then
+           up_tail_d = arr;
+
+        if iff(arr<200,tpo_u[arr],iff(arr<400,tpo_m[arr-200],tpo_d[arr-400])) > 1  then
+            up_tpo = up_tpo + iff(arr<200,tpo_u[arr],iff(arr<400,tpo_m[arr-200],tpo_d[arr-400]));
+         }
+
+    dn_tpo = 0;                               //중심가격의 하위 TPO
+    dn_tail_u = 총그리드폭-1;                          //아래꼬리 상단 경계선
+    if iff((총그리드폭-1)<200,tpo_u[총그리드폭-1],iff((총그리드폭-1)<400,tpo_m[총그리드폭-1-200],tpo_d[총그리드폭-1-400])) == 1 then dn_tail_d = 총그리드폭-1;
+     else dn_tail_d = 0;                       //아래꼬리 하단 경계선
+
+    for arr = 총그리드폭-1 downto mdl_arr+1 {
+        if iff(arr<200,tpo_u[arr],iff(arr<400,tpo_u[arr-200],tpo_d[arr-400])) > 1  then    // [원본 그대로 유지] tpo_m이어야 할 자리에 tpo_u ? dn_tpo는 미사용값이라 무해
+            dn_tpo = dn_tpo + iff(arr<200,tpo_u[arr],iff(arr<400,tpo_m[arr-200],tpo_d[arr-400]));
+
+        if iff(arr<200,tpo_u[arr],iff(arr<400,tpo_m[arr-200],tpo_d[arr-400])) == 1 and
+            iff(arr-1<200,tpo_u[arr-1],iff(arr-1<400,tpo_m[arr-200-1],tpo_d[arr-400-1])) > 1 and
+            dn_tail_u == 총그리드폭-1  then
+            dn_tail_u = arr;
+
+        if iff(arr<200,tpo_u[arr],iff(arr<400,tpo_m[arr-200],tpo_d[arr-400])) == 0 and
+            iff(arr-1<200,tpo_u[arr-1],iff(arr-1<400,tpo_m[arr-200-1],tpo_d[arr-400-1])) == 1 then
+            dn_tail_d = arr - 1;
+         }
+
+    중심가격 = mdl_prc;
+    가치영역상 = base-(range_u*tick);
+    가치영역하 = base-(range_d*tick);
+
+    If up_tail_u <= up_tail_d then                  //꼬리의 경계값이 정상적으로 찾아졌다면
+       {
+        윗꼬리상단 = base-(up_tail_u*tick);
+        }
+
+    If dn_tail_u <= dn_tail_d then
+        {
+        아랫꼬리하단 = base-(dn_tail_d*tick);
+        }
+
+    이전_tot_tpo = tot_tpo;
+}
+
+WSF_Htf_VolProfileV4 = 1;

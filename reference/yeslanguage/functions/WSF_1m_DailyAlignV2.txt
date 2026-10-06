@@ -1,4 +1,3 @@
-
 Input : 분봉예측방향1입력(Numeric),
         분봉예측방향2입력(Numeric),
         분봉예측방향3입력(Numeric),

@@ -1,4 +1,3 @@
-
 Input : 현재회귀선입력(Numeric),
         회귀기울기입력(Numeric),
         회귀유효입력(Numeric),

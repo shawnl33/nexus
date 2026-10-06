@@ -1,0 +1,267 @@
+//=====================================================================
+// WSF_Htf_VolProfileV2
+// 원본: WSF_Htf_VolProfile (소스\YesLang\Functions\WSF_Htf_VolProfile.yfu)
+// 2026-09-08, 사용자 요청으로 개선안 전부 적용 + 새 함수명으로 분리(원본 미변경).
+//
+// 적용한 개선:
+//  [개선#2] 그리드(당일 시가 ±150틱) 이탈 여부를 알려주는 출력 파라미터 신규 추가
+//  [개선#3] 꼬리 출력(윗꼬리상단/아랫꼬리하단) 신규일 리셋 추가 → 전날 값 잔류(stale) 방지
+//  [개선#4] mdl_prc 계산에서 acc==0 나눗셈 가드 추가
+//  [개선#5] 이번 봉에 새 TPO가 추가되지 않았으면(tot_tpo 불변) 가치영역/꼬리 재계산 생략
+//           ? tot_tpo가 그대로면 sum/acc/mdl_prc도 그대로이므로 결과는 수학적으로 동일,
+//             매 봉 반복되던 O(150+300+300) 연산만 절감됨(근사 아님)
+//  [개선#6] var2/var3가 원본에서 Var 선언 없이 쓰이고 있던 것을 확인, 정식 선언 추가
+//           (원본은 컴파일이 되고 있었으니 플랫폼이 암묵 선언을 허용하는 것으로 보이나,
+//            명시적으로 선언해 두는 게 안전)
+//  [개선#7] 가치영역 확장 루프(k=0~150)에서 range_u==0/range_d==299(그리드 양끝)에
+//           도달한 다음에도 var2/var3가 range_u-1(-1)/range_d+1(300, 즉 tpo_d[100])를
+//           읽으려 해서 배열 범위를 벗어날 수 있던 것을 확인 ? 경계 도달 시 0으로
+//           처리하도록 가드 추가(그 쪽엔 더 볼 데이터가 없다는 뜻이므로 동작은 동일,
+//           범위 밖 접근만 차단)
+//
+// [확인됨, 2026-09-08 YLHelp.doc 매뉴얼 대조] interval → YesLanguage 내장 예약어
+//  Interval("적용된 차트의 시간간격을 리턴, BarInterval과 같음"). 함수 자체 선언이
+//  없는 게 정상 ? 이 함수가 얹힌 차트의 봉 간격(분)을 그대로 TPO 기간으로 사용하는
+//  설계로 보임(예: 1분봉이면 1분 단위, 30분봉이면 30분 단위 레터). 변경하지 않음.
+//
+// 보류(원본 그대로 유지, 임의 변경 안 함):
+//  전체 그리드 확장(±150틱 초과 대응) ? 배열 구조 전체 재설계가 필요한 큰 변경이라
+//             이번엔 손대지 않고 대신 이탈 여부만 감지해서 알려주는 방식으로 처리(#2).
+//=====================================================================
+
+Input: 중심가격(NumericRef), 가치영역상(NumericRef), 가치영역하(NumericRef),
+       윗꼬리상단(NumericRef), 아랫꼬리하단(NumericRef),
+       그리드이탈여부(NumericRef);                          //[개선#2] 신규 출력
+
+var:arr(0),k(0),tick(0),chk_cnt(0),ttm(0),t_val(0),max_tpo(0),tot_tpo(0),
+     sum(0),acc(0),mdl_prc(0),mdl_arr(0),range_u(0),range_d(0),base(0),Start(420),
+     cal_tpo(0),up_tpo(0),dn_tpo(0),up_tail_u(0),up_tail_d(0),dn_tail_u(0),dn_tail_d(0),
+     var2(0),var3(0),                                        //[개선#6] 정식 선언
+     이전_tot_tpo(-1);                                       //[개선#5] 캐싱 판단용
+ array:price_u[100](0),price_m[100](0),price_d[100](0),
+       status_u[100](0),status_m[100](0),status_d[100](0),
+       tpo_u[100](0),tpo_m[100](0),tpo_d[100](0);
+
+ tick = PriceScale;
+
+
+ if Bdate != Bdate[1] then              //매일 첫번째 봉에서 해당 변수들의 값을 0으로 초기화
+{
+    Start = TimeToMinutes(stime);
+    for arr = 0 to 99 {
+        price_u[arr]  = 0;
+        price_m[arr]  = 0;
+        price_d[arr]  = 0;
+        status_u[arr] = 0;
+        status_m[arr] = 0;
+        status_d[arr] = 0;
+        tpo_u[arr]    = 0;
+        tpo_m[arr]    = 0;
+        tpo_d[arr]    = 0;
+        }
+    max_tpo           = 0;
+    tot_tpo           = 0;
+    sum               = 0;
+    acc               = 0;
+    mdl_prc           = 0;
+    mdl_arr           = 0;
+    range_u           = 0;
+    range_d           = 0;
+    이전_tot_tpo      = -1;              //[개선#5] 새 날 첫 봉은 무조건 재계산되도록
+    윗꼬리상단        = 0;               //[개선#3] 신규일 리셋
+    아랫꼬리하단      = 0;               //[개선#3]
+    그리드이탈여부    = 0;               //[개선#2]
+
+    base = dayopen() + tick * 149;                //300개 가격대중 최상단에 해당하는 가격
+
+   price_u[0] = base;                            //지수 배열 상단
+   for arr = 1 to 99 {
+        price_u[arr] = price_u[arr-1] - tick;
+        }
+
+    price_m[0] = price_u[99] - tick;             //지수 배열 중단
+   for arr = 1 to 99 {
+        price_m[arr] = price_m[arr-1] - tick;
+        }
+
+    price_d[0] = price_m[99] - tick;             //지수 배열 하단
+   for arr = 1 to 99 {
+        price_d[arr] = price_d[arr-1] - tick;
+        }
+    }
+
+ if stime >= 0 and stime < 080000 then
+       ttm = timetominutes(stime)+1440-Start;
+ else
+       ttm = timetominutes(stime)-Start;
+
+//[보류] interval: 원본 그대로 ? 이 함수 스코프엔 선언이 없어 값의 출처를 확인 못한 채로는 건드리지 않음
+t_val = int((ttm)/interval) + 1;       //540은 09:00. 9시를 빼고 나서 원하는 시간단위로 나눈다
+
+//[개선#2] 이번 봉이 전체 그리드(price_u[0]=base ~ price_d[99]=base-299*tick) 범위를
+//         완전히 벗어났는지 감시만 함 ? 기존 계산 로직은 건드리지 않음
+if L > price_u[0] or H < price_d[99] then
+    그리드이탈여부 = 1;
+
+for arr = 0 to 99 {
+     if l <= price_u[arr] and price_u[arr] <= h then
+        {
+        if status_u[arr] < t_val then                    //A가 찍혔는데 또 A를 찍을 필요가 없음. 그걸 확인
+          {
+           status_u[arr] = t_val;                        //중복을 막기 위해 마지막 time value 저장
+          tpo_u[arr] = tpo_u[arr] + 1;                  //현재 가격대의 TPO 누적
+          tot_tpo = tot_tpo + 1;                        //전체 TPO 누적
+          if max_tpo < tpo_u[arr] then                  //TPO 최빈값
+             {
+              max_tpo = tpo_u[arr];
+              sum = 0;                                   //TPO가 동일한 가격대가 여러가격일 경우
+             acc = 0;                                   //평균값을 구하기 위해 가격 누적변수와 가격대 수 초기화
+             }
+           if max_tpo == tpo_u[arr] then                 //최빈값과 동일하면
+             {
+              sum = sum + price_u[arr];                  //해당 가격을 누적
+             acc = acc + 1;                             //가격대 개수 누적
+             }
+           }
+        }
+
+ //3개의 동일 성격을 지닌 배열에 대해 한꺼번에 처리 못하므로 동일 루틴으로 3회 처리
+     if l <= price_m[arr] and price_m[arr] <= h then
+        {
+        if status_m[arr] < t_val then
+           {
+           status_m[arr] = t_val;
+           tpo_m[arr] = tpo_m[arr] + 1;
+           tot_tpo = tot_tpo + 1;
+
+           if max_tpo < tpo_m[arr] then
+              {
+              max_tpo = tpo_m[arr];
+              sum = 0;
+              acc = 0;
+              }
+           if max_tpo == tpo_m[arr] then
+              {
+              sum = sum + price_m[arr];
+              acc = acc + 1;
+              }
+           }
+        }
+     if l <= price_d[arr] and price_d[arr] <= h then
+        {
+        if status_d[arr] < t_val then
+           {
+           status_d[arr] = t_val;
+           tpo_d[arr] = tpo_d[arr] + 1;
+           tot_tpo = tot_tpo + 1;
+
+           if max_tpo < tpo_d[arr] then
+              {
+              max_tpo = tpo_d[arr];
+              sum = 0;
+              acc = 0;
+              }
+           if max_tpo == tpo_d[arr] then
+              {
+              sum = sum + price_d[arr];
+              acc = acc + 1;
+              }
+           }
+        }
+     }
+
+//[개선#5] 이번 봉에서 새로 카운트된 TPO가 없으면(tot_tpo 불변) 이하 재계산 생략.
+//         tot_tpo가 그대로면 sum/acc/mdl_prc도 이미 그대로이므로 결과는 동일함(근사 아님).
+if tot_tpo <> 이전_tot_tpo then
+{
+    if acc > 0 then                                    //[개선#4] acc==0 나눗셈 가드
+        mdl_prc = round(sum/acc/tick,0)*tick;          //평균하여 중심가격으로 삼음
+    //acc==0이면(그리드 이탈 등) mdl_prc는 직전 유효값 유지 ? 0나눗셈 회피
+
+    mdl_arr = int((base-mdl_prc)/tick);                //배열변수의 첨자는 정수이어야 함
+
+    range_u = mdl_arr;
+    range_d = mdl_arr;
+
+    // 전체 TPO의 70%가 될 때까지 상하값을 비교하면서 누적
+    cal_tpo = iff(mdl_arr<100,tpo_u[mdl_arr],iff(mdl_arr<200,tpo_m[mdl_arr-100],tpo_d[mdl_arr-200]));
+
+    for k = 0 to 150 {
+    // range_u는 한단위씩 위로(-1), range_d는 한단위씩 아래로(+1)
+    // TPO가 많은 쪽의 TPO를 먼저 누적한다
+       var2 = IFF(range_u > 0, iff(range_u-1<100,tpo_u[range_u-1],iff(range_u-1<200,tpo_m[range_u-1-100],tpo_d[range_u-1-200])), 0);  //[개선#7] range_u==0이면 더 이상 위쪽 데이터 없음 → 0 (음수 인덱스 tpo_u[-1] 접근 방지)
+        var3 = IFF(range_d < 299, iff(range_d+1<100,tpo_u[range_d+1],iff(range_d+1<200,tpo_m[range_d+1-100],tpo_d[range_d+1-200])), 0);  //[개선#7] range_d==299면 더 이상 아래쪽 데이터 없음 → 0 (tpo_d[100] 범위 밖 접근 방지)
+        if var2 > var3 then
+           {
+           cal_tpo = cal_tpo + var2;
+           range_u = range_u - 1;
+           }
+        else if var2 < var3 then
+           {
+           cal_tpo = cal_tpo + var3;
+           range_d = range_d + 1;
+           }
+        else if var2 == var3 and var2 > 0 and var3 > 0 then
+           {
+           cal_tpo = cal_tpo + var2;
+           range_u = range_u - 1;
+           }
+        if cal_tpo >= tot_tpo * 0.7 or var2 + var3 == 0 then
+           k = 150;
+        }
+    up_tpo = 0;                             //중심가격의 상위 TPO
+    if tpo_u[0] == 1 then up_tail_u = 0;    //윗꼬리 상단 경계선
+    else up_tail_u = 299;
+    up_tail_d = 0;                          //윗꼬리 하단 경계선
+
+    for arr = 0 to mdl_arr-1 {
+        if iff(arr<100,tpo_u[arr],iff(arr<200,tpo_m[arr-100],tpo_d[arr-200])) == 0 and
+            iff(arr+1<100,tpo_u[arr+1],iff(arr+1<200,tpo_m[arr-100+1],tpo_d[arr-200+1])) == 1 then
+            up_tail_u = arr + 1;
+
+        if iff(arr<100,tpo_u[arr],iff(arr<200,tpo_m[arr-100],tpo_d[arr-200])) == 1 and
+            iff(arr+1<100,tpo_u[arr+1],iff(arr+1<200,tpo_m[arr-100+1],tpo_d[arr-200+1])) > 1 and
+            up_tail_d == 0 then
+           up_tail_d = arr;
+
+        if iff(arr<100,tpo_u[arr],iff(arr<200,tpo_m[arr-100],tpo_d[arr-200])) > 1  then
+            up_tpo = up_tpo + iff(arr<100,tpo_u[arr],iff(arr<200,tpo_m[arr-100],tpo_d[arr-200]));
+         }
+
+    dn_tpo = 0;                               //중심가격의 하위 TPO
+    dn_tail_u = 299;                          //아래꼬리 상단 경계선
+    if tpo_d[99] == 1 then dn_tail_d = 299;
+     else dn_tail_d = 0;                       //아래꼬리 하단 경계선
+
+    for arr = 299 downto mdl_arr+1 {
+        if iff(arr<100,tpo_u[arr],iff(arr<200,tpo_u[arr-100],tpo_d[arr-200])) > 1  then
+            dn_tpo = dn_tpo + iff(arr<100,tpo_u[arr],iff(arr<200,tpo_m[arr-100],tpo_d[arr-200]));
+
+        if iff(arr<100,tpo_u[arr],iff(arr<200,tpo_m[arr-100],tpo_d[arr-200])) == 1 and
+            iff(arr-1<100,tpo_u[arr-1],iff(arr-1<200,tpo_m[arr-100-1],tpo_d[arr-200-1])) > 1 and
+            dn_tail_u == 299  then
+            dn_tail_u = arr;
+
+        if iff(arr<100,tpo_u[arr],iff(arr<200,tpo_m[arr-100],tpo_d[arr-200])) == 0 and
+            iff(arr-1<100,tpo_u[arr-1],iff(arr-1<200,tpo_m[arr-100-1],tpo_d[arr-200-1])) == 1 then
+            dn_tail_d = arr - 1;
+         }
+
+    중심가격 = mdl_prc;
+    가치영역상 = base-(range_u*tick);
+    가치영역하 = base-(range_d*tick);
+
+    If up_tail_u <= up_tail_d then                  //꼬리의 경계값이 정상적으로 찾아졌다면
+       {
+        윗꼬리상단 = base-(up_tail_u*tick);
+        }
+
+    If dn_tail_u <= dn_tail_d then
+        {
+        아랫꼬리하단 = base-(dn_tail_d*tick);
+        }
+
+    이전_tot_tpo = tot_tpo;                          //[개선#5] 이번 봉 결과를 캐시 기준으로 저장
+}
+
+WSF_Htf_VolProfileV2 = 1;

@@ -1,0 +1,77 @@
+Input : 미래방향입력(Numeric),
+        매물대위치입력(Numeric),
+        ADX입력(Numeric),
+        상승DI입력(Numeric),
+        하락DI입력(Numeric),
+        ADX추세기준입력(Numeric),
+        ADX강세기준입력(Numeric),
+        통합상태(NumericRef),
+        매물대상태(NumericRef),
+        ADX상태(NumericRef),
+        DI방향(NumericRef);
+
+Var : 미래방향(0),
+      매물대위치(0),
+      ADX값(0),
+      ADX추세기준값(0),
+      ADX강세기준값(0);
+
+미래방향 = IFF(미래방향입력 > 0, 1,
+             IFF(미래방향입력 < 0, -1, 0));
+
+매물대위치 = IFF(매물대위치입력 > 0, 1,
+               IFF(매물대위치입력 < 0, -1, 0));
+
+ADX값 = Abs(ADX입력);
+ADX추세기준값 = Abs(ADX추세기준입력);
+ADX강세기준값 = Abs(ADX강세기준입력);
+
+If ADX추세기준값 < 1 Then
+    ADX추세기준값 = 1;
+
+If ADX강세기준값 < ADX추세기준값 Then
+    ADX강세기준값 = ADX추세기준값;
+
+매물대상태 = 매물대위치;
+
+DI방향 = IFF(상승DI입력 > 하락DI입력, 1,
+          IFF(상승DI입력 < 하락DI입력, -1, 0));
+
+ADX상태 = 0;
+
+If ADX값 >= ADX강세기준값 Then
+    ADX상태 = 2;
+Else
+{
+    If ADX값 >= ADX추세기준값 Then
+        ADX상태 = 1;
+};
+
+통합상태 = 0;
+
+If 미래방향 == 1 Then
+{
+    통합상태 = 50;
+
+    If 매물대상태 >= 0 &&
+       DI방향 == 1 &&
+       ADX상태 >= 1 Then
+    {
+        통합상태 = 100;
+    };
+};
+
+If 미래방향 == -1 Then
+{
+    통합상태 = -50;
+
+    If 매물대상태 <= 0 &&
+       DI방향 == -1 &&
+       ADX상태 >= 1 Then
+    {
+        통합상태 = -100;
+    };
+};
+
+Value1 = 통합상태;
+WSF_DailyFutureDecisionV1 = Value1;

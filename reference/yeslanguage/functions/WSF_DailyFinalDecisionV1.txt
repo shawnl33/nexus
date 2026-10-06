@@ -1,0 +1,123 @@
+Input : 미래방향입력(Numeric),
+        매물대기간입력(Numeric),
+        매물대밴드배수입력(Numeric),
+        ADX기간입력(Numeric),
+        ADX추세기준입력(Numeric),
+        ADX강세기준입력(Numeric),
+        통합상태(NumericRef),
+        매수후보(NumericRef),
+        매도후보(NumericRef),
+        후보방향(NumericRef),
+        매물대상태(NumericRef),
+        ADX상태(NumericRef),
+        DI방향(NumericRef),
+        ADX값출력(NumericRef);
+
+Var : 일봉여부(0),
+      미래방향(0),
+      매물대중심(0),
+      매물대상단(0),
+      매물대하단(0),
+      매물대유효(0),
+      매물대위치(0),
+      ADX값(0),
+      상승DI(0),
+      하락DI(0),
+      ADX유효(0);
+
+/*
+   WSF_DailyFinalDecisionV1
+
+   일봉 판정 순서
+   미래곡선 방향 -> 일봉 매물대 -> 일봉 ADX/DI -> 최초 후보 신호
+
+   미래곡선은 방향을 결정하고,
+   매물대와 ADX/DI는 방향을 뒤집지 않고 확인 강도만 조절한다.
+
+   통합상태
+      100 : 매수 확인
+       50 : 매수 관찰
+        0 : 중립
+      -50 : 매도 관찰
+     -100 : 매도 확인
+*/
+
+일봉여부 = IFF(DataCompress == 3, 1, 0);
+
+통합상태 = 0;
+매수후보 = 0;
+매도후보 = 0;
+후보방향 = 0;
+매물대상태 = 0;
+ADX상태 = 0;
+DI방향 = 0;
+ADX값출력 = 0;
+
+If 일봉여부 == 1 Then
+{
+    미래방향 = IFF(미래방향입력 > 0, 1,
+                 IFF(미래방향입력 < 0, -1, 0));
+
+    WSF_DailyMarketProfileV1(
+        매물대기간입력,
+        매물대밴드배수입력,
+        매물대중심,
+        매물대상단,
+        매물대하단,
+        매물대유효
+    );
+
+    매물대위치 = 0;
+
+    If 매물대유효 == 1 Then
+    {
+        If C > 매물대상단 Then
+            매물대위치 = 1;
+
+        If C < 매물대하단 Then
+            매물대위치 = -1;
+    };
+
+    WSF_DailyADXV1(
+        ADX기간입력,
+        ADX값,
+        상승DI,
+        하락DI,
+        ADX유효
+    );
+
+    ADX값출력 = ADX값;
+
+    If 매물대유효 == 1 && ADX유효 == 1 Then
+    {
+        WSF_DailyFutureDecisionV1(
+            미래방향,
+            매물대위치,
+            ADX값,
+            상승DI,
+            하락DI,
+            ADX추세기준입력,
+            ADX강세기준입력,
+            통합상태,
+            매물대상태,
+            ADX상태,
+            DI방향
+        );
+    }
+    Else
+    {
+        /* 준비기간에도 미래곡선 방향 자체는 관찰 상태로 유지한다. */
+        통합상태 = IFF(미래방향 > 0, 50,
+                   IFF(미래방향 < 0, -50, 0));
+    };
+
+    WSF_FutureTradeCandidateV1(
+        통합상태,
+        매수후보,
+        매도후보,
+        후보방향
+    );
+};
+
+Value1 = 통합상태;
+WSF_DailyFinalDecisionV1 = Value1;

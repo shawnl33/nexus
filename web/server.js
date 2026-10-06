@@ -80,6 +80,8 @@ async function readStatic(file) {
 }
 const WORKSPACE_DIR = join(__dirname, ".runtime", "workspaces");
 const TOKEN_PATH = join(__dirname, ".runtime", "token");
+const YESLANG_DIR = join(__dirname, "..", "reference", "yeslanguage");
+const YESLANG_SKIP = new Set(["experiments", "functions"]);
 
 const CMD_ENDPOINT = process.env.ENGINE_CMD_ENDPOINT ?? "tcp://127.0.0.1:5555";
 const PUB_ENDPOINT = process.env.ENGINE_PUB_ENDPOINT ?? "tcp://127.0.0.1:5556";
@@ -225,6 +227,9 @@ const server = createServer(async (req, res) => {
       }
       return json(res, 200, { token: AUTH_TOKEN });
     }
+    if (req.method === "GET" && path === "/api/yeslang") {
+      return json(res, 200, await listYeslang());
+    }
     if (req.method === "GET" && path === "/api/status") {
       const reply = await engineCommand(`dash-status-${reqSeq}`, "status", null);
       return json(res, reply.error_code === "connection_error" ? 502 : 200, reply);
@@ -306,12 +311,65 @@ const server = createServer(async (req, res) => {
       return json(res, code, reply);
     }
 
+    if (req.method === "GET" && path === "/api/pair/sim") {
+      // 읽기 전용. 보유 1분봉으로 페어 신호를 다시 계산한다. 주문은 내지 않는다.
+      const side = Number(url.searchParams.get("side"));
+      const self = (url.searchParams.get("self") ?? "").trim().toUpperCase();
+      const opp = (url.searchParams.get("opp") ?? "").trim().toUpperCase();
+      const fut = (url.searchParams.get("fut") ?? "").trim().toUpperCase();
+      if (side !== 1 && side !== -1) return json(res, 400, { error: "bad_request" });
+      if (!isValidShcode(self) || !isValidShcode(opp) || !isValidShcode(fut)) {
+        return json(res, 400, { error: "invalid_symbol" });
+      }
+      const payload = { side, self, opp, fut };
+      const cfg = readPairCfg(url.searchParams.get("cfg"));
+      if (cfg) payload.cfg = cfg;
+      const reply = await engineCommand(
+        `dash-pair-${reqSeq}`,
+        "pair.sim",
+        JSON.stringify(payload),
+      );
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
+    if (req.method === "GET" && path === "/api/pair/plots") {
+      // 읽기 전용. 자기·상대·선물 1분봉으로 위클리 합산수익률과 프라이스링크를 그린다.
+      const self = (url.searchParams.get("self") ?? "").trim().toUpperCase();
+      const opp = (url.searchParams.get("opp") ?? "").trim().toUpperCase();
+      const fut = (url.searchParams.get("fut") ?? "").trim().toUpperCase();
+      if (!isValidShcode(self) || !isValidShcode(opp) || !isValidShcode(fut)) {
+        return json(res, 400, { error: "invalid_symbol" });
+      }
+      const reply = await engineCommand(
+        `dash-plots-${reqSeq}`,
+        "pair.plots",
+        JSON.stringify({ self, opp, fut }),
+      );
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
     if (req.method === "GET" && path === "/api/market") {
       // 읽기 전용 종목 검색: 엔진 레지스트리 프록시 (인증 불필요, 계획서 §15)
       const q = url.searchParams.get("q") ?? "";
       if (q.length > 64) return json(res, 400, { error: "invalid_query" });
-      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 100);
-      const reply = await engineCommand(`dash-market-${reqSeq}`, "market.instruments", JSON.stringify({ q, limit }));
+      const expiry = url.searchParams.get("expiry") ?? "";
+      if (expiry.length > 32) return json(res, 400, { error: "invalid_expiry" });
+      const kindRaw = url.searchParams.get("kind");
+      let kind;
+      if (kindRaw != null && kindRaw !== "") {
+        kind = Number(kindRaw);
+        if (!Number.isInteger(kind) || kind < 0 || kind > 3) {
+          return json(res, 400, { error: "invalid_kind" });
+        }
+      }
+      const limitMax = kind == null ? 100 : 1024;
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), limitMax);
+      const data = { q, limit };
+      if (kind != null) data.kind = kind;
+      if (expiry) data.expiry = expiry;
+      const reply = await engineCommand(`dash-market-${reqSeq}`, "market.instruments", JSON.stringify(data));
       const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
       return json(res, code, reply);
     }
@@ -432,6 +490,57 @@ wss.on("connection", (ws) => {
   ws.send(JSON.stringify({ kind: "hello", engine_cmd: CMD_ENDPOINT !== "tcp://127.0.0.1:5555" ? "custom" : "default" }));
   ws.on("close", () => clients.delete(ws));
 });
+
+// 사이드바가 원본 폴더를 그대로 보이게 한다. 실험·함수와 .txt 가 아닌 파일은 빼다.
+async function listYeslang() {
+  const dirs = [];
+  let names = [];
+  try {
+    names = await readdir(YESLANG_DIR, { withFileTypes: true });
+  } catch {
+    return { dirs };
+  }
+  for (const ent of names) {
+    if (!ent.isDirectory() || YESLANG_SKIP.has(ent.name) || ent.name.startsWith(".")) continue;
+    let kids = [];
+    try {
+      kids = await readdir(join(YESLANG_DIR, ent.name), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    const files = [];
+    for (const kid of kids) {
+      if (!kid.isFile() || !kid.name.endsWith(".txt") || kid.name.startsWith(".")) continue;
+      files.push(kid.name);
+    }
+    files.sort((a, b) => a.localeCompare(b, "ko"));
+    if (files.length) dirs.push({ name: ent.name, files });
+  }
+  dirs.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  return { dirs };
+}
+
+function readPairCfg(raw) {
+  if (!raw) return null;
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const out = {};
+  let n = 0;
+  for (const [key, value] of Object.entries(data)) {
+    if (n >= 24) break;
+    if (typeof key !== "string" || !key || key.length > 40) continue;
+    const num = Number(value);
+    if (!Number.isFinite(num)) continue;
+    out[key] = num;
+    n += 1;
+  }
+  return n ? out : null;
+}
 
 function stopBridge() {
   try { pubSub.close(); } catch { /* ignore */ }

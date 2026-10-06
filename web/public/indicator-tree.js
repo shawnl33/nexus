@@ -14,6 +14,7 @@ const IndicatorTree = (() => {
     { id: "pgap", name: "지속목표차", members: ["fx_pgap3", "fx_pgap5", "fx_rgap", "fx_mgap", "fx_ugap"] },
     { id: "ymae", name: "양매수", members: ["fx_ymae", "fx_sniper", "fx_pvc", "fx_data2"] },
     { id: "ma", name: "이동평균", members: ["sma"] },
+    { id: "weekly", name: "위클리", members: ["w_ret_long", "w_ret_short", "w_link_long", "w_link_short", "ks_data2"] },
     { id: "misc", name: "기타", members: [] }, // 미분류 지표의 기본 그룹 (항상 마지막)
   ];
 

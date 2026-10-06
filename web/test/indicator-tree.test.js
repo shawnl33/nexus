@@ -37,6 +37,16 @@ test("buildTree: isKnown이 모르는 지표는 걸러낸다 (렌더러 없음)"
   assert.deepEqual(tree.map((c) => c.id), ["ma"]);
 });
 
+test("buildTree: 국내선물 Data2는 위클리 지표와 같은 묶음이다", () => {
+  const tree = T.buildTree([
+    { id: "w_link_long", name: "위클리 프라이스링크 양매수" },
+    { id: "ks_data2", name: "스나이퍼스코프 국내선물 Data2" },
+  ]);
+  const weekly = tree.find((c) => c.id === "weekly");
+  assert.ok(weekly);
+  assert.deepEqual(weekly.indicators.map((m) => m.id), ["w_link_long", "ks_data2"]);
+});
+
 test("buildTree: 지표가 없는 카테고리는 빼고, 카테고리 안에서는 매니페스트 순서다", () => {
   const tree = T.buildTree([
     { id: "z2" }, { id: "sma" }, { id: "z1" }, // 기타 2개 + 이평균, 미래곡선 없음

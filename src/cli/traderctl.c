@@ -18,12 +18,19 @@
 #ifdef _WIN32
 #undef _WIN32_WINNT
 #define _WIN32_WINNT 0x0601 /* QueryFullProcessImageName (pid 신원 확인) 때문에 Vista+ */
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
+#include <shellapi.h>
+#include <signal.h>
 #else
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -46,6 +53,10 @@ static void print_usage(const char *prog) {
     printf("\nCommands:\n");
     printf("  status                  엔진 모드·연결·복구·제한 상태\n");
     printf("  engine stop             엔진 정상 종료 요청\n");
+    printf("  up                      이 터미널에서 엔진과 대시보드를 함께 실행\n");
+    printf("                          --live SYM | --live-fut SYM | --replay FILE [--replay-delay MS]\n");
+    printf("                          --web DIR (기본 ./web). Ctrl+C 한 번에 종료\n");
+    printf("                          패키지가 없거나 불러오지 못하면 npm install 을 먼저 한다\n");
     printf("  engine restart          엔진 재기동 (소멸 확인 후 기동)\n");
     printf("                          --symbol X (기본 A016C000) --log PATH (기본 /tmp/engine-lived2.log)\n");
     printf("                          --wait SEC (기본 240) --pidfile PATH (기본 /tmp/trading-engine-<endpoint port>.pid)\n");
@@ -556,6 +567,582 @@ static void print_log_tail(const char *log_path) {
     fprintf(stderr, "--- %s tail ---\n%s\n", log_path, start);
 }
 
+static volatile sig_atomic_t g_up_stop = 0;
+
+#ifndef _WIN32
+static void on_up_signal(int sig) {
+    (void)sig;
+    g_up_stop = 1;
+}
+#endif
+
+#ifdef _WIN32
+static BOOL WINAPI on_up_console(DWORD type) {
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
+        g_up_stop = 1;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static HANDLE g_node_proc;
+#endif
+static long g_node_pid = -1;
+
+static bool file_readable(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (f == 0) {
+        return false;
+    }
+    fclose(f);
+    return true;
+}
+
+static void dirname_inplace(char *p) {
+    size_t n = strlen(p);
+    while (n > 0 && p[n - 1] != '/' && p[n - 1] != '\\') {
+        n--;
+    }
+    if (n > 0) {
+        p[n - 1] = '\0';
+    }
+}
+
+/* 대시보드 디렉터리. --web, 현재 디렉터리의 web/, 실행 파일 두 단계 위의 web/ 순. */
+static bool find_web_dir(char *out, size_t cap, const char *override) {
+    char js[1220];
+    if (override != 0) {
+        snprintf(js, sizeof(js), "%s/server.js", override);
+        if (!file_readable(js)) {
+            return false;
+        }
+        snprintf(out, cap, "%s", override);
+        return true;
+    }
+    if (file_readable("web/server.js")) {
+        snprintf(out, cap, "web");
+        return true;
+    }
+    char exe[1100];
+    if (!engine_path(exe, sizeof(exe))) {
+        return false;
+    }
+    dirname_inplace(exe);
+    dirname_inplace(exe);
+    if (snprintf(js, sizeof(js), "%s/web/server.js", exe) >= (int)sizeof(js)) {
+        return false;
+    }
+    if (!file_readable(js)) {
+        return false;
+    }
+    if (snprintf(out, cap, "%s/web", exe) >= (int)cap) {
+        return false;
+    }
+    return true;
+}
+
+/* 터미널에 붙은 자식. 로그를 파일로 빼거나 세션을 분리하지 않는다. */
+static long spawn_attached(const char *exe, char *const argv[], const char *cwd,
+                           char *err, size_t errcap, bool is_node) {
+#ifdef _WIN32
+    char cmdline[2000];
+    size_t used = 0;
+    cmdline[0] = '\0';
+    for (int i = 0; argv[i] != 0; i++) {
+        int n = snprintf(cmdline + used, sizeof(cmdline) - used, "%s\"%s\"", i ? " " : "", argv[i]);
+        if (n < 0 || (size_t)n >= sizeof(cmdline) - used) {
+            snprintf(err, errcap, "명령줄이 너무 깁니다");
+            return -1;
+        }
+        used += (size_t)n;
+    }
+    STARTUPINFOA si;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi;
+    memset(&pi, 0, sizeof(pi));
+    BOOL ok = CreateProcessA(exe, cmdline, NULL, NULL, TRUE, 0, NULL, cwd, &si, &pi);
+    if (!ok) {
+        snprintf(err, errcap, "CreateProcess 실패: %lu", (unsigned long)GetLastError());
+        return -1;
+    }
+    CloseHandle(pi.hThread);
+    if (is_node) {
+        g_node_proc = pi.hProcess;
+        g_node_pid = (long)pi.dwProcessId;
+    } else {
+        g_child_proc = pi.hProcess;
+    }
+    return (long)pi.dwProcessId;
+#else
+    (void)is_node;
+    pid_t pid = fork();
+    if (pid < 0) {
+        snprintf(err, errcap, "fork 실패: %s", strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        if (cwd != 0 && chdir(cwd) != 0) {
+            fprintf(stderr, "chdir 실패: %s\n", strerror(errno));
+            _exit(127);
+        }
+        if (exe != 0) {
+            execv(exe, argv);
+        } else {
+            execvp(argv[0], argv);
+        }
+        fprintf(stderr, "exec 실패: %s\n", strerror(errno));
+        _exit(127);
+    }
+    if (is_node) {
+        g_node_pid = (long)pid;
+    }
+    return (long)pid;
+#endif
+}
+
+/* 자식이 끝날 때까지 기다린다. g_child_proc(엔진)은 건드리지 않는다.
+ * 반환: 종료 코드, 띄우기 실패 -1, Ctrl+C -2. */
+static int spawn_and_wait(char *const argv[], const char *cwd, char *err, size_t errcap) {
+#ifdef _WIN32
+    char cmdline[2000];
+    size_t used = 0;
+    cmdline[0] = '\0';
+    for (int i = 0; argv[i] != 0; i++) {
+        int n = snprintf(cmdline + used, sizeof(cmdline) - used, "%s\"%s\"", i ? " " : "", argv[i]);
+        if (n < 0 || (size_t)n >= sizeof(cmdline) - used) {
+            snprintf(err, errcap, "명령줄이 너무 깁니다");
+            return -1;
+        }
+        used += (size_t)n;
+    }
+    STARTUPINFOA si;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi;
+    memset(&pi, 0, sizeof(pi));
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, cwd, &si, &pi)) {
+        snprintf(err, errcap, "CreateProcess 실패: %lu", (unsigned long)GetLastError());
+        return -1;
+    }
+    CloseHandle(pi.hThread);
+    for (;;) {
+        if (g_up_stop) {
+            TerminateProcess(pi.hProcess, 1);
+            CloseHandle(pi.hProcess);
+            return -2;
+        }
+        if (WaitForSingleObject(pi.hProcess, 200) == WAIT_OBJECT_0) {
+            break;
+        }
+    }
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    return (int)code;
+#else
+    pid_t pid = fork();
+    if (pid < 0) {
+        snprintf(err, errcap, "fork 실패: %s", strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        if (cwd != 0 && chdir(cwd) != 0) {
+            fprintf(stderr, "chdir 실패: %s\n", strerror(errno));
+            _exit(127);
+        }
+        execvp(argv[0], argv);
+        fprintf(stderr, "exec 실패: %s\n", strerror(errno));
+        _exit(127);
+    }
+    for (;;) {
+        if (g_up_stop) {
+            kill(pid, SIGTERM);
+            waitpid(pid, 0, 0);
+            return -2;
+        }
+        int st = 0;
+        pid_t r = waitpid(pid, &st, WNOHANG);
+        if (r == pid) {
+            return WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+        }
+        sleep_ms(200);
+    }
+#endif
+}
+
+/* 0 이면 서버가 의존 패키지를 불러올 수 있다. 1 이면 없거나 깨진 설치. -1 이면 node 가 없다. */
+static int web_modules_ok(const char *web) {
+    const char *av[] = {
+        "node", "--input-type=module", "-e",
+        "import 'ws'; import 'zeromq';"
+        "import {existsSync} from 'node:fs';"
+        "if (!existsSync('node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js')) process.exit(1);",
+        0};
+    char err[256] = {0};
+    int rc = spawn_and_wait((char *const *)av, web, err, sizeof(err));
+    if (rc == -1 || rc == 127) {
+        return -1;
+    }
+    if (rc == -2) {
+        return -2;
+    }
+    return rc == 0 ? 0 : 1;
+}
+
+static int web_npm_install(const char *web) {
+#ifdef _WIN32
+    const char *av[] = {"cmd.exe", "/d", "/s", "/c", "npm install", 0};
+#else
+    const char *av[] = {"npm", "install", 0};
+#endif
+    char err[256] = {0};
+    return spawn_and_wait((char *const *)av, web, err, sizeof(err));
+}
+
+/* 패키지가 없거나 이 OS에서 불러오지 못하면 npm install 을 한 번 한다. */
+static int ensure_web_modules(const char *web) {
+    int ok = web_modules_ok(web);
+    if (ok == 0) {
+        return 0;
+    }
+    if (ok == -2) {
+        return -2;
+    }
+    if (ok < 0) {
+        fprintf(stderr, "error: node 를 찾지 못했습니다. Node.js 20 이상을 설치하세요\n");
+        return 6;
+    }
+    printf("대시보드 패키지가 없거나 불러오지 못합니다. npm install 을 실행합니다\n");
+    fflush(stdout);
+    int rc = web_npm_install(web);
+    if (rc == -2) {
+        return -2;
+    }
+    if (rc != 0) {
+        fprintf(stderr, "error: npm install 실패 (종료 %d)\n", rc);
+        return 6;
+    }
+    ok = web_modules_ok(web);
+    if (ok == -2) {
+        return -2;
+    }
+    if (ok != 0) {
+        fprintf(stderr, "error: npm install 후에도 대시보드 패키지를 불러오지 못합니다\n");
+        return 6;
+    }
+    return 0;
+}
+
+/* node 가 listen 하기 전에 브라우저를 열면 실패 화면이 남는다. */
+static bool port_open(int port) {
+#ifdef _WIN32
+    SOCKET fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == INVALID_SOCKET) {
+        return false;
+    }
+#else
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return false;
+    }
+#endif
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((unsigned short)port);
+    addr.sin_addr.s_addr = htonl(0x7F000001);
+    int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+    return rc == 0;
+}
+
+static bool port_open_v6(int port) {
+#ifdef _WIN32
+    SOCKET fd = socket(AF_INET6, SOCK_STREAM, 0);
+    if (fd == INVALID_SOCKET) {
+        return false;
+    }
+#else
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return false;
+    }
+#endif
+    struct sockaddr_in6 addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons((unsigned short)port);
+    addr.sin6_addr = in6addr_loopback;
+    int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+    return rc == 0;
+}
+
+static void open_dashboard(const char *url) {
+#ifdef _WIN32
+    ShellExecuteA(NULL, "open", url, NULL, NULL, SW_SHOWNORMAL);
+#else
+    pid_t p = fork();
+    if (p == 0) {
+        execlp("xdg-open", "xdg-open", url, (char *)0);
+        _exit(127);
+    }
+#endif
+}
+
+static bool node_exited(void) {
+    if (g_node_pid < 0) {
+        return true;
+    }
+#ifdef _WIN32
+    DWORD code = 0;
+    if (g_node_proc == NULL || !GetExitCodeProcess(g_node_proc, &code)) {
+        return false;
+    }
+    return code != STILL_ACTIVE;
+#else
+    int st = 0;
+    pid_t r = waitpid((pid_t)g_node_pid, &st, WNOHANG);
+    return r == (pid_t)g_node_pid;
+#endif
+}
+
+/* 엔진(우리가 띄운 경우)과 대시보드를 이 터미널에서 함께 실행한다. */
+static int run_up(const opts_t *opts, int argc, char **argv) {
+    const char *mode = 0;
+    const char *arg = 0;
+    const char *replay_delay = 0;
+    const char *web_override = 0;
+    for (int j = 0; j < argc; j++) {
+        if (strcmp(argv[j], "--live") == 0 && j + 1 < argc) {
+            mode = "--live";
+            arg = argv[++j];
+        } else if (strcmp(argv[j], "--live-fut") == 0 && j + 1 < argc) {
+            mode = "--live-fut";
+            arg = argv[++j];
+        } else if (strcmp(argv[j], "--replay") == 0 && j + 1 < argc) {
+            mode = "--replay";
+            arg = argv[++j];
+        } else if (strcmp(argv[j], "--replay-delay") == 0 && j + 1 < argc) {
+            replay_delay = argv[++j];
+        } else if (strcmp(argv[j], "--web") == 0 && j + 1 < argc) {
+            web_override = argv[++j];
+        } else {
+            fprintf(stderr, "error: up 인자 오류: %s\n", argv[j]);
+            return 2;
+        }
+    }
+    if (mode == 0 || arg == 0 || arg[0] == '\0') {
+        fprintf(stderr, "error: up 에는 --live SYM, --live-fut SYM, --replay FILE 중 하나가 필요합니다\n");
+        return 2;
+    }
+
+    char web[1100];
+    if (!find_web_dir(web, sizeof(web), web_override)) {
+        fprintf(stderr, "error: 대시보드 디렉터리를 찾지 못했습니다 (web/server.js). 저장소 루트에서 실행하세요\n");
+        return 6;
+    }
+
+    char exe[1100];
+    if (!engine_path(exe, sizeof(exe))) {
+        fprintf(stderr, "error: 엔진 경로 확인 실패\n");
+        return 6;
+    }
+
+    char cmd_id[64];
+    snprintf(cmd_id, sizeof(cmd_id), "traderctl-%llu", (unsigned long long)g_cmd_seq++);
+    long existing = -1;
+    bool started_engine = false;
+    long engine_pid = -1;
+    int st = query_status_pid(opts->endpoint, opts->timeout_ms, cmd_id, &existing);
+    if (st > 0) {
+        printf("엔진이 이미 실행 중: pid %ld — 대시보드만 띄웁니다\n", existing);
+        fflush(stdout);
+    } else {
+        if (!file_readable(exe)) {
+            fprintf(stderr, "error: 엔진 바이너리 없음: %s\n", exe);
+            return 6;
+        }
+        char pub_ep[256];
+        derive_pub_endpoint(opts->endpoint, pub_ep, sizeof(pub_ep));
+        const char *av[12];
+        int n = 0;
+        av[n++] = exe;
+        av[n++] = mode;
+        av[n++] = arg;
+        if (replay_delay != 0) {
+            av[n++] = "--replay-delay";
+            av[n++] = replay_delay;
+        }
+        av[n++] = "--cmd-endpoint";
+        av[n++] = opts->endpoint;
+        av[n++] = "--pub-endpoint";
+        av[n++] = pub_ep;
+        av[n] = 0;
+        char err[256] = {0};
+        engine_pid = spawn_attached(exe, (char *const *)av, 0, err, sizeof(err), false);
+        if (engine_pid < 0) {
+            fprintf(stderr, "error: %s\n", err);
+            return 6;
+        }
+        started_engine = true;
+        printf("엔진 기동 중: pid %ld\n", engine_pid);
+        fflush(stdout);
+        unsigned long start = now_ms();
+        for (;;) {
+            snprintf(cmd_id, sizeof(cmd_id), "traderctl-%llu", (unsigned long long)g_cmd_seq++);
+            long new_pid = -1;
+            if (query_status_pid(opts->endpoint, 500, cmd_id, &new_pid) != 0) {
+                printf("엔진 준비됨: pid %ld\n", new_pid > 0 ? new_pid : engine_pid);
+                fflush(stdout);
+                break;
+            }
+            if (child_exited(engine_pid)) {
+                fprintf(stderr, "error: 엔진이 기동 중 종료됨\n");
+                return 6;
+            }
+            if (now_ms() - start >= 60000UL) {
+                fprintf(stderr, "error: 60초 내 엔진이 준비되지 않음\n");
+                force_kill(engine_pid);
+                return 4;
+            }
+            sleep_ms(500);
+        }
+    }
+
+#ifndef _WIN32
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_up_signal;
+    sigaction(SIGINT, &sa, 0);
+    sigaction(SIGTERM, &sa, 0);
+#else
+    SetConsoleCtrlHandler(on_up_console, TRUE);
+#endif
+
+    int deps = ensure_web_modules(web);
+    if (deps != 0) {
+        if (started_engine && pid_alive(engine_pid)) {
+            force_kill(engine_pid);
+        }
+        return deps == -2 ? 0 : deps;
+    }
+
+    char web_abs[1100];
+#ifdef _WIN32
+    DWORD wn = GetFullPathNameA(web, (DWORD)sizeof(web_abs), web_abs, NULL);
+    if (wn == 0 || wn >= sizeof(web_abs)) {
+        snprintf(web_abs, sizeof(web_abs), "%s", web);
+    }
+    SetEnvironmentVariableA("DASHBOARD_ROOT", web_abs);
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+#else
+    if (web[0] == '/') {
+        snprintf(web_abs, sizeof(web_abs), "%s", web);
+    } else if (getcwd(web_abs, sizeof(web_abs)) == 0) {
+        snprintf(web_abs, sizeof(web_abs), "%s", web);
+    } else {
+        size_t n = strlen(web_abs);
+        snprintf(web_abs + n, sizeof(web_abs) - n, "/%s", web);
+    }
+    setenv("DASHBOARD_ROOT", web_abs, 1);
+#endif
+
+    /* 윈도우 브라우저의 localhost 는 ::1 을 먼저 연다. 그 쪽 8080 은
+       Elgato Stream Deck 이 차지하고 404 page not found 를 돌려준다.
+       리눅스에서 8080 이 비어 있어도 그 404 는 보이지 않으므로 18080 을 쓴다. */
+    int dash_port = 18080;
+    if (port_open(dash_port) || port_open_v6(dash_port)) {
+        dash_port = 18081;
+        fprintf(stderr, "18080은 이미 사용 중입니다. 대시보드는 %d 포트를 사용합니다\n", dash_port);
+    }
+    char port_text[16];
+    snprintf(port_text, sizeof(port_text), "%d", dash_port);
+#ifdef _WIN32
+    SetEnvironmentVariableA("DASHBOARD_PORT", port_text);
+#else
+    setenv("DASHBOARD_PORT", port_text, 1);
+#endif
+
+    const char *nav[3];
+    nav[0] = "node";
+    nav[1] = "server.js";
+    nav[2] = 0;
+    char err[256] = {0};
+    long node_pid = spawn_attached(0, (char *const *)nav, web, err, sizeof(err), true);
+    if (node_pid < 0) {
+        fprintf(stderr, "error: 대시보드 기동 실패: %s\n", err);
+        if (started_engine) {
+            force_kill(engine_pid);
+        }
+        return 6;
+    }
+    char dash_url[64];
+    snprintf(dash_url, sizeof(dash_url), "http://127.0.0.1:%d", dash_port);
+    printf("대시보드: %s  (Ctrl+C 로 종료)\n", dash_url);
+    fflush(stdout);
+    bool ready = false;
+    unsigned long wait_from = now_ms();
+    while (!g_up_stop && !node_exited() && now_ms() - wait_from < 20000UL) {
+        if (port_open(dash_port)) {
+            ready = true;
+            break;
+        }
+        sleep_ms(100);
+    }
+    if (ready) {
+        open_dashboard(dash_url);
+    } else if (!node_exited()) {
+        fprintf(stderr, "error: 20초 안에 대시보드 포트가 열리지 않았습니다\n");
+    }
+
+    while (!g_up_stop) {
+        if (started_engine && child_exited(engine_pid)) {
+            fprintf(stderr, "엔진이 종료되었습니다\n");
+            break;
+        }
+        if (node_exited()) {
+            fprintf(stderr, "대시보드가 종료되었습니다\n");
+            break;
+        }
+        sleep_ms(200);
+    }
+
+    if (!node_exited()) {
+#ifdef _WIN32
+        if (g_node_proc != NULL) {
+            TerminateProcess(g_node_proc, 1);
+        }
+#else
+        kill((pid_t)g_node_pid, SIGTERM);
+#endif
+    }
+    if (started_engine && pid_alive(engine_pid) && !wait_gone(engine_pid, 3)) {
+        force_kill(engine_pid);
+    }
+#ifdef _WIN32
+    if (g_node_proc != NULL) {
+        CloseHandle(g_node_proc);
+        g_node_proc = NULL;
+    }
+    if (g_child_proc != NULL) {
+        CloseHandle(g_child_proc);
+        g_child_proc = NULL;
+    }
+#endif
+    return 0;
+}
+
 static int run_engine_restart(const opts_t *opts, const restart_opts_t *ro) {
     char cmd_id[64];
 
@@ -711,6 +1298,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[i], "shell") == 0) {
         return run_shell(&opts);
+    }
+    if (strcmp(argv[i], "up") == 0) {
+        return run_up(&opts, argc - (i + 1), argv + i + 1);
     }
     if (strcmp(argv[i], "engine") == 0 && i + 1 < argc && strcmp(argv[i + 1], "restart") == 0) {
         restart_opts_t ro = {"A016C000", "/tmp/engine-lived2.log", 0, 240};

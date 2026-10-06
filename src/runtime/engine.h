@@ -32,6 +32,7 @@
 #include "core/indicators/fx_yangmae.h"
 #include "core/functions/osf_clv_vol_flow_v1.h"
 #include "core/indicators/fx_sniper.h"
+#include "core/functions/ks_score_v1.h"
 #include "core/market/bar_builder.h"
 
 typedef struct {
@@ -200,6 +201,12 @@ typedef struct {
     tr_osf_combo_t osf; /* 해외선물 1분봉 호가 대체. 국내 파이프는 읽지 않는다 */
     int64_t pgap_key;
     bool pgap_has_key;
+    /* 국내선물 1분 스나이퍼 Data2. is_futures && !is_ovs 일 때만 init·평가한다. */
+    tr_ksscore_t ks;
+    int64_t ks_bdate;
+    int32_t ks_day_index;
+    int32_t ks_current;
+    bool ks_has_date;
 } tr_pipeline_t;
 
 #define TR_ENGINE_MAX_PIPES 8 /* 동시 관측 종목 상한 (더 필요하면 상수만 올린다) */
@@ -264,6 +271,11 @@ struct tr_engine {
     tr_osf_combo_t osf; /* 해외선물 1분봉 호가 대체. 국내 파이프는 읽지 않는다 */
             int64_t pgap_key;
             bool pgap_has_key;
+            tr_ksscore_t ks;
+            int64_t ks_bdate;
+            int32_t ks_day_index;
+            int32_t ks_current;
+            bool ks_has_date;
         };
     };
     tr_pipeline_t pipe_slots[TR_ENGINE_MAX_PIPES - 1]; /* pipes[1..] 내장 저장소 */
@@ -319,6 +331,11 @@ TR_ENGINE_PIPE_LAYOUT_CHECK(sniper);
 TR_ENGINE_PIPE_LAYOUT_CHECK(osf);
 TR_ENGINE_PIPE_LAYOUT_CHECK(pgap_key);
 TR_ENGINE_PIPE_LAYOUT_CHECK(pgap_has_key);
+TR_ENGINE_PIPE_LAYOUT_CHECK(ks);
+TR_ENGINE_PIPE_LAYOUT_CHECK(ks_bdate);
+TR_ENGINE_PIPE_LAYOUT_CHECK(ks_day_index);
+TR_ENGINE_PIPE_LAYOUT_CHECK(ks_current);
+TR_ENGINE_PIPE_LAYOUT_CHECK(ks_has_date);
 #undef TR_ENGINE_PIPE_LAYOUT_CHECK
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
@@ -344,6 +361,11 @@ tr_pipeline_t *tr_engine_pipe_add(tr_engine_t *e, uint64_t instrument_id, bool i
                                   tr_candle_t *bb_storage, size_t bb_capacity,
                                   double *score_mid_storage, size_t score_mid_capacity);
 bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id);
+
+/* 기존 저장소로 파이프라인을 다시 초기화하고 봉 링 용량만 바꾼다.
+ * 지표·봉은 비워지고 generation은 1 증가한다. 상태 링·마켓 링은 꺼지므로
+ * 호출자가 다시 부착한다. bb_capacity는 호출자 저장소 길이 이하여야 한다. */
+bool tr_engine_pipe_resize(tr_engine_t *e, tr_pipeline_t *p, size_t bb_capacity);
 
 /* 파이프라인의 1틱 raw 크기 (tick_raw 명시 > 자동: 선물 5, 주식 100).
  * chart.snapshot의 reg_flat 재계산 등 엔진 밖 포맷이 엔진과 같은 규칙을 쓰게 한다. */

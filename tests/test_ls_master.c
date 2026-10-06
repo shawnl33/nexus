@@ -35,6 +35,77 @@ static void test_parse_stock(void) {
     TR_CHECK(strcmp(g_items[1].name, "삼성전자") == 0);
 }
 
+/* 실제 t8433 응답 두 행 (2026-10-04). 이름에 위클리는 없고 C/P·만기·행사가다. */
+static const char *OPT_RESP =
+    "{\"t8433OutBlock\":["
+    "{\"hname\":\"C 2610   745.0\",\"shcode\":\"B016A745\",\"expcode\":\"KR4B016A7454\"},"
+    "{\"hname\":\"P 2610   745.0\",\"shcode\":\"C016A745\",\"expcode\":\"KR4C016A7452\"}]}";
+
+static void test_parse_opt(void) {
+    int n = ls_master_parse_opt(OPT_RESP, strlen(OPT_RESP), g_items, CAP);
+    TR_CHECK(n == 2);
+    TR_CHECK(strcmp(g_items[0].shcode, "B016A745") == 0);
+    TR_CHECK(strcmp(g_items[0].name, "C 2610   745.0") == 0);
+    TR_CHECK(strcmp(g_items[0].expcode, "KR4B016A7454") == 0);
+    TR_CHECK(g_items[0].market == LS_MARKET_KP200_OPT);
+    TR_CHECK(!g_items[0].is_futures);
+    TR_CHECK(g_items[0].tick_raw == 1.0);
+    TR_CHECK(g_items[1].market == LS_MARKET_KP200_OPT);
+    TR_CHECK(strcmp(g_items[1].shcode, "C016A745") == 0);
+    TR_CHECK(ls_master_parse_opt("{\"rsp_cd\":\"00000\"}", 18, g_items, CAP) == 0);
+}
+
+/* 실제 t8435 gubun WK 한 행 (2026-10-04). 월요일 위클리 콜, 행사가 1140. */
+static const char *WEEKLY_RESP =
+    "{\"t8435OutBlock\":["
+    "{\"hname\":\"C 월 W1 1,140.0\",\"shcode\":\"BAFC0A57\",\"expcode\":\"KR4BAFC0A570\"}]}";
+
+static void test_opt_name_and_expiries(void) {
+    char cp = 0;
+    char ex[24];
+    double strike = 0;
+    TR_CHECK(ls_opt_parse_name("C 2610   745.0", &cp, ex, sizeof(ex), &strike));
+    TR_CHECK(cp == 'C' && strcmp(ex, "2610") == 0 && strike == 745.0);
+    TR_CHECK(ls_opt_parse_name("P 2610   745.0", &cp, ex, sizeof(ex), &strike));
+    TR_CHECK(cp == 'P' && strike == 745.0);
+    TR_CHECK(ls_opt_parse_name("C 월 W1 1,140.0", &cp, ex, sizeof(ex), &strike));
+    TR_CHECK(cp == 'C' && strcmp(ex, "월 W1") == 0 && strike == 1140.0);
+    TR_CHECK(!ls_opt_parse_name("삼성전자", &cp, ex, sizeof(ex), &strike));
+    TR_CHECK(!ls_opt_parse_name("F 2612", &cp, ex, sizeof(ex), &strike));
+
+    ls_instrument_info_t items[4];
+    memset(items, 0, sizeof(items));
+    items[0].market = LS_MARKET_KP200_OPT;
+    snprintf(items[0].name, sizeof(items[0].name), "C 2611   700.0");
+    items[1].market = LS_MARKET_KP200_OPT;
+    snprintf(items[1].name, sizeof(items[1].name), "C 월 W1 1,140.0");
+    items[2].market = LS_MARKET_KP200_OPT;
+    snprintf(items[2].name, sizeof(items[2].name), "P 2610   745.0");
+    items[3].market = LS_MARKET_KOSPI;
+    snprintf(items[3].name, sizeof(items[3].name), "삼성전자");
+    tr_ls_master_t m = {.items = items, .count = 4};
+    char keys[8][24];
+    size_t n = ls_master_option_expiries(&m, &keys[0][0], 24, 8);
+    TR_CHECK(n == 3);
+    TR_CHECK(strcmp(keys[0], "월 W1") == 0);
+    TR_CHECK(strcmp(keys[1], "2610") == 0);
+    TR_CHECK(strcmp(keys[2], "2611") == 0);
+    const ls_instrument_info_t *hits[4];
+    size_t c = ls_master_collect(&m, 3, 0, "2610", hits, 4);
+    TR_CHECK(c == 1 && strcmp(hits[0]->name, "P 2610   745.0") == 0);
+}
+
+static void test_parse_weekly_opt(void) {
+    int n = ls_master_parse_opt(WEEKLY_RESP, strlen(WEEKLY_RESP), g_items, CAP);
+    TR_CHECK(n == 1);
+    TR_CHECK(strcmp(g_items[0].shcode, "BAFC0A57") == 0);
+    TR_CHECK(strcmp(g_items[0].name, "C 월 W1 1,140.0") == 0);
+    TR_CHECK(strcmp(g_items[0].expcode, "KR4BAFC0A570") == 0);
+    TR_CHECK(g_items[0].market == LS_MARKET_KP200_OPT);
+    TR_CHECK(!g_items[0].is_futures);
+    TR_CHECK(g_items[0].tick_raw == 1.0);
+}
+
 static void test_parse_fut(void) {
     int n = ls_master_parse_fut(FUT_RESP, strlen(FUT_RESP), g_items, CAP);
     TR_CHECK(n == 2);
@@ -172,6 +243,29 @@ static void test_ovsfut_static_table(void) {
     TR_CHECK(tr_session_policy_validate(&s));
 }
 
+/* 코드가 정확히 같은 종목은, 그 코드가 이름에 들어 있는 앞선 종목보다 먼저 나온다.
+ * 검색 상한이 20이라 지수옵션 코드가 주식 이름에 묻히면 종목 추가에서 고를 수 없다. */
+static void test_search_exact_code_before_name(void) {
+    ls_instrument_info_t items[3];
+    memset(items, 0, sizeof(items));
+    snprintf(items[0].shcode, sizeof(items[0].shcode), "000001");
+    snprintf(items[0].name, sizeof(items[0].name), "B016A745 관련");
+    snprintf(items[1].shcode, sizeof(items[1].shcode), "B016A745");
+    snprintf(items[1].name, sizeof(items[1].name), "C 2610   745.0");
+    snprintf(items[2].shcode, sizeof(items[2].shcode), "B016A750");
+    snprintf(items[2].name, sizeof(items[2].name), "C 2610   750.0");
+    tr_ls_master_t m = {.items = items, .count = 3};
+    const ls_instrument_info_t *hits[2];
+
+    size_t k = ls_master_search(&m, "B016A745", hits, 1);
+    TR_CHECK(k == 1 && strcmp(hits[0]->shcode, "B016A745") == 0);
+
+    k = ls_master_search(&m, "b016a", hits, 2);
+    TR_CHECK(k == 2);
+    TR_CHECK(strcmp(hits[0]->shcode, "B016A745") == 0);
+    TR_CHECK(strcmp(hits[1]->shcode, "B016A750") == 0);
+}
+
 static void test_ovsfut_static_search(void) {
     const ls_ovsfut_entry_t *hits[CAP];
     /* 접두·월물 코드 접두사 */
@@ -198,8 +292,12 @@ static void test_ovsfut_static_search(void) {
 int main(void) {
     test_parse_stock();
     test_parse_fut();
+    test_parse_opt();
+    test_opt_name_and_expiries();
+    test_parse_weekly_opt();
     test_find_and_at();
     test_search();
+    test_search_exact_code_before_name();
     test_parse_ovs_master();
     test_ovs_precision_exclusion();
     test_ovsfut_static_table();

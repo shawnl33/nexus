@@ -39,6 +39,8 @@ before(async () => {
           returned: 1,
           items: [{ shcode: "005930", name: "삼성전자", fut: 0 }],
           echo_q: reqData.q ?? "",
+          echo_kind: reqData.kind ?? null,
+          echo_expiry: reqData.expiry ?? "",
         };
       } else if (type === "chart.snapshot") {
         const back = reqData.back_index ?? 0;
@@ -136,6 +138,20 @@ test("GET /api/token issues token to same-origin/local clients", async () => {
   assert.equal(res.status, 403);
 });
 
+test("GET /api/yeslang lists original folders without experiments or functions", async () => {
+  const res = await fetch(`${base}/api/yeslang`);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  const names = data.dirs.map((d) => d.name);
+  assert.ok(names.includes("indicators"));
+  assert.ok(names.includes("signals"));
+  assert.equal(names.includes("experiments"), false);
+  assert.equal(names.includes("functions"), false);
+  const signals = data.dirs.find((d) => d.name === "signals");
+  assert.ok(signals.files.includes("#우드스탁_위클리_페어시스템_양매도.txt"));
+  assert.ok(signals.files.every((f) => f.endsWith(".txt")));
+});
+
 test("GET /api/market proxies registry search with query", async () => {
   const res = await fetch(`${base}/api/market?q=${encodeURIComponent("삼성")}&limit=20`);
   assert.equal(res.status, 200);
@@ -143,6 +159,16 @@ test("GET /api/market proxies registry search with query", async () => {
   assert.equal(data.status, "applied");
   assert.equal(data.payload.echo_q, "삼성");
   assert.equal(data.payload.items[0].shcode, "005930");
+});
+
+test("GET /api/market forwards kind and expiry", async () => {
+  const res = await fetch(`${base}/api/market?kind=3&expiry=${encodeURIComponent("2610")}&limit=500`);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.payload.echo_kind, 3);
+  assert.equal(data.payload.echo_expiry, "2610");
+  const bad = await fetch(`${base}/api/market?kind=9`);
+  assert.equal(bad.status, 400);
 });
 
 test("GET /api/market rejects overlong query", async () => {

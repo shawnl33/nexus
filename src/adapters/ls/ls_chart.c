@@ -9,6 +9,9 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "adapters/ls/ls_http.h"
 #include "core/model/civil_time.h"
@@ -240,8 +243,10 @@ int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shc
 
     const char *inblock = tr_for(kind);
     char body[1024];
-    /* 연속 조회는 InBlock cts가 아니라 edate/etime을 이전 페이지 cts 값으로 옮기는
-     * 방식만 서버가 받아들인다 (2026-09-28 t8465 실측, docs/ls_api_mapping.md §3) */
+    /* 연속 조회는 TR마다 다르다 (docs/ls_api_mapping.md §3).
+     * t8465: cts 필드는 비우고 edate/etime에 이전 cts. 그러면 tr_cont=N.
+     * t8412: edate는 99999999, 이전 cts를 InBlock cts에 넣는다. cts가 있으면 tr_cont=Y.
+     *   edate/etime에 cts를 옮기면 같은 500봉이 반복된다 (2026-10-03 005930 실측). */
     snprintf(body, sizeof(body),
         "{\"%sInBlock\":{\"shcode\":\"%s\",\"ncnt\":%d,\"qrycnt\":%d,"
         "\"nday\":\"0\",\"sdate\":\" \",\"stime\":\" \",\"edate\":\"%s\",\"etime\":\"%s\","
@@ -255,7 +260,8 @@ int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shc
     ls_http_req_t req = {0};
     req.url = path_for(kind);
     req.tr_cd = tr_for(kind);
-    req.tr_cont = "N";
+    bool cts_set = (cts_date != 0 && cts_date[0] > ' ') || (cts_time != 0 && cts_time[0] > ' ');
+    req.tr_cont = cts_set ? "Y" : "N";
     req.body_json = body;
     req.timeout_ms = 10000;
 

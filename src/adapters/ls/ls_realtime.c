@@ -157,7 +157,7 @@ bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id
 
     if (strcmp(out->tr_cd, "S3_") == 0 || strcmp(out->tr_cd, "K3_") == 0 ||
         strcmp(out->tr_cd, "FC9") == 0 || strcmp(out->tr_cd, "DC0") == 0 ||
-        strcmp(out->tr_cd, "US3") == 0) {
+        strcmp(out->tr_cd, "OC0") == 0 || strcmp(out->tr_cd, "US3") == 0) {
         out->kind = LS_RT_TICK;
         out->price = parse_price(yyjson_obj_get(b, "price"));
         out->qty = parse_i64(yyjson_obj_get(b, "cvolume"));
@@ -201,6 +201,7 @@ bool tr_ls_rt_parse_message(const char *body, size_t len, uint64_t instrument_id
         }
     } else if (strcmp(out->tr_cd, "H1_") == 0 || strcmp(out->tr_cd, "HA_") == 0 ||
                strcmp(out->tr_cd, "FH9") == 0 || strcmp(out->tr_cd, "DH0") == 0 ||
+               strcmp(out->tr_cd, "OH0") == 0 ||
                strcmp(out->tr_cd, "OVH") == 0 || strcmp(out->tr_cd, "WOH") == 0) {
         out->kind = LS_RT_ORDERBOOK;
         /* 해외선물(OVH/WOH)의 hotime은 거래소 현지 시각이다 (2026-10-01 ESZ26 실측:

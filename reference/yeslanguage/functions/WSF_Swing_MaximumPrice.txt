@@ -1,0 +1,58 @@
+Input: 상한가(NumericRef),상한가거래량(NumericRef);
+
+          
+var :  UpLimit(0);
+ var : up1(0), up2(0), up3(0), up4(0), up5(0),up6(0),Up7(0);
+
+                        
+                                            
+           UpLimit = (BP[0]  * 1.30);                   
+       if CodeCategory() == 2 then                   
+           {
+             up1  = int(UpLimit/100+0.00001)*100;    
+             up2  = int(UpLimit/100+0.00001)*100;    
+             up3  = int(UpLimit/100+0.00001)*100;    
+             up4  = int(UpLimit/50+0.00001)*50;      
+             up5  = int(UpLimit/10+0.00001)*10;      
+             up6  = int(UpLimit/5+0.00001)*5;
+             up7  = int(UpLimit/1+0.00001)*1;
+              }
+   
+     
+     Else {                                         
+             up1  = int(UpLimit/1000+0.00001)*1000; 
+         up2  = int(UpLimit/500+0.00001)*500;   
+         up3  = int(UpLimit/100+0.00001)*100;   
+         up4  = int(UpLimit/50+0.00001)*50;     
+         up5  = int(UpLimit/10+0.00001)*10;     
+         up6  = int(UpLimit/5+0.00001)*5;
+         up7  = int(UpLimit/1+0.00001)*1;
+       }
+       if CodeCategory() == 1 || CodeCategory() == 2 then { 
+ {
+               If BP  >= 500000 Then        
+                     상한가 = up1;
+               Else If BP  >= 100000 Then 
+                     상한가 = iff(up2>=500000, up1, up2);
+                   Else If BP  >= 50000 Then
+                     상한가 = iff(up3>=100000, up2, up3);
+               Else If BP  >= 10000 Then
+                     상한가 = iff(up4>=50000,  up3, up4);
+               Else If BP  >= 5000 Then      
+                     상한가 = iff(up5>=10000,  up4, up5);
+               Else If BP  >= 1000 Then      
+                     상한가 = iff(up5>=5000,  up5, up6);
+               Else        
+                     상한가 = iff(up6>=1000, up6, up7);
+         }
+       }
+       else if CodeCategory() == 8 || CodeCategory() == 9 then { // ETF
+           상한가 = up6;
+       }
+       
+    If C == 상한가 Then
+       상한가거래량 = V;
+    Else
+       상한가거래량 = 0;
+
+WSF_Swing_MaximumPrice = 1;

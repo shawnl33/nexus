@@ -19,6 +19,7 @@
 /* src/app/main.c 정의 — 테스트에서는 extern 선언으로 링크한다. */
 bool tr_backfill_keep_bar(tr_time_us_t open_us, tr_time_us_t now_us, uint32_t timeframe_sec);
 bool tr_backfill_marks_rt_only(int kind, int chart_rc);
+bool tr_backfill_page_extends(tr_time_us_t page_oldest, bool have_bars, tr_time_us_t held_oldest);
 
 #define TF1M_SEC 60u
 #define TF1M_US ((tr_time_us_t)TF1M_SEC * TR_US_PER_SEC)
@@ -65,6 +66,18 @@ static void test_timeframe_parameterized(void) {
 /* RT-only 판정: 해외선물 백필의 LS_CHART_EMPTY("해당자료가 없습니다" — 계정 권한 차단,
  * 2026-10-01 ESZ26 실측)만 RT-only다. 국내의 빈 응답(주말·거래정지)이나 해외의
  * 전송 오류는 RT-only가 아니다 (60초 재백필 대상 유지) */
+/* 같은 페이지 반복은 붙이지 않는다. 첫 페이지는 항상 받고, 이미 가진 가장 오래된
+ * 봉보다 과거인 페이지만 이어 붙인다. */
+static void test_page_extends_only_when_older(void) {
+    const tr_time_us_t older = utc(2026, 10, 1, 4, 2, 0);
+    const tr_time_us_t held = utc(2026, 10, 2, 2, 2, 0);
+    const tr_time_us_t newer = utc(2026, 10, 2, 10, 0, 0);
+    TR_CHECK(tr_backfill_page_extends(held, false, 0));
+    TR_CHECK(tr_backfill_page_extends(older, true, held));
+    TR_CHECK(!tr_backfill_page_extends(held, true, held));
+    TR_CHECK(!tr_backfill_page_extends(newer, true, held));
+}
+
 static void test_rt_only_classification(void) {
     TR_CHECK(tr_backfill_marks_rt_only(LS_MARKET_OVS_FUT, LS_CHART_EMPTY));
     TR_CHECK(!tr_backfill_marks_rt_only(LS_MARKET_OVS_FUT, LS_HTTP_OK));
@@ -80,6 +93,7 @@ int main(void) {
     test_next_session_stub_dropped();
     test_boundary_one_bar_slack();
     test_timeframe_parameterized();
+    test_page_extends_only_when_older();
     test_rt_only_classification();
     TR_TEST_SUMMARY();
 }

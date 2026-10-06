@@ -151,7 +151,7 @@ test("parse: 높이는 0.1~1로 클램프하고, 칸이 없으면 맨 차트 1�
 
   // 빈 화면틀의 기본 1칸도 current_symbol 폴백을 받는다
   const empty = W.parse({ schema_version: 2, current_symbol: "005930", panels: [] }, known);
-  assert.deepEqual(empty.frames[0].panels, [{ height: 1, symbol: "005930", panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [], overlayStyles: {} }]);
+  assert.deepEqual(empty.frames[0].panels, [{ height: 1, symbol: "005930", panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [], overlayStyles: {}, systems: [], linkLegs: { w_link_long: { opp: "", fut: "" }, w_link_short: { opp: "", fut: "" } } }]);
 
   const sym = W.parse({ schema_version: 2, panels: [] }, known);
   assert.equal(sym.symbol, ""); // current_symbol 누락/비문자 허용
@@ -195,25 +195,39 @@ test("parse: overlays가 없는 스키마 2는 빈 겹침이다", () => {
   }, known);
   assert.deepEqual(parsed.frames[0].overlays, []);
   assert.deepEqual(parsed.frames[0].overlayStyles, {});
-  assert.equal(parsed.frames[0].overlayScale, "price");
+  assert.equal(parsed.frames[0].overlayScale, "shared");
 });
 
-test("serialize→parse: 겹침 눈금은 비율·같은 눈금만 유지하고 없으면 각자 가격이다", () => {
+test("serialize→parse: 겹침 눈금은 각자 가격·비율·같은 눈금을 유지하고 없으면 같은 눈금이다", () => {
   const ws = W.serialize("눈금", [
-    { height: 1, overlays: ["005930"], overlayScale: "shared", panels: [{ height: 1, symbol: "000660", indicators: [] }] },
+    { height: 1, overlays: ["005930"], overlayScale: "price", panels: [{ height: 1, symbol: "000660", indicators: [] }] },
     { height: 1, overlays: ["NQZ26"], overlayScale: "nope", panels: [{ height: 1, symbol: "ESZ26", indicators: [] }] },
   ], { cols: 2 });
-  assert.equal(ws.frames[0].overlayScale, "shared");
-  assert.equal(ws.frames[1].overlayScale, "price");
+  assert.equal(ws.frames[0].overlayScale, "price");
+  assert.equal(ws.frames[1].overlayScale, "shared");
   const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
-  assert.equal(parsed.frames[0].overlayScale, "shared");
-  assert.equal(parsed.frames[1].overlayScale, "price");
+  assert.equal(parsed.frames[0].overlayScale, "price");
+  assert.equal(parsed.frames[1].overlayScale, "shared");
   const ratio = W.parse({
     schema_version: 2,
     cols: 1,
     frames: [{ height: 1, overlays: ["005930"], overlayScale: "ratio", panels: [{ height: 1, symbol: "000660", indicators: [] }] }],
   }, known);
   assert.equal(ratio.frames[0].overlayScale, "ratio");
+});
+
+test("serialize→parse: 겹침 분봉 없음은 유지한다", () => {
+  const ws = W.serialize("없음", [
+    {
+      height: 1,
+      overlays: ["NQZ26"],
+      overlayStyles: { NQZ26: "none" },
+      panels: [{ height: 1, symbol: "ESZ26", indicators: [] }],
+    },
+  ]);
+  assert.deepEqual(ws.frames[0].overlayStyles, { NQZ26: "none" });
+  const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
+  assert.deepEqual(parsed.frames[0].overlayStyles, { NQZ26: "none" });
 });
 
 test("serialize→parse: 겹침 분봉 모양은 종목별로 유지하고 알 수 없는 값은 버린다", () => {
@@ -314,6 +328,7 @@ test("parse: panels가 없는 화면틀은 빈 차트 하나다", () => {
   }, known);
   assert.deepEqual(parsed.frames[0].panels, [{
     height: 1, symbol: "", panelOpen: true, data2: "", candles: true, barStyle: "candle", indicators: [], overlayStyles: {},
+    systems: [], linkLegs: { w_link_long: { opp: "", fut: "" }, w_link_short: { opp: "", fut: "" } },
   }]);
 });
 
@@ -348,4 +363,64 @@ test("비율: 추가 몫과 화면틀 닫기", () => {
   assert.equal(W.frameClose(3, 1), "row");
   assert.equal(W.frameClose(1, 3), "col");
   assert.equal(W.frameClose(1, 1), "none");
+});
+
+test("parse: 시스템 기준과 변수값을 화면틀에 남긴다", () => {
+  const ws = W.serialize("기준", [{
+    height: 1,
+    panels: [{
+      height: 1,
+      symbol: "BAFC0A57",
+      indicators: [],
+      systems: ["pair-short"],
+      systemBasis: { "pair-short": "P", "pair-long": "X" },
+      systemVars: { "pair-short": { "총투자금": 10000000 } },
+    }],
+  }]);
+  const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
+  const panel = parsed.frames[0].panels[0];
+  assert.deepEqual(panel.systemBasis, { "pair-short": "P" });
+  assert.deepEqual(panel.systemVars, { "pair-short": { "총투자금": 10000000 } });
+});
+
+test("parse: 시그널 변수는 숫자만 유지한다", () => {
+  const ws = W.serialize("변수", [{
+    height: 1,
+    panels: [{
+      height: 1,
+      symbol: "BAFC0A49",
+      indicators: [],
+      systems: ["pair-short"],
+      systemVars: { "pair-short": { "총투자금": 20000000, "익절률": "10", "메모": "x" }, "nope": { "총투자금": 1 } },
+    }],
+  }]);
+  const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
+  assert.deepEqual(parsed.frames[0].panels[0].systemVars, {
+    "pair-short": { "총투자금": 20000000, "익절률": 10 },
+  });
+});
+
+test("parse: 고른 시그널과 상대·선물을 유지하고 모르는 값은 버린다", () => {
+  const ws = W.serialize("시그널", [{
+    height: 1,
+    panels: [{
+      height: 1,
+      symbol: "BAFC0A49",
+      indicators: [],
+      systems: ["pair-short", "nope", "pair-short", "pair-long"],
+      linkLegs: {
+        w_link_short: { opp: "cafc0a41", fut: "a016c000" },
+        w_link_long: { opp: "", fut: 3 },
+      },
+    }],
+  }]);
+  const parsed = W.parse(JSON.parse(JSON.stringify(ws)), known);
+  const panel = parsed.frames[0].panels[0];
+  assert.deepEqual(panel.systems, ["pair-short", "pair-long"]);
+  assert.deepEqual(panel.linkLegs, {
+    w_link_long: { opp: "", fut: "" },
+    w_link_short: { opp: "CAFC0A41", fut: "A016C000" },
+  });
+  const old = W.parse({ schema_version: 2, panels: [{ height: 1, indicators: [] }] }, known);
+  assert.deepEqual(old.frames[0].panels[0].systems, []);
 });
