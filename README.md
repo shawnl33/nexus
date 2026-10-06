@@ -49,18 +49,24 @@ core 테스트가 있으므로 0개 테스트 실행을 통과로 간주하지 �
 
 ## 실행
 
+저장소 루트에서 `traderctl up`으로 엔진과 대시보드를 함께 띄운다.
+리눅스는 `./build/traderctl`, 윈도우는 `build-windows\traderctl.exe`다.
+대시보드는 http://127.0.0.1:18080 이다. 18080이 이미 열려 있으면 18081을 쓴다.
+`.env`는 엔진이 읽는다. `web`의 Node 패키지가 없거나 이 OS에서 불러오지 못하면 `npm install`을 먼저 실행한다.
+Ctrl+C 한 번에 이 명령이 띄운 엔진과 대시보드가 종료된다. 이미 엔진이 떠 있으면 대시보드만 띄운다.
+
 리플레이 (인증정보 불필요):
 
 ```sh
-./build/trading-engine --replay examples/ticks_sample.csv --replay-delay 100
+./build/traderctl up --replay examples/ticks_sample.csv --replay-delay 100
 ```
 
 라이브 (`.env`의 LS 키 필요, 읽기 전용 시세):
 
 ```sh
-set -a; . ./.env; set +a
-./build/trading-engine --live 005930        # 주식 (S3_)
-./build/trading-engine --live-fut A016C000  # 선물 (FC9)
+./build/traderctl up --live 005930        # 주식 (S3_)
+./build/traderctl up --live-fut A016C000  # 국내선물 (FC9)
+./build/traderctl up --live ESZ26         # 해외선물
 ```
 
 라이브 모드는 최근 1분봉으로 지표 워밍업(백필 근사 재생) 후 실시간 틱을 처리한다.
@@ -69,15 +75,13 @@ set -a; . ./.env; set +a
 화면 상태만 바뀌며(세대/generation 증가, 지표 재워밍업) 전략 거래 대상과는 무관하다 (계획서 §18).
 
 틱 CSV(`epoch_us,price,qty`)를 재생해 봉·지표를 계산하고 상태 스트림을 발행한다.
-구독은 `tcp://127.0.0.1:5556` (변경: `--pub-endpoint`), 명령은 `tcp://127.0.0.1:5555` (`--cmd-endpoint`).
+명령은 `tcp://127.0.0.1:5555` (`traderctl --endpoint`)이고, 구독은 그 다음 포트 `tcp://127.0.0.1:5556`이다.
 
-대시보드 (로컬 전용):
+대시보드 서버 테스트:
 
 ```sh
 cd web
-npm install   # 최초 1회
-npm start     # http://127.0.0.1:8080
-npm test      # 서버 테스트 (스텁 엔진 사용)
+npm test      # 스텁 엔진 사용
 ```
 
 브라우저에서 열린 뒤 상태 스트림을 차트로 표시한다. 화면틀 저장·불러오기에는 인증 토큰이 필요하며
@@ -86,8 +90,8 @@ npm test      # 서버 테스트 (스텁 엔진 사용)
 도움말·버전:
 
 ```sh
-./build/trading-engine --help
-./build/trading-engine --version
+./build/traderctl --help
+./build/traderctl --version
 ```
 
 ## 비밀정보
