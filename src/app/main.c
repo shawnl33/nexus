@@ -59,6 +59,29 @@ static long self_pid(void) {
  * 다른 포트의 replay/테스트 엔진과 파일이 갈린다. 삭제는 내용이 자기 pid일 때만 —
  * 어떤 경로로든 자기 것이 아닌 파일을 지우지 않는다. status의 pid와 같은 소스(getpid)다. */
 static const char *g_pidfile_path = 0;
+static tr_ipc_t *g_boot_ipc = 0; /* 백필 중에도 status에 답하기 위한 소켓 */
+
+static void live_command_handler(void *ctx, tr_ipc_command_t *cmd);
+
+static void boot_poll_ipc(void) {
+    if (g_boot_ipc != 0) {
+        tr_ipc_poll(g_boot_ipc, 0, 4, live_command_handler, 0);
+    }
+}
+
+static void default_pid_path(char *buf, size_t n, int port) {
+#ifdef _WIN32
+    char tmp[MAX_PATH];
+    DWORD len = GetTempPathA((DWORD)sizeof(tmp), tmp);
+    if (len == 0 || len >= sizeof(tmp)) {
+        snprintf(buf, n, "trading-engine-%d.pid", port);
+        return;
+    }
+    snprintf(buf, n, "%strading-engine-%d.pid", tmp, port);
+#else
+    snprintf(buf, n, "/tmp/trading-engine-%d.pid", port);
+#endif
+}
 
 /* 명령 엔드포인트("tcp://host:port")의 포트. 파싱 실패 시 5555. */
 static int cmd_port_of(const char *ep) {
@@ -326,6 +349,7 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
      * 선물 t8465: cts는 비우고 edate/etime에 이전 cts를 넣는다. */
     const size_t page_limit = (BB_STORE_MAX / BACKFILL_PAGE_BARS) + 2;
     for (size_t pg = 0; pg < page_limit && HIST_CAP - hi < target; pg++) {
+        boot_poll_ipc();
         ls_chart_page_t page;
         char cerr[128] = {0};
         const char *edate = "99999999";
@@ -387,6 +411,7 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
         tr_local_day_and_min(day[0].open_time_us, 540, &oldest_day, 0);
         char derr[128] = {0};
         size_t ndaily = 0;
+        boot_poll_ipc();
         int drc = ls_chart_fetch_daily(auth,
                                        (is_fut || is_opt) ? LS_CHART_FUT_DAY : LS_CHART_STOCK_DAY,
                                        shcode, BACKFILL_DAILY_BARS, "99999999",
@@ -1976,8 +2001,10 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     }
 #endif
 
-    /* 4) 워밍업 백필 (market select/watch 시에도 같은 경로로 다시 채운다) */
+    /* 4) 워밍업 백필 (market select/watch 시에도 같은 경로로 다시 채운다).
+     * 이 구간은 길다. 페이지 사이에서 status에 답해야 traderctl이 60초에 죽이지 않는다. */
     bool rt_only = false;
+    g_boot_ipc = ipc;
     {
         int nb = backfill_minute_bars(&auth, &engine, engine.pipes[0], shcode, kind, &rt_only);
         if (nb > 0) {
@@ -1985,6 +2012,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
             fflush(stdout);
         }
     }
+    g_boot_ipc = 0;
 
     /* 5) 실시간 구독 */
     ls_rt_config_t rcfg;
@@ -2343,9 +2371,9 @@ int main(int argc, char **argv) {
     }
 
     /* 기본 pid 파일은 명령 엔드포인트 포트로 유도 — 다른 포트의 엔진과 파일이 갈린다 */
-    char pidfile_buf[64];
+    char pidfile_buf[320];
     if (pidfile == 0) {
-        snprintf(pidfile_buf, sizeof(pidfile_buf), "/tmp/trading-engine-%d.pid", cmd_port_of(cmd_ep));
+        default_pid_path(pidfile_buf, sizeof(pidfile_buf), cmd_port_of(cmd_ep));
         pidfile = pidfile_buf;
     }
     int rc = replay_file != 0 ? run_replay(replay_file, cmd_ep, pub_ep, replay_delay_ms, pidfile)

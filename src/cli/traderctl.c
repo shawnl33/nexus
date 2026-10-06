@@ -1325,11 +1325,24 @@ int main(int argc, char **argv) {
         if (ro.wait_sec > 86400) {
             ro.wait_sec = 86400; /* Win32 GetTickCount(49일 랩)·32비트 unsigned long 곱셈 안전 상한 */
         }
-        /* 엔진과 같은 규칙: 기본 pid 파일은 --endpoint 포트로 유도 */
-        char pidfile_buf[64];
+        /* 엔진과 같은 규칙: 기본 pid 파일은 --endpoint 포트로 유도.
+         * Windows에는 /tmp가 없어 엔진이 파일을 못 쓴다. */
+        char pidfile_buf[320];
         if (ro.pidfile == 0) {
+#ifdef _WIN32
+            char tmp[MAX_PATH];
+            DWORD len = GetTempPathA((DWORD)sizeof(tmp), tmp);
+            if (len == 0 || len >= sizeof(tmp)) {
+                snprintf(pidfile_buf, sizeof(pidfile_buf), "trading-engine-%d.pid",
+                         cmd_port_of(opts.endpoint));
+            } else {
+                snprintf(pidfile_buf, sizeof(pidfile_buf), "%strading-engine-%d.pid",
+                         tmp, cmd_port_of(opts.endpoint));
+            }
+#else
             snprintf(pidfile_buf, sizeof(pidfile_buf), "/tmp/trading-engine-%d.pid",
                      cmd_port_of(opts.endpoint));
+#endif
             ro.pidfile = pidfile_buf;
         }
         return run_engine_restart(&opts, &ro);
