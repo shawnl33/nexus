@@ -241,10 +241,14 @@ if(ZMQ_LIBRARY AND ZMQ_INCLUDE_DIR)
         target_compile_definitions(ipc PUBLIC ZMQ_STATIC)
         target_link_libraries(ipc PUBLIC ws2_32 iphlpapi winpthread stdc++)
         if(TR_MINGW_POSIX_THREADS)
-            target_sources(ipc PRIVATE
+            # 정적 라이브러리 멤버로 넣으면 libzmq.a 보다 먼저 스캔되어 심볼을 못 찾는다.
+            # 오브젝트 라이브러리는 최종 링크 줄에 .obj 로 남는다.
+            add_library(mingw_posix_compat OBJECT
                 src/compat/mingw_posix_compat.c
                 src/compat/mingw_vsnprintf_s.c
             )
+            target_compile_options(mingw_posix_compat PRIVATE ${TR_WARNINGS})
+            target_link_libraries(ipc PUBLIC mingw_posix_compat)
         endif()
     endif()
     target_include_directories(ipc PUBLIC src ${ZMQ_INCLUDE_DIR})
