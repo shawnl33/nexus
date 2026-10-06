@@ -119,7 +119,12 @@ if(SQLite3_FOUND)
         src/adapters/storage/store.c
         src/adapters/storage/live_bars.c
     )
-    target_link_libraries(storage PUBLIC core SQLite::SQLite3)
+    if(TARGET SQLite3::SQLite3)
+        set(TR_SQLITE_LIB SQLite3::SQLite3)
+    else()
+        set(TR_SQLITE_LIB SQLite::SQLite3)
+    endif()
+    target_link_libraries(storage PUBLIC core ${TR_SQLITE_LIB})
     target_include_directories(storage PUBLIC src)
     target_compile_options(storage PRIVATE ${TR_WARNINGS})
 else()
