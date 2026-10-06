@@ -3,11 +3,11 @@
 // - Node는 표시·설정만 담당한다. 핵심 지표·매매 신호를 재계산하지 않는다.
 // - 브라우저는 이 서버의 HTTP/WebSocket만 사용하고 ZeroMQ에 직접 연결하지 않는다.
 // - loopback 전용. 변경 요청에는 인증 토큰 + Origin 검사를 적용한다.
-// - 화면틀은 별도 JSON 파일로 소유하고, 저장은 원자적 파일 교체를 사용한다.
+// - 화면틀은 web/workspaces/*.json 으로 소유하고, 저장은 원자적 파일 교체를 사용한다.
 
 import { createServer } from "node:http";
 import { readFile, writeFile, rename, mkdir, readdir, unlink } from "node:fs/promises";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, extname, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -62,7 +62,7 @@ for (const root of ROOT_CANDIDATES) {
 }
 const INDEX_FILE = firstExisting(join(PUBLIC_DIR, "index.html"));
 if (INDEX_FILE == null) {
-  console.error("dashboard index.html 을 열 수 없습니다", ROOT_CANDIDATES.join(" | "));
+  console.error("cannot open dashboard index.html", ROOT_CANDIDATES.join(" | "));
 } else {
   console.error("dashboard files:", INDEX_FILE);
 }
@@ -78,8 +78,22 @@ async function readStatic(file) {
   }
   throw last;
 }
-const WORKSPACE_DIR = join(__dirname, ".runtime", "workspaces");
+const WORKSPACE_DIR = join(__dirname, "workspaces");
+const LEGACY_WORKSPACE_DIR = join(__dirname, ".runtime", "workspaces");
 const TOKEN_PATH = join(__dirname, ".runtime", "token");
+
+// 예전 실행본은 화면틀을 .runtime/workspaces 에 뒀다. 같은 이름이 없을 때만 한 번 가져온다.
+function migrateLegacyWorkspaces() {
+  if (!existsSync(LEGACY_WORKSPACE_DIR)) return;
+  mkdirSync(WORKSPACE_DIR, { recursive: true });
+  for (const name of readdirSync(LEGACY_WORKSPACE_DIR)) {
+    if (!name.endsWith(".json")) continue;
+    const dest = join(WORKSPACE_DIR, name);
+    if (existsSync(dest)) continue;
+    copyFileSync(join(LEGACY_WORKSPACE_DIR, name), dest);
+  }
+}
+migrateLegacyWorkspaces();
 const YESLANG_DIR = join(__dirname, "..", "reference", "yeslanguage");
 const YESLANG_SKIP = new Set(["experiments", "functions"]);
 

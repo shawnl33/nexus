@@ -210,7 +210,7 @@ tr_ls_master_t *ls_master_fetch(ls_auth_t *auth, char *errbuf, size_t errlen) {
             opt_n += n;
         }
         if (n == LS_MASTER_OPT_CAP) {
-            printf("instruments: 지수옵션 마스터가 상한 %d에 닿아 뒤를 버렸습니다\n",
+            printf("instruments: index-option master hit cap %d; dropped the rest\n",
                    LS_MASTER_OPT_CAP);
             fflush(stdout);
         }
@@ -235,7 +235,7 @@ tr_ls_master_t *ls_master_fetch(ls_auth_t *auth, char *errbuf, size_t errlen) {
                 count += (size_t)n;
             }
             if (n == (int)opt_room) {
-                printf("instruments: 위클리옵션 마스터가 남은 슬롯 %d에 닿아 뒤를 버렸습니다\n",
+                printf("instruments: weekly-option master hit the remaining %d slots; dropped the rest\n",
                        (int)opt_room);
                 fflush(stdout);
             }
@@ -273,7 +273,7 @@ tr_ls_master_t *ls_master_fetch(ls_auth_t *auth, char *errbuf, size_t errlen) {
             count++;
         }
         if (excluded > 0) {
-            printf("instruments: 해외선물 정밀도 배제 %d종 (DotGb>2 — ×100 raw 가격 절단 방지)\n",
+            printf("instruments: excluded %d overseas futures for precision (DotGb>2, avoids truncating x100 raw prices)\n",
                    excluded);
             fflush(stdout); /* 데몬의 stdout은 블록 버퍼링이라 즉시 보이게 한다 */
         }

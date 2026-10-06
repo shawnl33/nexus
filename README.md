@@ -49,10 +49,36 @@ cmake --build --preset windows-cross
 
 core 테스트가 있으므로 0개 테스트 실행을 통과로 간주하지 않는다(`ctest --no-tests=error`).
 
+## 배포 폴더
+
+빌드 후 실행에 필요한 파일만 모은다. 테스트 바이너리, `node_modules`, `engine.db`, `.env`는 빠진다.
+
+```sh
+cmake --install build                 # Linux -> dist/
+cmake --install build-windows-cross   # Windows 크로스 -> dist-windows/
+```
+
+Windows에서 네이티브로 빌드한 경우는 `cmake --install build-windows`이고, 결과도 `dist-windows/`다. 설치 경로는 구성 프리셋의 `installDir`이다.
+
+```text
+dist/
+  trading-engine
+  traderctl
+  web/server.js
+  web/public/
+  web/workspaces/
+  web/package.json
+  web/package-lock.json
+```
+
+`traderctl`은 실행 파일 옆의 `web/server.js`를 찾는다. 대상 PC의 `web/`에서 `npm install`을 한 번 실행한다. Node.js 20 이상이 필요하다. `.env`는 이 폴더에 넣지 않고, `traderctl`을 실행한 현재 디렉터리에서 엔진이 읽는다.
+
+Linux 폴더의 실행 파일은 `libzmq`, `libcurl`, `libssl`, `libsqlite3`, `libcap`을 시스템에 둔다. Windows 폴더에는 `libstdc++-6.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`이 실행 파일과 같은 자리에 들어간다.
+
 ## 실행
 
-저장소 루트에서 `traderctl up`으로 엔진과 대시보드를 함께 띄운다.
-리눅스는 `./build/traderctl`, 윈도우는 `build-windows\traderctl.exe`다.
+저장소 루트에서 `traderctl`만 실행하면 엔진과 대시보드를 함께 띄운다. 종목코드는 없어도 된다. 종목은 대시보드에서 연다.
+리눅스는 `./build/traderctl`, 윈도우는 `build-windows\traderctl.exe`다. `up`을 붙여도 같다.
 대시보드는 http://127.0.0.1:18080 이다. 18080이 이미 열려 있으면 18081을 쓴다.
 `.env`는 엔진이 읽는다. `web`의 Node 패키지가 없거나 이 OS에서 불러오지 못하면 `npm install`을 먼저 실행한다.
 Ctrl+C 한 번에 이 명령이 띄운 엔진과 대시보드가 종료된다. 이미 엔진이 떠 있으면 대시보드만 띄운다.
@@ -66,7 +92,8 @@ Ctrl+C 한 번에 이 명령이 띄운 엔진과 대시보드가 종료된다. �
 라이브 (`.env`의 LS 키 필요, 읽기 전용 시세):
 
 ```sh
-./build/traderctl up --live 005930        # 주식 (S3_)
+./build/traderctl                         # 종목 없이 기동. 대시보드에서 연다
+./build/traderctl up --live 005930        # 시작할 때 주식을 바로 구독
 ./build/traderctl up --live-fut A016C000  # 국내선물 (FC9)
 ./build/traderctl up --live ESZ26         # 해외선물
 ```
@@ -86,7 +113,7 @@ cd web
 npm test      # 스텁 엔진 사용
 ```
 
-브라우저에서 열린 뒤 상태 스트림을 차트로 표시한다. 화면틀 저장·불러오기에는 인증 토큰이 필요하며
+브라우저에서 열린 뒤 상태 스트림을 차트로 표시한다. 화면틀은 `web/workspaces/<이름>.json`에 저장된다. 이 파일은 Git에 두고 배포 폴더에도 복사한다. 저장·불러오기에는 인증 토큰이 필요하며
 첫 실행 시 `web/.runtime/token`에 생성된다 (Git 제외).
 
 도움말·버전:

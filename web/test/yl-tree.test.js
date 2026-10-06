@@ -62,3 +62,10 @@ test("build: 잘못된 입력은 빈 트리다", () => {
   assert.deepEqual(T.build(undefined), []);
   assert.deepEqual(T.build({ dirs: null }), []);
 });
+
+test("hasEntries: 빈 디렉터리 목록은 목록으로 받지 않는다", () => {
+  assert.equal(T.hasEntries({ dirs: [] }), false);
+  assert.equal(T.hasEntries(undefined), false);
+  assert.equal(T.hasEntries({ dirs: [{ name: "experiments", files: ["a.txt"] }] }), false);
+  assert.equal(T.hasEntries(CATALOG), true);
+});

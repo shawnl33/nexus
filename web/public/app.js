@@ -44,7 +44,7 @@ function sameSession(src, cur) {
 
 // ---- 패널 매니저 ----
 // Pane: { id, el, toolsEl, panelEl, chartEl, chart, candleSeries, heightFrac, syncHandle,
-//         symbol, symName, selSeq, selTarget, panelOpen, panelToggleEl, treeFold,
+//         symbol, symName, selSeq, selTarget, panelOpen, treeFold,
 //         active: Map<indId, { renderer, handle, layers: {layerId: bool} }> }
 // symbol이 ""이면 미선택. 종목 입력·검색은 칸이 아니라 화면틀 도구줄에 하나다.
 // panelOpen은 칸별 지표 패널 접기/펼치기(화면틀 직렬화 대상), treeFold는 트리
@@ -235,6 +235,10 @@ function createFrame(row) {
   const addBtn = document.createElement("button");
   addBtn.textContent = "+ 차트";
   addBtn.title = "이 화면틀에 차트를 추가한다";
+  const menuBtn = document.createElement("button");
+  menuBtn.className = "panel-toggle on";
+  menuBtn.textContent = "☰";
+  menuBtn.title = "사이드바 열기/닫기";
   const closeBtn = document.createElement("button");
   closeBtn.className = "frame-close";
   closeBtn.textContent = "×";
@@ -243,7 +247,7 @@ function createFrame(row) {
   el.append(tools, bodyEl);
   row.el.append(el);
   const frame = {
-    el, bodyEl, closeEl: closeBtn, row,
+    el, bodyEl, closeEl: closeBtn, panelToggleEl: menuBtn, row,
     sync: PaneSync.create(), panes: [], currentPane: null,
     pickerEl: null, symInput: null, symResults: null, chipsEl: null,
     searchSeq: 0, searchTimer: null, symActive: -1,
@@ -254,8 +258,9 @@ function createFrame(row) {
     replacingMain: false,
     pairOpp: "", pairOppName: "", pairFut: "", pairFutName: "",
   };
-  tools.append(addBtn, buildFramePicker(frame), closeBtn);
+  tools.append(addBtn, menuBtn, buildFramePicker(frame), closeBtn);
   addBtn.onclick = () => addChart(frame);
+  menuBtn.onclick = () => setFramePanels(frame, !frame.panes.some((p) => p.panelOpen));
   closeBtn.onclick = () => closeFrame(frame);
   row.frames.push(frame);
   const col = row.frames.length - 1;
@@ -280,6 +285,41 @@ function layoutGrid() {
   }
   rebuildResizeBars();
   updateFrameCloseButtons();
+}
+
+// 이름도 비어 있고 차트도 빈 하나면 새화면이 이미 그 상태다.
+function screenIsFresh() {
+  if (el.wsName.value.trim()) return false;
+  if (gridRows.length !== 1 || colWeights.length !== 1) return false;
+  const frames = allFrames();
+  if (frames.length !== 1 || frames[0].panes.length !== 1) return false;
+  const frame = frames[0];
+  if (frame.overlays?.length) return false;
+  const pane = frame.panes[0];
+  return !pane.symbol && !pane.data2 && pane.active.size === 0 && pane.systems.size === 0;
+}
+
+// 저장 파일은 건드리지 않는다. 화면만 빈 차트 하나로 되돌리고 이름은 비운다.
+// force는 로딩 취소다. 덮개가 확인창을 가리므로 다시 묻지 않는다.
+async function newScreen(opts) {
+  if (!opts?.force && !screenIsFresh() && !confirm("현재 화면을 지우고 빈 차트로 시작할까요?")) return;
+  const before = new Set();
+  for (const pane of panes) {
+    if (pane.symbol) before.add(pane.symbol);
+    if (pane.data2) before.add(pane.data2);
+  }
+  for (const frame of allFrames()) {
+    for (const sh of frame.overlays || []) before.add(sh);
+  }
+  destroyGrid();
+  const row = makeRow(1);
+  const frame = createFrame(row);
+  createPane(frame, 1);
+  currentFrame = frame;
+  layoutGrid();
+  updateBadgeVisibility();
+  el.wsName.value = "";
+  for (const sh of before) await releaseSymbol(sh);
 }
 
 function addFrameRow() {
@@ -310,7 +350,8 @@ function createPane(frame, heightFrac = 1) {
   const div = document.createElement("div");
   div.className = "pane";
   div.style.height = `${heightFrac * 100}%`;
-  // 칸 구조: 도구줄(☰ + ×) + 본문([지표 패널 | 차트] 수평 분할). 종목 입력은 화면틀에 있다.
+  // 칸 구조: 겹친 ×(이 차트 삭제) + 본문([지표 패널 | 차트] 수평 분할).
+  // 사이드바 ☰는 화면틀 도구줄의 +차트 옆이다. 종목 입력도 화면틀에 하나다.
   const tools = document.createElement("div");
   tools.className = "tools";
   const body = document.createElement("div");
@@ -328,7 +369,7 @@ function createPane(frame, heightFrac = 1) {
     symbol: "", symName: "", selSeq: 0, selTarget: "",
     active: new Map(), chart: null, candleSeries: null, syncHandle: null,
     overlaySeries: new Map(),
-    panelOpen: true, panelToggleEl: null, treeFold: {}, data2: "",
+    panelOpen: true, treeFold: {}, data2: "",
     linkLegs: WeeklyLegs.empty(),
     systems: new Set(),
     systemVars: {},
@@ -370,11 +411,9 @@ function createPane(frame, heightFrac = 1) {
     // 시각)의 줌 기준. 지표 패널 접기/펼치기로 폭이 바뀌므로 호출 시점에 잰다.
     getWidth: () => pane.chartEl.clientWidth,
   });
-  buildPaneToolButtons(pane); // ☰(지표 패널 접기)·×(이 차트 삭제)는 1회 만든다 (상태만 동기화)
+  buildPaneToolButtons(pane); // ×(이 차트 삭제)는 1회 만든다. ☰는 화면틀에 있다.
   buildPaneTools(pane); // 지표 패널의 트리를 채운다
-  // 차트는 도구줄이 비어 있는 시점의 호스트 크기로 생성된다 — 도구줄이 자라며 호스트가
-  // 줄어들었으므로 생성 시점부터 정확한 크기로 맞춘다 (안 맞추면 첫 리사이즈 트리거
-  // 전까지 차트 하단의 시간축이 잘린다 — bootstrap의 첫 칸·새 칸 모두)
+  // 차트는 칸 높이가 잡히기 전에 만들어진다. 생성 직후 호스트 크기로 맞춘다.
   syncPaneSize(pane);
   frame.panes.push(pane);
   syncPaneList();
@@ -384,19 +423,12 @@ function createPane(frame, heightFrac = 1) {
     currentFrame = frame;
   });
   mountFrameOverlays(pane);
+  syncFramePanelToggle(frame);
   return pane;
 }
 
-// 도구줄 버튼: ☰(지표 패널 접기/펼치기) + ×(이 차트 삭제). 트리 재구성 때 다시 만들지 않는다
+// ×(이 차트 삭제)만 차트 모서리에 둔다. 트리 재구성 때 다시 만들지 않는다.
 function buildPaneToolButtons(pane) {
-  const toggle = document.createElement("button");
-  toggle.className = "chip panel-toggle on"; // 기본 열림(panelOpen: true)
-  toggle.textContent = "☰";
-  toggle.title = "지표 패널 접기/펼치기";
-  toggle.onclick = () => setPanelOpen(pane, !pane.panelOpen);
-  pane.toolsEl.append(toggle);
-  pane.panelToggleEl = toggle;
-
   const del = document.createElement("button");
   del.className = "chip del";
   del.textContent = "×";
@@ -596,6 +628,29 @@ function setBarStyle(pane, style) {
   applyPairMarkers(pane);
 }
 
+function syncFramePanelToggle(frame) {
+  const btn = frame?.panelToggleEl;
+  if (!btn) return;
+  btn.classList.toggle("on", frame.panes.some((p) => p.panelOpen));
+}
+
+// 이 화면틀의 사이드바를 한 번에 연다/닫는다. 칸마다 줄을 두지 않기 위한 버튼이다.
+function setFramePanels(frame, open) {
+  if (!frame) return;
+  const view = captureAlignView(frame);
+  holdAlignFrames.add(frame);
+  for (const pane of frame.panes) {
+    pane.panelOpen = open;
+    pane.panelEl.hidden = !open;
+    syncPaneSize(pane);
+  }
+  syncFramePanelToggle(frame);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (frame.panes.length && view) applyAlignView(frame, view, false);
+    requestAnimationFrame(() => holdAlignFrames.delete(frame));
+  }));
+}
+
 function setPanelOpen(pane, open) {
   // 접기 전에 화면틀 창을 잡는다. 폭이 바뀐 뒤 라이브러리가 그 칸만 봉 간격을
   // 고치므로, 접기 전의 오른쪽 끝 시각과 px 봉 간격을 두 프레임 뒤에 다시 깐다.
@@ -604,7 +659,7 @@ function setPanelOpen(pane, open) {
   if (pane.frame) holdAlignFrames.add(pane.frame);
   pane.panelOpen = open;
   pane.panelEl.hidden = !open;
-  pane.panelToggleEl.classList.toggle("on", open);
+  syncFramePanelToggle(pane.frame);
   syncPaneSize(pane);
   if (!pane.frame) return;
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -744,6 +799,7 @@ function destroyPane(pane, { release = true } = {}) {
   const i = frame.panes.indexOf(pane);
   if (i < 0) return;
   frame.panes.splice(i, 1);
+  syncFramePanelToggle(frame);
   if (frame.currentPane === pane) frame.currentPane = null;
   syncPaneList();
   paneResize.unobserve(pane.chartEl);
@@ -1237,15 +1293,19 @@ async function confirmFrameSymbol(frame) {
 // 뒤에 시작된 watch보다 엔진에 늦게 도착하는 경주를 막는다 (releaseSymbol 참조).
 const symbolOpQueue = WatchGuard.createOpQueue();
 function watchSymbol(shcode) {
+  const epoch = loadEpoch;
   return symbolOpQueue.enqueue(shcode, async () => {
+    if (!loadStill(epoch)) return { ok: false, error: "cancelled" };
     const token = await apiToken();
     if (!token) return { ok: false, error: "no_token" };
+    if (!loadStill(epoch)) return { ok: false, error: "cancelled" };
     let res;
     try {
       res = await fetch("/api/symbols/watch", {
         method: "POST",
         headers: { "content-type": "application/json", "x-trader-token": token },
         body: JSON.stringify({ shcode }),
+        signal: loadAbort.signal,
       });
     } catch {
       return { ok: false, error: "network" };
@@ -1318,6 +1378,7 @@ async function selectPaneSymbol(pane, shcode, name) {
       // w.ok가 false여도 엔진엔 적용되고 응답만 유실됐을 수 있으므로 같은 판정으로 정리한다
       // (관측 중이 아닌 종목의 unwatch는 엔진이 거절해 무해하다)
       if (WatchGuard.staleWatchLeaks(shcode, panes)) releaseSymbol(shcode);
+      finishSeedIfIdle(shcode);
       return;
     }
     if (!w.ok) {
@@ -1327,6 +1388,7 @@ async function selectPaneSymbol(pane, shcode, name) {
       // (stale 폐기 경로와 같은 판정 — 인계받은 watch가 있으면 건드리지 않는다)
       if (WatchGuard.staleWatchLeaks(shcode, panes)) releaseSymbol(shcode);
       fail = `종목 관측 실패 (${shcode}): ${w.error}`;
+      finishSeedIfIdle(shcode);
       return;
     }
     const prev = pane.symbol;
@@ -1351,6 +1413,7 @@ async function selectPaneSymbol(pane, shcode, name) {
     // 이전 종목은 새 watch가 붙은 뒤에 해제한다 (엔진의 마지막-watch 해지 거부를 피한다)
     if (prev) releaseSymbol(prev);
     await seedSymbol(shcode);
+    if (seq !== pane.selSeq) return;
     if (pane.active.has("fx_data2")) await ensureDefaultData2(pane);
   });
   if (fail) alert(fail);
@@ -1366,6 +1429,7 @@ function ensureDefaultData2(pane) {
 
 // 스나이퍼 Data2: 참조 종목의 1분 비율을 이 칸 차트에 겹친다.
 async function setPaneData2(pane, code) {
+  const epoch = loadEpoch;
   const next = String(code ?? "").trim().toUpperCase();
   const prev = pane.data2 || "";
   pane.data2 = next;
@@ -1378,15 +1442,20 @@ async function setPaneData2(pane, code) {
     return;
   }
   const w = await watchSymbol(next);
-  if (pane.data2 !== next) return;
+  if (!loadStill(epoch) || pane.data2 !== next) {
+    finishSeedIfIdle(next);
+    return;
+  }
   if (!w.ok) {
     pane.data2 = prev;
     alert(`참조 종목 관측 실패 (${next}): ${w.error}`);
     buildPaneTools(pane);
+    finishSeedIfIdle(next);
     return;
   }
   if (w.name) feed.forSymbol(next).name = w.name;
   await seedSymbol(next);
+  if (!loadStill(epoch)) return;
   if (entry && pane.data2 === next) {
     try { entry.handle.setSource(feed.get(next)); }
     catch (err) { console.error(`[${next}] 참조 지표 시딩 실패`, err); }
@@ -1432,14 +1501,15 @@ function buildPaneTools(pane) {
 }
 
 async function loadYlCatalog() {
-  // /api/yeslang 은 원본 디렉터리를 그대로 읽는다. 그 라우트가 없는 프로세스는
-  // 같은 내용의 정적 목록으로 넘어간다.
+  // /api/yeslang 은 원본 디렉터리를 그대로 읽는다. 라우트가 없거나 폴더가 비어
+  // 있으면 같은 내용의 정적 목록으로 넘어간다. 빈 dirs 를 성공으로 받으면
+  // 배포본 사이드바에서 예스트레이더 항목이 사라진다.
   for (const url of ["/api/yeslang", "/yl-catalog.json"]) {
     try {
       const res = await fetch(url);
       if (!res.ok) continue;
       const data = await res.json();
-      if (!data || !Array.isArray(data.dirs)) continue;
+      if (!YlTree.hasEntries(data)) continue;
       ylCatalog = data;
       for (const pane of panes) buildPaneTools(pane);
       return;
@@ -2797,25 +2867,36 @@ async function removeFrameOverlay(frame, shcode) {
 
 async function addFrameOverlay(frame, shcode, name) {
   shcode = String(shcode ?? "").trim().toUpperCase();
-  if (!frame || !shcode || !allFrames().includes(frame)) return;
+  if (!frame || !shcode || !allFrames().includes(frame)) {
+    finishSeedIfIdle(shcode);
+    return;
+  }
   const main = frameSymbolPane(frame)?.symbol || "";
   if (shcode === main || frame.overlays.includes(shcode) || frame.overlayTargets.has(shcode)) {
     syncFrameChips(frame);
+    finishSeedIfIdle(shcode);
     return;
   }
   frame.overlayTargets.add(shcode);
   let fail = "";
   await withChartLoad(async () => {
+    const epoch = loadEpoch;
     const w = await watchSymbol(shcode);
+    if (!loadStill(epoch)) {
+      finishSeedIfIdle(shcode);
+      return;
+    }
     if (!allFrames().includes(frame) || !frame.overlayTargets.has(shcode)) {
       frame.overlayTargets.delete(shcode);
       if (!symbolHeld(shcode)) releaseSymbol(shcode);
+      finishSeedIfIdle(shcode);
       return;
     }
     if (!w.ok) {
       frame.overlayTargets.delete(shcode);
       if (!symbolHeld(shcode)) releaseSymbol(shcode);
       fail = `종목 관측 실패 (${shcode}): ${w.error}`;
+      finishSeedIfIdle(shcode);
       return;
     }
     if (w.name) feed.forSymbol(shcode).name = w.name;
@@ -2871,10 +2952,66 @@ function refreshKsData2ForSymbol(shcode) {
 // 과거 봉 시딩: PUB/SUB는 과거 메시지를 보존하지 않으므로 스냅샷을 가져온다.
 // 같은 종목의 동시 시딩은 하나로 합친다 (칸 여러 개가 같은 종목을 고를 수 있다).
 const seedInflight = new Map(); // shcode → 진행 중 Promise
+
+// 로딩 퍼센트는 종목별 봉 페이지다. 상한/16이 한 종목의 페이지 수.
+// 화면틀은 받기 전에 종목을 모두 잡아 두어, 나중에 시작하는 참조·겹침이 분모를 늘리지 않게 한다.
+const seedProgress = new Map(); // shcode → { done, total }
+
+function seedPageLimit() {
+  return Math.max(1, Math.ceil(barCap / 16));
+}
+
+function paintLoadPct() {
+  const node = document.getElementById("load-pct");
+  if (!node) return;
+  let done = 0;
+  let total = 0;
+  for (const slot of seedProgress.values()) {
+    done += slot.done;
+    total += slot.total;
+  }
+  const pct = total > 0 ? Math.min(100, Math.round((done * 100) / total)) : 0;
+  node.textContent = `${pct}%`;
+}
+
+function noteSeed(shcode, done, total) {
+  seedProgress.set(shcode, { done, total });
+  paintLoadPct();
+}
+
+function finishSeed(shcode) {
+  if (!shcode) return;
+  const total = seedProgress.get(shcode)?.total ?? seedPageLimit();
+  seedProgress.set(shcode, { done: total, total });
+  paintLoadPct();
+}
+
+// 예약만 되고 시딩이 시작되지 않은 종목(관측 실패 등)은 남은 페이지를 끝난 것으로 친다.
+function finishSeedIfIdle(shcode) {
+  const code = String(shcode ?? "").trim().toUpperCase();
+  if (!code || seedInflight.has(code) || !seedProgress.has(code)) return;
+  finishSeed(code);
+}
+
+function reserveSeeds(codes) {
+  const total = seedPageLimit();
+  for (const code of codes) {
+    const sh = String(code ?? "").trim().toUpperCase();
+    if (!sh || seedProgress.has(sh)) continue;
+    seedProgress.set(sh, { done: 0, total });
+  }
+  paintLoadPct();
+}
+
 function seedSymbol(shcode) {
+  const epoch = loadEpoch;
+  if (!loadStill(epoch)) return Promise.resolve();
   const running = seedInflight.get(shcode);
   if (running) return running;
-  const p = withChartLoad(() => seedSymbolNow(shcode)).finally(() => {
+  const p = withChartLoad(() => {
+    if (!loadStill(epoch)) return;
+    return seedSymbolNow(shcode);
+  }).finally(() => {
     if (seedInflight.get(shcode) === p) seedInflight.delete(shcode);
   });
   seedInflight.set(shcode, p);
@@ -2887,21 +3024,29 @@ function seedSymbol(shcode) {
 // 무효한 결과를 받아 빈 차트로 남지 않게 한다.
 async function seedSymbolNow(shcode) {
   const cache = feed.forSymbol(shcode);
+  const pageLimit = seedPageLimit();
+  const epoch = loadEpoch;
+  // 어떤 경로로 빠져도 이 종목의 남은 페이지는 끝난 것으로 친다. 재시도(continue)는 루프 안이라 여기 안 든다.
+  try {
   for (let attempt = 0; attempt < 3; attempt++) {
     const seedTok = cache.seedToken;
+    noteSeed(shcode, 0, pageLimit); // 리셋으로 다시 받으면 이 종목만 0으로 되돌린다
     try {
       const all = [];
       const memEvents = [];
       const pstEvents = [];
       const gapsSec = []; // 구멍 구간 누적 (µs → 초) — 페이지 경계 구멍은 엔진이 경계 쌍까지 검사해 준다
       let back = 0;
-      const pageLimit = Math.ceil(barCap / 16);
       for (let pages = 0; pages < pageLimit; pages++) {
-        const res = await fetch(`/api/chart?shcode=${encodeURIComponent(shcode)}&back_index=${back}`);
-        if (!res.ok) return;
+        if (!loadStill(epoch)) return;
+        const res = await fetch(`/api/chart?shcode=${encodeURIComponent(shcode)}&back_index=${back}`, {
+          signal: loadAbort.signal,
+        });
+        if (!loadStill(epoch) || !res.ok) return;
         const data = await res.json();
         const p = data.payload;
         if (p == null || !Array.isArray(p.bars)) return;
+        noteSeed(shcode, pages + 1, pageLimit);
         feed.noteGeneration(cache, p.generation);
         // 지표 매니페스트: 첫 페이지에서 한 번 받아 칸 지표 패널을 구성한다
         if (pages === 0 && Array.isArray(p.indicators)) setIndicatorManifest(p.indicators);
@@ -2968,10 +3113,14 @@ async function seedSymbolNow(shcode) {
         if (ind) ind.pstItem = item;
       }
 
+      if (!loadStill(epoch)) return;
       renderSymbolPanes(shcode);
       return;
     } catch { /* 시딩 실패는 라이브 스트림으로 진행 */ }
     return;
+  }
+  } finally {
+    finishSeed(shcode);
   }
 }
 
@@ -3051,17 +3200,38 @@ function flushLive() {
 
 let wsConnected = false;
 let chartLoads = 0;
+// 로딩 취소는 세대를 올리고 진행 중 요청을 끊는다. 늦게 끝난 작업은 세대를 보고 화면을 건드리지 않는다.
+let loadEpoch = 0;
+let loadAbort = new AbortController();
+let loadVeilOff = false;
+
+function loadStill(epoch) {
+  return epoch === loadEpoch;
+}
+
+function cancelLoad() {
+  loadEpoch += 1;
+  loadAbort.abort();
+  loadAbort = new AbortController();
+  for (const pane of panes) pane.selSeq += 1;
+  loadVeilOff = true;
+  paintWsState();
+  void newScreen({ force: true });
+}
 
 function lockChartInput(chart, locked) {
   chart.applyOptions({ handleScroll: !locked, handleScale: !locked });
 }
 
 function paintWsState() {
-  const loading = chartLoads > 0;
+  if (chartLoads === 0) loadVeilOff = false;
+  const loading = chartLoads > 0 && !loadVeilOff;
   document.body.classList.toggle("charts-locked", loading);
   for (const pane of panes) {
     if (pane.chart) lockChartInput(pane.chart, loading);
   }
+  if (!loading) seedProgress.clear();
+  paintLoadPct();
   if (loading) {
     el.wsState.textContent = "로딩중";
     el.wsState.className = "badge load";
@@ -3078,6 +3248,7 @@ function paintWsState() {
 
 function withChartLoad(work) {
   chartLoads += 1;
+  loadVeilOff = false;
   paintWsState();
   return Promise.resolve()
     .then(work)
@@ -3222,6 +3393,7 @@ function destroyGrid() {
 // symbol 없는 칸(구 화면틀)은 parse 단에서 current_symbol로 폴백되어 들어온다.
 // 예전 종목·Data2의 unwatch는 새 칸 시딩이 끝난 뒤에 한다 (엔진의 마지막-watch 해지 거부 회피).
 async function applyWorkspace(parsed) {
+  const epoch = loadEpoch;
   return withChartLoad(async () => {
     const before = new Set();
     for (const pane of panes) {
@@ -3240,6 +3412,15 @@ async function applyWorkspace(parsed) {
         ? parsed.colWeights.slice()
         : Array.from({ length: cols }, () => 1 / cols);
     }
+    const seedCodes = [];
+    for (const spec of specs) {
+      for (const panel of spec.panels ?? []) {
+        if (panel.symbol) seedCodes.push(panel.symbol);
+        if (panel.data2) seedCodes.push(panel.data2);
+      }
+      for (const code of spec.overlays || []) seedCodes.push(code);
+    }
+    reserveSeeds(seedCodes);
     const jobs = [];
     specs.forEach((spec, index) => {
       let row = gridRows[gridRows.length - 1];
@@ -3271,6 +3452,7 @@ async function applyWorkspace(parsed) {
         jobs.push((async () => {
           try {
             if (frameSymbol) await selectPaneSymbol(pane, frameSymbol);
+            if (!loadStill(epoch)) return;
             if (panel.data2) await setPaneData2(pane, panel.data2);
           } catch (err) {
             // 한 칸이 실패해도 다른 칸 시딩과 마지막 다시 그리기는 계속한다.
@@ -3284,6 +3466,7 @@ async function applyWorkspace(parsed) {
     layoutGrid();
     updateBadgeVisibility();
     await Promise.all(jobs);
+    if (!loadStill(epoch)) return;
     for (const frame of allFrames()) {
       const codes = frame.pendingOverlays || [];
       const styles = frame.pendingOverlayStyles || {};
@@ -3301,6 +3484,8 @@ async function applyWorkspace(parsed) {
       }
       for (const pane of frame.panes || []) refreshWeeklyPlots(pane);
     }
+    // 관측에 실패해 페이지를 안 받은 종목도 여기서 마친다. 이후 맞추기는 짧은 꼬리다.
+    for (const sh of seedProgress.keys()) finishSeed(sh);
     for (const pane of panes) {
       const w = pane.chartEl.clientWidth;
       const h = pane.chartEl.clientHeight;
@@ -3356,6 +3541,18 @@ async function saveWorkspace(opts) {
   if (!token) return alert("토큰이 필요합니다.");
   const name = el.wsName.value.trim();
   if (!name) return alert("화면틀 이름이 필요합니다.");
+  // 저장 버튼만 확인한다. 변수 확인 뒤의 자동 저장(quiet)은 방금 연 이름을 갱신한다.
+  if (!opts?.quiet) {
+    let exists = false;
+    try {
+      const listed = await fetch("/api/workspaces");
+      if (listed.ok) {
+        const data = await listed.json();
+        exists = Array.isArray(data.workspaces) && data.workspaces.includes(name);
+      }
+    } catch { /* 확인이 안 되면 저장 요청이 같은 오류를 보여 준다 */ }
+    if (exists && !confirm(`화면틀 '${name}' 파일이 있습니다. 덮어쓰겠습니까?`)) return;
+  }
   const res = await fetch(`/api/workspaces/${encodeURIComponent(name)}`, {
     method: "PUT",
     headers: { "content-type": "application/json", "x-trader-token": token },
@@ -3369,22 +3566,34 @@ async function saveWorkspace(opts) {
   if (!opts?.quiet) alert(`화면틀 '${name}' 저장됨`);
 }
 
-async function loadWorkspace() {
+async function loadWorkspace(opts) {
   const name = el.wsName.value.trim();
   const res = await fetch(`/api/workspaces/${encodeURIComponent(name)}`);
-  if (!res.ok) return alert("화면틀 없음");
+  if (!res.ok) {
+    if (!opts?.quiet) alert("화면틀 없음");
+    return false;
+  }
   const data = await res.json();
   const parsed = Workspace.parse(data, (id) => id in RENDERERS);
-  if (!parsed) return alert("구 버전 화면틀은 적용할 수 없습니다 — 기본 상태를 유지합니다");
+  if (!parsed) {
+    alert("구 버전 화면틀은 적용할 수 없습니다 — 기본 상태를 유지합니다");
+    return false;
+  }
   // 화면 복원으로 전략을 자동 시작하거나 주문을 재실행하지 않는다.
   // 칸·지표 시딩이 끝난 뒤에 알린다. 먼저 알리면 아직 빈 차트를 완료로 본다.
+  // 시작 시 자동 열기(quiet)는 완료 알림을 띄우지 않는다. 취소한 로드도 알리지 않는다.
+  const epoch = loadEpoch;
   try {
     await applyWorkspace(parsed);
   } catch (err) {
+    if (!loadStill(epoch) || err?.name === "AbortError") return false;
     console.error("화면틀 적용 실패", err);
-    return alert(`화면틀 '${name}' 적용 중 오류: ${err && err.message ? err.message : err}`);
+    alert(`화면틀 '${name}' 적용 중 오류: ${err && err.message ? err.message : err}`);
+    return false;
   }
-  alert(`화면틀 '${name}' 적용`);
+  if (!loadStill(epoch)) return false;
+  if (!opts?.quiet) alert(`화면틀 '${name}' 적용`);
+  return true;
 }
 
 async function pushBarCap(n) {
@@ -3429,6 +3638,8 @@ async function commitBarCap(raw) {
   });
 }
 
+document.getElementById("screen-new").onclick = () => newScreen();
+document.getElementById("load-cancel").onclick = cancelLoad;
 document.getElementById("row-add").onclick = addFrameRow;
 document.getElementById("col-add").onclick = addFrameCol;
 document.getElementById("bar-cap").addEventListener("change", (ev) => {
@@ -3449,8 +3660,8 @@ document.addEventListener("click", (ev) => {
   }
 });
 
-// 기본 구성: 화면틀 하나 + 빈 차트. 단, 엔진이 관측 중인 종목이 하나뿐이면
-// 그 종목을 칸 1에 자동 설정한다 (기존 사용자 흐름 보호). 둘 이상이면 자동 선택하지 않는다.
+// 시작은 화면틀 default. 파일이 없을 때만 빈 차트 하나다.
+// 그 빈 차트이고 엔진이 관측 중인 종목이 하나뿐이면 그 종목을 칸 1에 둔다.
 async function bootstrap() {
   const row = makeRow(1);
   const frame = createFrame(row);
@@ -3461,11 +3672,18 @@ async function bootstrap() {
   const capInput = document.getElementById("bar-cap");
   capInput.value = String(barCap);
   if (barCap !== BAR_CAP_DEFAULT) await pushBarCap(barCap);
-  await refreshEngineWatches();
-  if (engineWatches.length === 1 && panes[0] && !panes[0].symbol) {
-    await selectPaneSymbol(panes[0], engineWatches[0]);
-  }
+  // 상태 조회는 엔진이 없으면 오래 걸린다. default 열기를 그 뒤에 두지 않는다.
+  const watchesReady = refreshEngineWatches();
   connect();
   loadYlCatalog();
+  el.wsName.value = "default";
+  const epoch = loadEpoch;
+  const opened = await loadWorkspace({ quiet: true });
+  if (!opened && loadStill(epoch)) {
+    await watchesReady;
+    if (engineWatches.length === 1 && panes[0] && !panes[0].symbol) {
+      await selectPaneSymbol(panes[0], engineWatches[0]);
+    }
+  }
 }
 bootstrap();

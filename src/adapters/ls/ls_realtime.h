@@ -121,6 +121,16 @@ bool ls_rt_should_reauth(int consec_short, int64_t last_reauth_us, int64_t now_u
  * header.rsp_cd가 문자열로 존재하고 "00000"이 아니면 true (정상 ACK는 false). */
 bool ls_rt_sub_ack_rejected(const char *body, size_t len);
 
+/* 연결 실패 로그 한 줄. in/len은 lws CONNECTION_ERROR의 원인이다.
+ * 원인이 없으면 "ls-rt: 연결 오류\n". 개행은 공백으로 접고 cap 안에서 자른다.
+ * 기록한 바이트 수(NUL 제외)를 반환한다. out이 NULL이거나 cap이 0이면 0. */
+size_t ls_rt_format_conn_error(const void *in, size_t len, char *out, size_t cap);
+
+/* DER 인증서 하나를 PEM으로 *buf 끝에 붙인다. *buf는 realloc된다.
+ * der가 없거나 길이가 0이면 false이고 버퍼는 그대로다. */
+bool ls_rt_append_pem_cert(char **buf, size_t *len, size_t *cap,
+                           const unsigned char *der, size_t der_len);
+
 /* 채널별 tr_key 고정 길이 (테스트 가능하도록 분리, 순수 함수).
  * 통합 채널(US3/UH1)은 10자리, 해외선물 채널(OVC/OVH/WOC/WOH)은 8자리 고정 —
  * 짧은 코드는 우측 공백 패딩이다 (미패딩 시 rsp_cd 10009, 2026-10-01 실측).

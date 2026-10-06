@@ -205,6 +205,12 @@ if(TR_LWS_READY)
         target_link_libraries(lsrt PUBLIC ls ${LWS_LIBRARY} ssl crypto z cap)
     endif()
     target_include_directories(lsrt PUBLIC src ${LWS_INCLUDE_DIR})
+    if(WIN32)
+        # MbedTLS 헤더는 정적 라이브러리와 같은 접두의 include에 있다.
+        get_filename_component(_tr_mbed_libdir "${MBEDTLS_LIBRARY}" DIRECTORY)
+        get_filename_component(_tr_mbed_prefix "${_tr_mbed_libdir}" DIRECTORY)
+        target_include_directories(lsrt PRIVATE "${_tr_mbed_prefix}/include")
+    endif()
     target_compile_options(lsrt PRIVATE ${TR_WARNINGS})
     set(TR_LWS_FOUND TRUE)
 else()
@@ -321,7 +327,20 @@ if(TR_IPC_FOUND)
                 VERBATIM
             )
         endforeach()
+        install(FILES ${TR_WIN_RUNTIME_DLLS} DESTINATION .)
     endif()
+
+    # 배포 폴더. 실행 파일은 접두 루트, 대시보드는 그 옆의 web/.
+    # 예: dist/traderctl -> dist/web/server.js
+    # node_modules, 테스트, 실행 중 생기는 토큰은 넣지 않는다. 화면틀은 web/workspaces 라 포함된다.
+    # 대상 PC의 web/에서 npm install 한다.
+    install(TARGETS trading-engine traderctl RUNTIME DESTINATION .)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/web/"
+        DESTINATION web
+        PATTERN "node_modules" EXCLUDE
+        PATTERN "test" EXCLUDE
+        PATTERN ".runtime" EXCLUDE
+    )
 else()
     message(STATUS "libzmq not found: trading-engine은 건성한다 (미검증 기록)")
 endif()

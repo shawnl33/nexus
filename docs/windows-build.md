@@ -14,7 +14,7 @@ winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT
 winget install -e --id OpenJS.NodeJS.LTS
 ```
 
-Node.js는 빌드 자체에는 필요 없다. `traderctl up`이 엔진을 띄운 뒤 대시보드를 `node`로 실행하므로, 20 이상이 있어야 한다. 없으면 `error: node 를 찾지 못했습니다`로 끝난다.
+Node.js는 빌드 자체에는 필요 없다. `traderctl up`이 엔진을 띄운 뒤 대시보드를 `node`로 실행하므로, 20 이상이 있어야 한다. 없으면 `error: node was not found`로 끝난다.
 
 설치가 끝나면 창을 닫고 새로 연다. 아래 명령이 모두 버전을 출력해야 한다.
 
@@ -71,7 +71,7 @@ D:\dev\nexus\build-windows\traderctl.exe
 엔진과 대시보드를 함께 띄운다.
 
 ```bat
-.\build-windows\traderctl.exe up --live 005930
+.\build-windows\traderctl.exe
 ```
 
 처음 만든 exe는 Windows가 실행을 막을 수 있다. 확인 창이 뜨면 허용을 누른 뒤 같은 명령을 다시 실행한다.
@@ -82,7 +82,42 @@ D:\dev\nexus\build-windows\traderctl.exe
 ctest --preset windows
 ```
 
-## 4. 다시 구성할 때
+## 4. 배포 폴더
+
+빌드가 끝나면 실행 파일, 런타임 DLL, 대시보드 소스만 `dist-windows/`에 모을 수 있다. 테스트 실행 파일과 `node_modules`는 넣지 않는다.
+
+```bat
+cmake --install build-windows
+```
+
+```text
+dist-windows\
+  trading-engine.exe
+  traderctl.exe
+  libstdc++-6.dll
+  libgcc_s_seh-1.dll
+  libwinpthread-1.dll
+  web\server.js
+  web\public\
+  web\workspaces\
+  web\package.json
+  web\package-lock.json
+```
+
+이 폴더를 복사한 PC에는 Node.js 20 이상이 있어야 한다. `web`에서 패키지를 한 번 받은 뒤 실행한다.
+
+```bat
+cd /d D:\dev\nexus\dist-windows\web
+npm install
+cd ..
+traderctl.exe
+```
+
+`.env`는 배포 폴더에 들어 있지 않다. 엔진은 `traderctl`을 실행한 현재 디렉터리의 `.env`를 읽는다.
+
+Linux에서 크로스 컴파일한 경우의 명령은 `cmake --install build-windows-cross`다. 결과 폴더 이름은 같다.
+
+## 5. 다시 구성할 때
 
 소스를 다른 경로로 옮겼거나 예전에 `\\wsl.localhost\...`에서 구성을 했다면, 그 캐시는 재사용하지 않는다.
 

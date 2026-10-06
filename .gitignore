@@ -1,6 +1,8 @@
 build/
 build-windows/
 build-windows-cross/
+dist/
+dist-windows/
 node_modules/
 web/.runtime/
 .env

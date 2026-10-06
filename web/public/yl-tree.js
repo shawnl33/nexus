@@ -85,7 +85,13 @@ const YlTree = (() => {
     return out;
   }
 
-  return { SKIP_DIRS, PORTS, build, indicatorIds, stem, inputsFor };
+  // 배포본은 reference/yeslanguage 가 없어 /api/yeslang 이 { dirs: [] } 를 준다.
+  // 그 응답은 목록이 아니므로 정적 yl-catalog.json 으로 넘어간다.
+  function hasEntries(catalog) {
+    return build(catalog).length > 0;
+  }
+
+  return { SKIP_DIRS, PORTS, build, indicatorIds, stem, inputsFor, hasEntries };
 })();
 
 if (typeof globalThis !== "undefined") {

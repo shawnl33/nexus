@@ -42,35 +42,37 @@
 #define TRADERCTL_VERSION "0.1.0"
 
 static void print_usage(const char *prog) {
-    printf("traderctl %s — Nexus Trading Engine 관리 CLI\n", TRADERCTL_VERSION);
-    printf("\nUsage: %s [options] <command> [args]\n", prog);
+    printf("traderctl %s - Nexus Trading Engine CLI\n", TRADERCTL_VERSION);
+    printf("\nUsage: %s [options] [command] [args]\n", prog);
+    printf("With no command, runs up: starts the engine and dashboard with no symbol.\n");
     printf("\nOptions:\n");
-    printf("  --endpoint EP   엔진 명령 엔드포인트 (기본 tcp://127.0.0.1:5555)\n");
-    printf("  --json          결과를 JSON으로 출력\n");
-    printf("  --timeout MS    응답 대기 시간 (기본 3000ms)\n");
-    printf("  -h, --help      도움말\n");
-    printf("  -v, --version   버전\n");
+    printf("  --endpoint EP   Engine command endpoint (default tcp://127.0.0.1:5555)\n");
+    printf("  --json          Print the result as JSON\n");
+    printf("  --timeout MS    Response wait (default 3000ms)\n");
+    printf("  -h, --help      Help\n");
+    printf("  -v, --version   Version\n");
     printf("\nCommands:\n");
-    printf("  status                  엔진 모드·연결·복구·제한 상태\n");
-    printf("  engine stop             엔진 정상 종료 요청\n");
-    printf("  up                      이 터미널에서 엔진과 대시보드를 함께 실행\n");
+    printf("  status                  Engine mode, connection, recovery, and limits\n");
+    printf("  engine stop             Ask the engine to stop\n");
+    printf("  up                      Run the engine and dashboard in this terminal\n");
+    printf("                          Starts with no symbol. Open symbols in the dashboard\n");
     printf("                          --live SYM | --live-fut SYM | --replay FILE [--replay-delay MS]\n");
-    printf("                          --web DIR (기본 ./web). Ctrl+C 한 번에 종료\n");
-    printf("                          패키지가 없거나 불러오지 못하면 npm install 을 먼저 한다\n");
-    printf("  engine restart          엔진 재기동 (소멸 확인 후 기동)\n");
-    printf("                          --symbol X (기본 A016C000) --log PATH (기본 /tmp/engine-lived2.log)\n");
-    printf("                          --wait SEC (기본 240) --pidfile PATH (기본 /tmp/trading-engine-<endpoint port>.pid)\n");
-    printf("  market                  종목·데이터 조회\n");
-    printf("  indicator               지표 인스턴스·설정 조회\n");
-    printf("  strategy list           전략 목록\n");
-    printf("  strategy start <id>     전략 시작\n");
-    printf("  strategy stop <id>      전략 중지 (신규 판단 중지. 청산·취소와 결합하지 않음)\n");
-    printf("  risk                    리스크 제한 조회\n");
-    printf("  orders                  주문 조회\n");
-    printf("  orders cancel <id>      주문 취소\n");
-    printf("  positions               계좌·포지션 조회\n");
-    printf("  shell                   대화형 관리 프롬프트\n");
-    printf("\nExit codes: 0 성공, 2 사용법 오류, 3 연결 오류, 4 타임아웃, 5 엔진 거절, 6 재기동 실패\n");
+    printf("                          --web DIR (default ./web). Ctrl+C stops both\n");
+    printf("                          Runs npm install first if packages are missing or fail to load\n");
+    printf("  engine restart          Restart the engine after it has exited\n");
+    printf("                          --symbol X (default A016C000) --log PATH (default /tmp/engine-lived2.log)\n");
+    printf("                          --wait SEC (default 240) --pidfile PATH (default /tmp/trading-engine-<endpoint port>.pid)\n");
+    printf("  market                  Look up symbols and data\n");
+    printf("  indicator               Look up indicator instances and settings\n");
+    printf("  strategy list           List strategies\n");
+    printf("  strategy start <id>     Start a strategy\n");
+    printf("  strategy stop <id>      Stop a strategy (stops new decisions; does not flatten or cancel)\n");
+    printf("  risk                    Show risk limits\n");
+    printf("  orders                  List orders\n");
+    printf("  orders cancel <id>      Cancel an order\n");
+    printf("  positions               Show account and positions\n");
+    printf("  shell                   Interactive prompt\n");
+    printf("\nExit codes: 0 ok, 2 usage error, 3 connection error, 4 timeout, 5 engine rejected, 6 restart failed\n");
 }
 
 typedef struct {
@@ -154,7 +156,7 @@ static int run_command(const opts_t *opts, const cmd_spec_t *spec, const char *a
 
     tr_ipc_client_t *c = tr_ipc_client_connect(opts->endpoint, opts->timeout_ms);
     if (c == 0) {
-        fprintf(stderr, "error: 엔진 연결 실패 (%s)\n", opts->endpoint);
+        fprintf(stderr, "error: engine connection failed (%s)\n", opts->endpoint);
         return 3;
     }
     tr_ipc_msg_t reply;
@@ -182,10 +184,10 @@ static int run_command(const opts_t *opts, const cmd_spec_t *spec, const char *a
             printf("rejected: %s\n", reply.error_code);
             break;
         case TR_IPC_CALL_TIMEOUT:
-            fprintf(stderr, "error: 응답 타임아웃\n");
+            fprintf(stderr, "error: response timed out\n");
             break;
         default:
-            fprintf(stderr, "error: 명령 전송 실패\n");
+            fprintf(stderr, "error: command send failed\n");
             break;
         }
     }
@@ -204,7 +206,7 @@ static int run_command(const opts_t *opts, const cmd_spec_t *spec, const char *a
 }
 
 static int run_shell(const opts_t *opts) {
-    printf("traderctl shell — 'help' 또는 'quit'\n");
+    printf("traderctl shell - type 'help' or 'quit'\n");
     char line[512];
     for (;;) {
         printf("traderctl> ");
@@ -233,7 +235,7 @@ static int run_shell(const opts_t *opts) {
         const char *arg = 0;
         const cmd_spec_t *spec = find_command(argc, argv, &consumed, &arg);
         if (spec == 0) {
-            printf("알 수 없는 명령: %s (help 참조)\n", argv[0]);
+            printf("unknown command: %s (see help)\n", argv[0]);
             continue;
         }
         run_command(opts, spec, arg);
@@ -467,7 +469,7 @@ static long spawn_engine(const char *exe, const char *symbol, const char *log_pa
     HANDLE hlog = CreateFileA(log_path, GENERIC_WRITE, FILE_SHARE_READ, &sa,
                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hlog == INVALID_HANDLE_VALUE) {
-        snprintf(err, errcap, "로그 파일 열기 실패: %s", log_path);
+        snprintf(err, errcap, "failed to open log file: %s", log_path);
         return -1;
     }
     char cmdline[2000]; /* CreateProcess가 덮어쓸 수 있어 쓰기 가능 배열이어야 한다 */
@@ -487,7 +489,7 @@ static long spawn_engine(const char *exe, const char *symbol, const char *log_pa
                              NULL, NULL, &si, &pi);
     CloseHandle(hlog);
     if (!ok) {
-        snprintf(err, errcap, "CreateProcess 실패: %lu", (unsigned long)GetLastError());
+        snprintf(err, errcap, "CreateProcess failed: %lu", (unsigned long)GetLastError());
         return -1;
     }
     CloseHandle(pi.hThread);
@@ -496,7 +498,7 @@ static long spawn_engine(const char *exe, const char *symbol, const char *log_pa
 #else
     pid_t pid = fork();
     if (pid < 0) {
-        snprintf(err, errcap, "fork 실패: %s", strerror(errno));
+        snprintf(err, errcap, "fork failed: %s", strerror(errno));
         return -1;
     }
     if (pid == 0) {
@@ -514,7 +516,7 @@ static long spawn_engine(const char *exe, const char *symbol, const char *log_pa
         }
         execl(exe, exe, "--live-fut", symbol, "--pidfile", pidfile,
               "--cmd-endpoint", cmd_ep, "--pub-endpoint", pub_ep, (char *)0);
-        fprintf(stderr, "exec 실패: %s\n", strerror(errno)); /* stderr는 로그로 리다이렉트됨 */
+        fprintf(stderr, "exec failed: %s\n", strerror(errno)); /* stderr는 로그로 리다이렉트됨 */
         _exit(127);
     }
     return (long)pid;
@@ -608,7 +610,20 @@ static void dirname_inplace(char *p) {
     }
 }
 
-/* 대시보드 디렉터리. --web, 현재 디렉터리의 web/, 실행 파일 두 단계 위의 web/ 순. */
+/* dir/web/server.js 가 있으면 out 에 dir/web 를 넣는다. */
+static bool web_beside(char *out, size_t cap, const char *dir) {
+    char js[1220];
+    if (snprintf(js, sizeof(js), "%s/web/server.js", dir) >= (int)sizeof(js)) {
+        return false;
+    }
+    if (!file_readable(js)) {
+        return false;
+    }
+    return snprintf(out, cap, "%s/web", dir) < (int)cap;
+}
+
+/* 대시보드 디렉터리. --web, 현재 디렉터리의 web/, 실행 파일 옆 web/, 그 위의 web/ 순.
+ * 배포 폴더는 dist/traderctl 과 dist/web. 개발 빌드는 build/traderctl 과 저장소 web/. */
 static bool find_web_dir(char *out, size_t cap, const char *override) {
     char js[1220];
     if (override != 0) {
@@ -628,17 +643,11 @@ static bool find_web_dir(char *out, size_t cap, const char *override) {
         return false;
     }
     dirname_inplace(exe);
+    if (web_beside(out, cap, exe)) {
+        return true;
+    }
     dirname_inplace(exe);
-    if (snprintf(js, sizeof(js), "%s/web/server.js", exe) >= (int)sizeof(js)) {
-        return false;
-    }
-    if (!file_readable(js)) {
-        return false;
-    }
-    if (snprintf(out, cap, "%s/web", exe) >= (int)cap) {
-        return false;
-    }
-    return true;
+    return web_beside(out, cap, exe);
 }
 
 /* 터미널에 붙은 자식. 로그를 파일로 빼거나 세션을 분리하지 않는다. */
@@ -651,7 +660,7 @@ static long spawn_attached(const char *exe, char *const argv[], const char *cwd,
     for (int i = 0; argv[i] != 0; i++) {
         int n = snprintf(cmdline + used, sizeof(cmdline) - used, "%s\"%s\"", i ? " " : "", argv[i]);
         if (n < 0 || (size_t)n >= sizeof(cmdline) - used) {
-            snprintf(err, errcap, "명령줄이 너무 깁니다");
+            snprintf(err, errcap, "command line is too long");
             return -1;
         }
         used += (size_t)n;
@@ -663,7 +672,7 @@ static long spawn_attached(const char *exe, char *const argv[], const char *cwd,
     memset(&pi, 0, sizeof(pi));
     BOOL ok = CreateProcessA(exe, cmdline, NULL, NULL, TRUE, 0, NULL, cwd, &si, &pi);
     if (!ok) {
-        snprintf(err, errcap, "CreateProcess 실패: %lu", (unsigned long)GetLastError());
+        snprintf(err, errcap, "CreateProcess failed: %lu", (unsigned long)GetLastError());
         return -1;
     }
     CloseHandle(pi.hThread);
@@ -678,12 +687,12 @@ static long spawn_attached(const char *exe, char *const argv[], const char *cwd,
     (void)is_node;
     pid_t pid = fork();
     if (pid < 0) {
-        snprintf(err, errcap, "fork 실패: %s", strerror(errno));
+        snprintf(err, errcap, "fork failed: %s", strerror(errno));
         return -1;
     }
     if (pid == 0) {
         if (cwd != 0 && chdir(cwd) != 0) {
-            fprintf(stderr, "chdir 실패: %s\n", strerror(errno));
+            fprintf(stderr, "chdir failed: %s\n", strerror(errno));
             _exit(127);
         }
         if (exe != 0) {
@@ -691,7 +700,7 @@ static long spawn_attached(const char *exe, char *const argv[], const char *cwd,
         } else {
             execvp(argv[0], argv);
         }
-        fprintf(stderr, "exec 실패: %s\n", strerror(errno));
+        fprintf(stderr, "exec failed: %s\n", strerror(errno));
         _exit(127);
     }
     if (is_node) {
@@ -711,7 +720,7 @@ static int spawn_and_wait(char *const argv[], const char *cwd, char *err, size_t
     for (int i = 0; argv[i] != 0; i++) {
         int n = snprintf(cmdline + used, sizeof(cmdline) - used, "%s\"%s\"", i ? " " : "", argv[i]);
         if (n < 0 || (size_t)n >= sizeof(cmdline) - used) {
-            snprintf(err, errcap, "명령줄이 너무 깁니다");
+            snprintf(err, errcap, "command line is too long");
             return -1;
         }
         used += (size_t)n;
@@ -722,7 +731,7 @@ static int spawn_and_wait(char *const argv[], const char *cwd, char *err, size_t
     PROCESS_INFORMATION pi;
     memset(&pi, 0, sizeof(pi));
     if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, cwd, &si, &pi)) {
-        snprintf(err, errcap, "CreateProcess 실패: %lu", (unsigned long)GetLastError());
+        snprintf(err, errcap, "CreateProcess failed: %lu", (unsigned long)GetLastError());
         return -1;
     }
     CloseHandle(pi.hThread);
@@ -743,16 +752,16 @@ static int spawn_and_wait(char *const argv[], const char *cwd, char *err, size_t
 #else
     pid_t pid = fork();
     if (pid < 0) {
-        snprintf(err, errcap, "fork 실패: %s", strerror(errno));
+        snprintf(err, errcap, "fork failed: %s", strerror(errno));
         return -1;
     }
     if (pid == 0) {
         if (cwd != 0 && chdir(cwd) != 0) {
-            fprintf(stderr, "chdir 실패: %s\n", strerror(errno));
+            fprintf(stderr, "chdir failed: %s\n", strerror(errno));
             _exit(127);
         }
         execvp(argv[0], argv);
-        fprintf(stderr, "exec 실패: %s\n", strerror(errno));
+        fprintf(stderr, "exec failed: %s\n", strerror(errno));
         _exit(127);
     }
     for (;;) {
@@ -828,17 +837,17 @@ static int ensure_web_modules(const char *web) {
         return -2;
     }
     if (ok < 0) {
-        fprintf(stderr, "error: node 를 찾지 못했습니다. Node.js 20 이상을 설치하세요\n");
+        fprintf(stderr, "error: node was not found. Install Node.js 20 or newer\n");
         return 6;
     }
-    printf("대시보드 패키지가 없거나 불러오지 못합니다. npm install 을 실행합니다\n");
+    printf("dashboard packages are missing or failed to load. Running npm install\n");
     fflush(stdout);
     int rc = web_npm_install(web);
     if (rc == -2) {
         return -2;
     }
     if (rc != 0) {
-        fprintf(stderr, "error: npm install 실패 (종료 %d)\n", rc);
+        fprintf(stderr, "error: npm install failed (exit %d)\n", rc);
         return 6;
     }
     ok = web_modules_ok(web);
@@ -846,7 +855,7 @@ static int ensure_web_modules(const char *web) {
         return -2;
     }
     if (ok != 0) {
-        fprintf(stderr, "error: npm install 후에도 대시보드 패키지를 불러오지 못합니다\n");
+        fprintf(stderr, "error: dashboard packages still failed to load after npm install\n");
         return 6;
     }
     return 0;
@@ -941,9 +950,11 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     const char *replay_delay = 0;
     const char *web_override = 0;
     for (int j = 0; j < argc; j++) {
-        if (strcmp(argv[j], "--live") == 0 && j + 1 < argc) {
+        if (strcmp(argv[j], "--live") == 0) {
             mode = "--live";
-            arg = argv[++j];
+            if (j + 1 < argc && argv[j + 1][0] != '-') {
+                arg = argv[++j];
+            }
         } else if (strcmp(argv[j], "--live-fut") == 0 && j + 1 < argc) {
             mode = "--live-fut";
             arg = argv[++j];
@@ -955,24 +966,28 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
         } else if (strcmp(argv[j], "--web") == 0 && j + 1 < argc) {
             web_override = argv[++j];
         } else {
-            fprintf(stderr, "error: up 인자 오류: %s\n", argv[j]);
+            fprintf(stderr, "error: bad up argument: %s\n", argv[j]);
             return 2;
         }
     }
-    if (mode == 0 || arg == 0 || arg[0] == '\0') {
-        fprintf(stderr, "error: up 에는 --live SYM, --live-fut SYM, --replay FILE 중 하나가 필요합니다\n");
+    /* 인자가 없으면 종목 없는 라이브다. 종목은 대시보드의 watch로 연다. */
+    if (mode == 0) {
+        mode = "--live";
+    }
+    if (strcmp(mode, "--live") != 0 && (arg == 0 || arg[0] == '\0')) {
+        fprintf(stderr, "error: %s requires a value\n", mode);
         return 2;
     }
 
     char web[1100];
     if (!find_web_dir(web, sizeof(web), web_override)) {
-        fprintf(stderr, "error: 대시보드 디렉터리를 찾지 못했습니다 (web/server.js). 저장소 루트에서 실행하세요\n");
+        fprintf(stderr, "error: dashboard directory not found (web/server.js). Run from the repo root\n");
         return 6;
     }
 
     char exe[1100];
     if (!engine_path(exe, sizeof(exe))) {
-        fprintf(stderr, "error: 엔진 경로 확인 실패\n");
+        fprintf(stderr, "error: failed to resolve engine path\n");
         return 6;
     }
 
@@ -983,11 +998,11 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     long engine_pid = -1;
     int st = query_status_pid(opts->endpoint, opts->timeout_ms, cmd_id, &existing);
     if (st > 0) {
-        printf("엔진이 이미 실행 중: pid %ld — 대시보드만 띄웁니다\n", existing);
+        printf("engine already running: pid %ld - starting dashboard only\n", existing);
         fflush(stdout);
     } else {
         if (!file_readable(exe)) {
-            fprintf(stderr, "error: 엔진 바이너리 없음: %s\n", exe);
+            fprintf(stderr, "error: engine binary not found: %s\n", exe);
             return 6;
         }
         char pub_ep[256];
@@ -996,7 +1011,9 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
         int n = 0;
         av[n++] = exe;
         av[n++] = mode;
-        av[n++] = arg;
+        if (arg != 0 && arg[0] != '\0') {
+            av[n++] = arg;
+        }
         if (replay_delay != 0) {
             av[n++] = "--replay-delay";
             av[n++] = replay_delay;
@@ -1013,23 +1030,23 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
             return 6;
         }
         started_engine = true;
-        printf("엔진 기동 중: pid %ld\n", engine_pid);
+        printf("starting engine: pid %ld\n", engine_pid);
         fflush(stdout);
         unsigned long start = now_ms();
         for (;;) {
             snprintf(cmd_id, sizeof(cmd_id), "traderctl-%llu", (unsigned long long)g_cmd_seq++);
             long new_pid = -1;
             if (query_status_pid(opts->endpoint, 500, cmd_id, &new_pid) != 0) {
-                printf("엔진 준비됨: pid %ld\n", new_pid > 0 ? new_pid : engine_pid);
+                printf("engine ready: pid %ld\n", new_pid > 0 ? new_pid : engine_pid);
                 fflush(stdout);
                 break;
             }
             if (child_exited(engine_pid)) {
-                fprintf(stderr, "error: 엔진이 기동 중 종료됨\n");
+                fprintf(stderr, "error: engine exited during startup\n");
                 return 6;
             }
             if (now_ms() - start >= 60000UL) {
-                fprintf(stderr, "error: 60초 내 엔진이 준비되지 않음\n");
+                fprintf(stderr, "error: engine was not ready within 60 seconds\n");
                 force_kill(engine_pid);
                 return 4;
             }
@@ -1082,7 +1099,7 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     int dash_port = 18080;
     if (port_open(dash_port) || port_open_v6(dash_port)) {
         dash_port = 18081;
-        fprintf(stderr, "18080은 이미 사용 중입니다. 대시보드는 %d 포트를 사용합니다\n", dash_port);
+        fprintf(stderr, "18080 is already in use. Dashboard will use port %d\n", dash_port);
     }
     char port_text[16];
     snprintf(port_text, sizeof(port_text), "%d", dash_port);
@@ -1099,7 +1116,7 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     char err[256] = {0};
     long node_pid = spawn_attached(0, (char *const *)nav, web, err, sizeof(err), true);
     if (node_pid < 0) {
-        fprintf(stderr, "error: 대시보드 기동 실패: %s\n", err);
+        fprintf(stderr, "error: failed to start dashboard: %s\n", err);
         if (started_engine) {
             force_kill(engine_pid);
         }
@@ -1107,7 +1124,7 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     }
     char dash_url[64];
     snprintf(dash_url, sizeof(dash_url), "http://127.0.0.1:%d", dash_port);
-    printf("대시보드: %s  (Ctrl+C 로 종료)\n", dash_url);
+    printf("dashboard: %s  (Ctrl+C to stop)\n", dash_url);
     fflush(stdout);
     bool ready = false;
     unsigned long wait_from = now_ms();
@@ -1121,16 +1138,16 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     if (ready) {
         open_dashboard(dash_url);
     } else if (!node_exited()) {
-        fprintf(stderr, "error: 20초 안에 대시보드 포트가 열리지 않았습니다\n");
+        fprintf(stderr, "error: dashboard port did not open within 20 seconds\n");
     }
 
     while (!g_up_stop) {
         if (started_engine && child_exited(engine_pid)) {
-            fprintf(stderr, "엔진이 종료되었습니다\n");
+            fprintf(stderr, "engine exited\n");
             break;
         }
         if (node_exited()) {
-            fprintf(stderr, "대시보드가 종료되었습니다\n");
+            fprintf(stderr, "dashboard exited\n");
             break;
         }
         sleep_ms(200);
@@ -1167,7 +1184,7 @@ static int run_engine_restart(const opts_t *opts, const restart_opts_t *ro) {
     /* traderctl과 같은 디렉터리의 trading-engine — 신원 확인과 기동 양쪽에서 쓴다 */
     char exe[1100];
     if (!engine_path(exe, sizeof(exe))) {
-        fprintf(stderr, "error: 엔진 경로 확인 실패\n");
+        fprintf(stderr, "error: failed to resolve engine path\n");
         return 6;
     }
 
@@ -1177,11 +1194,11 @@ static int run_engine_restart(const opts_t *opts, const restart_opts_t *ro) {
     int st = query_status_pid(opts->endpoint, opts->timeout_ms, cmd_id, &old_pid);
     if (st < 0) {
         /* pid 없는 구 바이너리가 살아 있으면 소멸 확인이 불가 — 이 상태에서 기동하면 포트 충돌 */
-        fprintf(stderr, "error: 실행 중 엔진이 pid를 보고하지 않음 (구버전 바이너리) — 수동 정지 후 재시도\n");
+        fprintf(stderr, "error: running engine does not report a pid (old binary) - stop it manually and retry\n");
         return 6;
     }
     if (st > 0 && old_pid > 0) {
-        printf("정지 요청: pid %ld\n", old_pid);
+        printf("stop requested: pid %ld\n", old_pid);
         fflush(stdout);
         /* engine.stop 응답 타임아웃은 흔하므로 결과는 프로세스 소멸로만 판정한다 */
         snprintf(cmd_id, sizeof(cmd_id), "traderctl-%llu", (unsigned long long)g_cmd_seq++);
@@ -1192,15 +1209,15 @@ static int run_engine_restart(const opts_t *opts, const restart_opts_t *ro) {
             tr_ipc_client_close(c);
         }
         if (wait_gone(old_pid, RESTART_STOP_WAIT_SEC)) {
-            printf("정상 정지됨\n");
+            printf("stopped cleanly\n");
         } else {
-            printf("응답 없음 — 강제 종료: pid %ld\n", old_pid);
+            printf("no response - forcing stop: pid %ld\n", old_pid);
             fflush(stdout);
             if (!force_kill(old_pid)) {
-                fprintf(stderr, "error: 엔진을 죽일 수 없음: pid %ld\n", old_pid);
+                fprintf(stderr, "error: could not kill engine: pid %ld\n", old_pid);
                 return 6;
             }
-            printf("강제 정지됨\n");
+            printf("force-stopped\n");
         }
         fflush(stdout);
         remove_pid_file_if(ro->pidfile, old_pid); /* 강제 종료된 엔진은 pid 파일을 못 지운다 */
@@ -1212,25 +1229,25 @@ static int run_engine_restart(const opts_t *opts, const restart_opts_t *ro) {
         if (read_pid_file(ro->pidfile, &fpid, &existed) == 1 && pid_alive(fpid)) {
             if (pid_is_our_engine(fpid, exe) != 1) {
                 /* pid 재사용 의심 — 무관 프로세스를 쏘지 않기 위해 신호도 기동도 하지 않는다 */
-                fprintf(stderr, "error: pid 파일의 pid %ld가 엔진 바이너리(%s)로 확인되지 않음 — 수동 확인\n",
+                fprintf(stderr, "error: pid %ld in the pid file is not the engine binary (%s) - check manually\n",
                         fpid, exe);
                 return 6;
             }
-            printf("status 미응답이지만 pid 파일의 엔진 생존 — 정지: pid %ld\n", fpid);
+            printf("status did not respond, but the engine in the pid file is alive - stopping: pid %ld\n", fpid);
             fflush(stdout);
             if (!force_kill(fpid)) {
-                fprintf(stderr, "error: 엔진을 죽일 수 없음: pid %ld\n", fpid);
+                fprintf(stderr, "error: could not kill engine: pid %ld\n", fpid);
                 return 6;
             }
-            printf("강제 정지됨\n");
+            printf("force-stopped\n");
             fflush(stdout);
             remove_pid_file_if(ro->pidfile, fpid);
         } else if (existed) {
-            printf("stale pid 파일 삭제: %s\n", ro->pidfile);
+            printf("removed stale pid file: %s\n", ro->pidfile);
             fflush(stdout);
             remove(ro->pidfile);
         } else {
-            printf("실행 중인 엔진 없음 — 바로 기동\n");
+            printf("no engine running - starting now\n");
             fflush(stdout);
         }
     }
@@ -1238,7 +1255,7 @@ static int run_engine_restart(const opts_t *opts, const restart_opts_t *ro) {
     /* 2) 기동 — .env는 엔진이 스스로 읽는다 */
     FILE *probe = fopen(exe, "rb");
     if (probe == 0) {
-        fprintf(stderr, "error: 엔진 바이너 없음: %s (cmake --build build 먼저)\n", exe);
+        fprintf(stderr, "error: engine binary missing: %s (run cmake --build build first)\n", exe);
         return 6;
     }
     fclose(probe);
@@ -1252,7 +1269,7 @@ static int run_engine_restart(const opts_t *opts, const restart_opts_t *ro) {
         fprintf(stderr, "error: %s\n", err);
         return 6;
     }
-    printf("기동 중: pid %ld (%s, 로그 %s)\n", child, ro->symbol, ro->log_path);
+    printf("starting: pid %ld (%s, log %s)\n", child, ro->symbol, ro->log_path);
     fflush(stdout);
 
     /* 3) 준비 확인 — 백필을 끝내고 명령 루프에 들어가야 status가 응답한다 */
@@ -1263,19 +1280,19 @@ static int run_engine_restart(const opts_t *opts, const restart_opts_t *ro) {
         snprintf(cmd_id, sizeof(cmd_id), "traderctl-%llu", (unsigned long long)g_cmd_seq++);
         long new_pid = -1;
         if (query_status_pid(opts->endpoint, 500, cmd_id, &new_pid) != 0) {
-            printf("기동 완료: pid %ld\n", new_pid > 0 ? new_pid : child);
+            printf("started: pid %ld\n", new_pid > 0 ? new_pid : child);
             fflush(stdout);
             rc = 0;
             break;
         }
         if (child_exited(child)) {
-            fprintf(stderr, "error: 엔진이 기동 중 종료됨\n");
+            fprintf(stderr, "error: engine exited during startup\n");
             print_log_tail(ro->log_path);
             rc = 6;
             break;
         }
         if (now_ms() - start >= budget) { /* 부호 없는 경과 비교 (랩 안전) */
-            fprintf(stderr, "error: %d초 내 준비 확인 못함 — %s 확인 요망\n", ro->wait_sec, ro->log_path);
+            fprintf(stderr, "error: not ready within %d seconds - check %s\n", ro->wait_sec, ro->log_path);
             rc = 4;
             break;
         }
@@ -1311,8 +1328,7 @@ int main(int argc, char **argv) {
         }
     }
     if (i >= argc) {
-        print_usage(argv[0]);
-        return 2;
+        return run_up(&opts, 0, 0);
     }
     if (strcmp(argv[i], "shell") == 0) {
         return run_shell(&opts);
@@ -1332,12 +1348,12 @@ int main(int argc, char **argv) {
             } else if (strcmp(argv[j], "--wait") == 0 && j + 1 < argc) {
                 ro.wait_sec = atoi(argv[++j]);
             } else {
-                fprintf(stderr, "error: engine restart 인자 오류: %s\n", argv[j]);
+                fprintf(stderr, "error: bad engine restart argument: %s\n", argv[j]);
                 return 2;
             }
         }
         if (ro.wait_sec < 1) {
-            fprintf(stderr, "error: --wait는 1초 이상이어야 합니다\n");
+            fprintf(stderr, "error: --wait must be at least 1 second\n");
             return 2;
         }
         if (ro.wait_sec > 86400) {
@@ -1370,11 +1386,11 @@ int main(int argc, char **argv) {
     const char *arg = 0;
     const cmd_spec_t *spec = find_command(argc - i, argv + i, &consumed, &arg);
     if (spec == 0) {
-        fprintf(stderr, "error: 알 수 없거나 인자가 부족한 명령입니다 (try --help)\n");
+        fprintf(stderr, "error: unknown command or missing argument (try --help)\n");
         return 2;
     }
     if (i + consumed != argc) {
-        fprintf(stderr, "error: 불필요한 인자가 있습니다\n");
+        fprintf(stderr, "error: unexpected extra arguments\n");
         return 2;
     }
     return run_command(&opts, spec, arg);

@@ -96,7 +96,7 @@ static int cmd_port_of(const char *ep) {
 static void pidfile_write(const char *path) {
     FILE *f = fopen(path, "w");
     if (f == 0) {
-        fprintf(stderr, "warning: pid 파일 쓰기 실패: %s\n", path);
+        fprintf(stderr, "warning: failed to write pid file: %s\n", path);
         return;
     }
     fprintf(f, "%ld", self_pid());
@@ -283,7 +283,7 @@ static int inject_with_cache(tr_engine_t *eng, tr_pipeline_t *pipe, const tr_can
         }
     }
     if (future_dropped > 0) {
-        fprintf(stderr, "backfill %s: 미래 봉 %d개 제외\n", pipe->shcode, future_dropped);
+        fprintf(stderr, "backfill %s: dropped %d future bars\n", pipe->shcode, future_dropped);
     }
     return injected;
 }
@@ -302,7 +302,7 @@ static int backfill_ovs_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeli
     if (tr_backfill_marks_rt_only(kind, rc)) {
         /* 계정 권한으로 과거 데이터가 차단됐다 — stderr 1줄로 표시하고 라이브만 쌓는다.
          * rt_only 종목은 60초 재백필·RT 캐치업 대상에서 빠진다 (로그 홍수 방지) */
-        fprintf(stderr, "backfill %s: 해외선물 과거 데이터 없음(계정 권한) — RT-only로 시작 (권한 해소 시 unwatch/watch로 재시도)\n",
+        fprintf(stderr, "backfill %s: no overseas-futures history (account permission) - starting RT-only (unwatch/watch after access is fixed)\n",
                 shcode);
         if (rt_only_out != 0) {
             *rt_only_out = true;
@@ -383,7 +383,7 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
         bool have_bars = hi < HIST_CAP;
         tr_time_us_t held_oldest = have_bars ? g_hist[hi].open_time_us : 0;
         if (!tr_backfill_page_extends(g_page[0].open_time_us, have_bars, held_oldest)) {
-            fprintf(stderr, "backfill %s: page %zu가 더 과거가 아니라 중단\n", shcode, pg);
+            fprintf(stderr, "backfill %s: page %zu is not older; stopping\n", shcode, pg);
             break;
         }
         hi -= page.count;
@@ -490,7 +490,7 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
         }
     }
     if (future_dropped > 0) {
-        fprintf(stderr, "backfill %s: 미래 봉 %d개 제외\n", shcode, future_dropped);
+        fprintf(stderr, "backfill %s: dropped %d future bars\n", shcode, future_dropped);
     }
     int injected = inject_with_cache(eng, pipe, g_merge_bars, nb);
     return injected;
@@ -1353,6 +1353,55 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         }
         const char *code = yyjson_get_str(sh);
         live_ctx_t *lc = &g_live_ctx;
+        /* 종목 없이 기동하면 파이프라인 0이 비어 있다. 첫 watch가 그 칸을 채운다.
+         * 빈 칸을 남긴 채 파이프를 추가하면 빈 종목 재백필이 계속된다. */
+        if (lc->watch_count == 0 && lc->engine->pipes[0]->shcode[0] == '\0') {
+            uint64_t new_id = instrument_id_of(code);
+            const char *new_name = 0;
+            double new_tick = 0.0;
+            ensure_master(lc);
+            int new_kind = resolve_instrument(lc->master, code, &new_name, &new_tick);
+            const char *new_tick_cd, *new_ob;
+            rt_channels_for(new_kind, &new_tick_cd, &new_ob);
+            tr_session_policy_t new_sess = session_for(new_kind);
+            if (!tr_engine_select_symbol(lc->engine, new_id, kind_is_futures(new_kind), code,
+                                         &new_sess,
+                                         (new_kind == LS_MARKET_OVS_FUT || new_kind == LS_MARKET_KP200_OPT)
+                                             ? new_tick
+                                             : 0.0,
+                                         new_kind == LS_MARKET_OVS_FUT)) {
+                cmd->status = "rejected";
+                cmd->error_code = "invalid_symbol";
+                cmd->payload_json = 0;
+                yyjson_doc_free(doc);
+                return;
+            }
+            int slot = watch_pool_of(lc->engine->pipes[0]);
+            tr_engine_attach_status_ring(lc->engine, g_status_pool[slot], g_bar_cap);
+            tr_engine_attach_market(lc->engine, g_mkt_pool[slot], MKT_POOL_CAP);
+            tr_ls_rt_subscribe(lc->rt, new_tick_cd, code, new_id);
+            tr_ls_rt_subscribe(lc->rt, new_ob, code, new_id);
+            watch_entry_t *w = &lc->watches[lc->watch_count++];
+            snprintf(w->shcode, sizeof(w->shcode), "%s", code);
+            snprintf(w->tick_cd, sizeof(w->tick_cd), "%s", new_tick_cd);
+            snprintf(w->ob_cd, sizeof(w->ob_cd), "%s", new_ob);
+            w->kind = new_kind;
+            w->rt_only = false;
+            w->instrument_id = new_id;
+            bool blank_rt_only = false;
+            int nb = backfill_minute_bars(lc->auth, lc->engine, lc->engine->pipes[0], code,
+                                          new_kind, &blank_rt_only);
+            w->rt_only = blank_rt_only;
+            snprintf(payload, sizeof(payload),
+                     "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":%d}",
+                     code, new_name != 0 ? new_name : "", lc->engine->pipes[0]->generation,
+                     nb > 0 ? nb : 0);
+            cmd->status = "applied";
+            cmd->error_code = "none";
+            cmd->payload_json = payload;
+            yyjson_doc_free(doc);
+            return;
+        }
         uint64_t id = instrument_id_of(code);
         tr_pipeline_t *pipe = tr_engine_pipe_find(lc->engine, id);
         if (pipe != 0) {
@@ -1919,19 +1968,30 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     if (master == 0) {
         fprintf(stderr, "instrument master unavailable: %s (fallback to heuristic)\n", merr);
     }
+    if (shcode == 0) {
+        shcode = "";
+    }
+    const bool have_symbol = shcode[0] != '\0';
     const char *found_name = 0;
     double tick_raw = 0.0;
-    int kind = resolve_instrument(master, shcode, &found_name, &tick_raw);
-    if (kind == LS_MARKET_KOSPI && is_fut) {
-        kind = LS_MARKET_KP200_FUT; /* CLI --live-fut 강제 (마스터 실패·추정 시에만 의미) */
+    int kind = LS_MARKET_KOSPI;
+    if (have_symbol) {
+        kind = resolve_instrument(master, shcode, &found_name, &tick_raw);
+        if (kind == LS_MARKET_KOSPI && is_fut) {
+            kind = LS_MARKET_KP200_FUT; /* CLI --live-fut 강제 (마스터 실패·추정 시에만 의미) */
+        }
     }
     if (master != 0) {
-        printf("instruments: %zu registered, %s=%s (%s)\n", ls_master_count(master), shcode,
-               kind == LS_MARKET_OVS_FUT        ? "OVS"
-               : kind == LS_MARKET_KP200_FUT ? "FUT"
-               : kind == LS_MARKET_KP200_OPT ? "OPT"
-                                             : "STK",
-               found_name != 0 ? found_name : "unknown");
+        if (have_symbol) {
+            printf("instruments: %zu registered, %s=%s (%s)\n", ls_master_count(master), shcode,
+                   kind == LS_MARKET_OVS_FUT        ? "OVS"
+                   : kind == LS_MARKET_KP200_FUT ? "FUT"
+                   : kind == LS_MARKET_KP200_OPT ? "OPT"
+                                                 : "STK",
+                   found_name != 0 ? found_name : "unknown");
+        } else {
+            printf("instruments: %zu registered\n", ls_master_count(master));
+        }
     }
 
     /* 2) IPC */
@@ -2005,7 +2065,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
      * 이 구간은 길다. 페이지 사이에서 status에 답해야 traderctl이 60초에 죽이지 않는다. */
     bool rt_only = false;
     g_boot_ipc = ipc;
-    {
+    if (have_symbol) {
         int nb = backfill_minute_bars(&auth, &engine, engine.pipes[0], shcode, kind, &rt_only);
         if (nb > 0) {
             printf("backfill: %d bars\n", nb);
@@ -2031,17 +2091,20 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         return 3;
     }
     /* 주식은 S3_/H1_, 선물은 주간 FC9/FH9·야간 DC0/DH0, 옵션은 OC0/OH0, 해외선물은 OVC/OVH */
-    const char *tr_cd, *ob_tr_cd;
-    rt_channels_for(kind, &tr_cd, &ob_tr_cd);
-    if (!tr_ls_rt_subscribe(rt, tr_cd, shcode, ecfg.instrument_id) ||
-        !tr_ls_rt_subscribe(rt, ob_tr_cd, shcode, ecfg.instrument_id)) {
-        fprintf(stderr, "error: subscribe failed\n");
-        tr_ls_rt_close(rt);
-        tr_ipc_close(ipc);
+    const char *tr_cd = "";
+    const char *ob_tr_cd = "";
+    if (have_symbol) {
+        rt_channels_for(kind, &tr_cd, &ob_tr_cd);
+        if (!tr_ls_rt_subscribe(rt, tr_cd, shcode, ecfg.instrument_id) ||
+            !tr_ls_rt_subscribe(rt, ob_tr_cd, shcode, ecfg.instrument_id)) {
+            fprintf(stderr, "error: subscribe failed\n");
+            tr_ls_rt_close(rt);
+            tr_ipc_close(ipc);
 #ifdef TR_HAS_STORE
-        tr_live_bars_close();
+            tr_live_bars_close();
 #endif
-        return 3;
+            return 3;
+        }
     }
 
     signal(SIGINT, on_signal);
@@ -2049,25 +2112,32 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
 
     g_running = 1;
     g_stop = 0;
-    /* 초기 종목 = 첫 워치 (파이프라인 0) */
-    g_live_ctx.watch_count = 1;
-    snprintf(g_live_ctx.watches[0].shcode, sizeof(g_live_ctx.watches[0].shcode), "%s", shcode);
-    snprintf(g_live_ctx.watches[0].tick_cd, sizeof(g_live_ctx.watches[0].tick_cd), "%s", tr_cd);
-    snprintf(g_live_ctx.watches[0].ob_cd, sizeof(g_live_ctx.watches[0].ob_cd), "%s", ob_tr_cd);
-    g_live_ctx.watches[0].kind = kind;
-    g_live_ctx.watches[0].rt_only = rt_only;
-    g_live_ctx.watches[0].instrument_id = ecfg.instrument_id;
+    /* 종목을 준 기동만 첫 워치(파이프라인 0)로 둔다. 없으면 대시보드 watch가 채운다. */
+    g_live_ctx.watch_count = 0;
+    if (have_symbol) {
+        g_live_ctx.watch_count = 1;
+        snprintf(g_live_ctx.watches[0].shcode, sizeof(g_live_ctx.watches[0].shcode), "%s", shcode);
+        snprintf(g_live_ctx.watches[0].tick_cd, sizeof(g_live_ctx.watches[0].tick_cd), "%s", tr_cd);
+        snprintf(g_live_ctx.watches[0].ob_cd, sizeof(g_live_ctx.watches[0].ob_cd), "%s", ob_tr_cd);
+        g_live_ctx.watches[0].kind = kind;
+        g_live_ctx.watches[0].rt_only = rt_only;
+        g_live_ctx.watches[0].instrument_id = ecfg.instrument_id;
+    }
     g_live_ctx.rt = rt;
     g_live_ctx.engine = &engine;
     g_live_ctx.master = master;
     g_live_ctx.auth = &auth;
 
-    printf("live %s %s: streaming (Ctrl+C 또는 'traderctl engine stop'으로 중지)\n",
-           kind == LS_MARKET_OVS_FUT        ? "OVS"
-           : kind == LS_MARKET_KP200_FUT ? "FUT"
-           : kind == LS_MARKET_KP200_OPT ? "OPT"
-                                         : "STK",
-           shcode);
+    if (have_symbol) {
+        printf("live %s %s: streaming (stop with Ctrl+C or 'traderctl engine stop')\n",
+               kind == LS_MARKET_OVS_FUT        ? "OVS"
+               : kind == LS_MARKET_KP200_FUT ? "FUT"
+               : kind == LS_MARKET_KP200_OPT ? "OPT"
+                                             : "STK",
+               shcode);
+    } else {
+        printf("live: no symbol. Open one in the dashboard (stop with Ctrl+C or 'traderctl engine stop')\n");
+    }
 
     int rc = 0;
     /* 직전 RT 이벤트 수신 시각. 0이면 기동 후 첫 이벤트 전 — 기동 백필과 중복 캐치업하지 않는다 */
@@ -2128,7 +2198,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
             bool retried = false;
             for (int i = 0; i < engine.pipe_count; i++) {
                 tr_pipeline_t *pipe = engine.pipes[i];
-                if (tr_ring_count(&pipe->bb.bars) != 0) {
+                if (tr_ring_count(&pipe->bb.bars) != 0 || pipe->shcode[0] == '\0') {
                     continue;
                 }
                 int wi = watch_find_by_id(&g_live_ctx, pipe->instrument_id);
@@ -2187,7 +2257,8 @@ static void print_usage(const char *prog) {
     printf("      --data-dir DIR      Engine data directory (reserved; not used yet)\n");
     printf("      --replay FILE       Replay CSV ticks (epoch_us,price,qty) and publish status\n");
     printf("      --replay-delay MS   Slow replay: delay between ticks (default 0)\n");
-    printf("      --live SHCODE       Live mode: subscribe realtime ticks for stock SHCODE\n");
+    printf("      --live [SHCODE]     Live mode. Omit SHCODE to start with no symbol;\n");
+    printf("                          open symbols with a dashboard watch\n");
     printf("      --live-fut SHCODE   Live mode: subscribe realtime ticks for futures SHCODE\n");
     printf("      --cmd-endpoint EP   Command endpoint (default tcp://127.0.0.1:5555)\n");
     printf("      --pub-endpoint EP   Status stream endpoint (default tcp://127.0.0.1:5556)\n");
@@ -2305,6 +2376,7 @@ static int run_replay(const char *path, const char *cmd_ep, const char *pub_ep, 
 int main(int argc, char **argv) {
     const char *replay_file = 0;
     const char *live_shcode = 0;
+    bool live_mode = false;
     bool live_fut = false;
     const char *cmd_ep = "tcp://127.0.0.1:5555";
     const char *pub_ep = "tcp://127.0.0.1:5556";
@@ -2324,9 +2396,12 @@ int main(int argc, char **argv) {
             replay_file = argv[++i];
             continue;
         }
-        if (strcmp(argv[i], "--live") == 0 && i + 1 < argc) {
-            live_shcode = argv[++i];
+        if (strcmp(argv[i], "--live") == 0) {
+            live_mode = true;
             live_fut = false;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                live_shcode = argv[++i];
+            }
             continue;
         }
         if (strcmp(argv[i], "--live-fut") == 0 && i + 1 < argc) {
@@ -2365,9 +2440,12 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    if (replay_file == 0 && live_shcode == 0) {
+    if (replay_file == 0 && !live_mode && live_shcode == 0) {
         fprintf(stderr, "error: no mode specified; see --help\n");
         return 1;
+    }
+    if (live_mode && live_shcode == 0) {
+        live_shcode = "";
     }
 
     /* 기본 pid 파일은 명령 엔드포인트 포트로 유도 — 다른 포트의 엔진과 파일이 갈린다 */

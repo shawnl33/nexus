@@ -11,6 +11,13 @@
 #include "core/model/civil_time.h"
 #include "yyjson.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <wincrypt.h>
+#include <mbedtls/x509_crt.h>
+#endif
+
 #define LS_RT_DEFAULT_URL "wss://openapi.ls-sec.co.kr:9443/websocket"
 #define LS_RT_MAX_SUBS 16
 #define LS_RT_RX_BUF (64 * 1024)
@@ -286,6 +293,125 @@ bool ls_rt_should_reauth(int consec_short, int64_t last_reauth_us, int64_t now_u
     return last_reauth_us <= 0 || now_us - last_reauth_us >= LS_RT_REAUTH_COOLDOWN_US;
 }
 
+size_t ls_rt_format_conn_error(const void *in, size_t len, char *out, size_t cap) {
+    const char *prefix = "ls-rt: connection error";
+    if (out == 0 || cap == 0) {
+        return 0;
+    }
+    size_t n = 0;
+    for (const char *p = prefix; *p != '\0' && n + 1 < cap; p++) {
+        out[n++] = *p;
+    }
+    const unsigned char *s = (const unsigned char *)in;
+    bool any = false;
+    if (s != 0) {
+        for (size_t i = 0; i < len; i++) {
+            if (s[i] != 0) {
+                any = true;
+                break;
+            }
+        }
+    }
+    if (any) {
+        if (n + 1 < cap) {
+            out[n++] = ':';
+        }
+        if (n + 1 < cap) {
+            out[n++] = ' ';
+        }
+        for (size_t i = 0; i < len && n + 1 < cap; i++) {
+            unsigned char c = s[i];
+            if (c == 0) {
+                break;
+            }
+            if (c == '\n' || c == '\r') {
+                c = ' ';
+            }
+            out[n++] = (char)c;
+        }
+    }
+    if (n + 1 < cap) {
+        out[n++] = '\n';
+    }
+    out[n] = '\0';
+    return n;
+}
+
+static char pem_b64_digit(unsigned v) {
+    static const char tab[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    return tab[v & 63u];
+}
+
+bool ls_rt_append_pem_cert(char **buf, size_t *len, size_t *cap,
+                           const unsigned char *der, size_t der_len) {
+    static const char begin[] = "-----BEGIN CERTIFICATE-----\n";
+    static const char end[] = "-----END CERTIFICATE-----\n";
+    if (buf == 0 || len == 0 || cap == 0 || der == 0 || der_len == 0) {
+        return false;
+    }
+    size_t b64_len = 4u * ((der_len + 2u) / 3u);
+    size_t breaks = (b64_len + 63u) / 64u; /* 각 줄 끝의 \n */
+    size_t need = (sizeof(begin) - 1u) + b64_len + breaks + (sizeof(end) - 1u);
+    if (*len > SIZE_MAX - need) {
+        return false;
+    }
+    size_t want = *len + need + 1u;
+    if (*cap < want) {
+        size_t ncap = *cap == 0 ? 256u : *cap;
+        while (ncap < want) {
+            if (ncap > SIZE_MAX / 2u) {
+                return false;
+            }
+            ncap *= 2u;
+        }
+        char *grown = (char *)realloc(*buf, ncap);
+        if (grown == 0) {
+            return false;
+        }
+        *buf = grown;
+        *cap = ncap;
+    }
+    char *dst = *buf + *len;
+    memcpy(dst, begin, sizeof(begin) - 1u);
+    dst += sizeof(begin) - 1u;
+    size_t col = 0;
+    size_t i = 0;
+    while (i < der_len) {
+        unsigned v = ((unsigned)der[i]) << 16;
+        int remain = 1;
+        if (i + 1 < der_len) {
+            v |= ((unsigned)der[i + 1]) << 8;
+            remain = 2;
+        }
+        if (i + 2 < der_len) {
+            v |= (unsigned)der[i + 2];
+            remain = 3;
+        }
+        char chunk[4];
+        chunk[0] = pem_b64_digit(v >> 18);
+        chunk[1] = pem_b64_digit(v >> 12);
+        chunk[2] = remain >= 2 ? pem_b64_digit(v >> 6) : '=';
+        chunk[3] = remain == 3 ? pem_b64_digit(v) : '=';
+        for (int k = 0; k < 4; k++) {
+            *dst++ = chunk[k];
+            col++;
+            if (col == 64) {
+                *dst++ = '\n';
+                col = 0;
+            }
+        }
+        i += 3;
+    }
+    if (col != 0) {
+        *dst++ = '\n';
+    }
+    memcpy(dst, end, sizeof(end) - 1u);
+    dst += sizeof(end) - 1u;
+    *dst = '\0';
+    *len = (size_t)(dst - *buf);
+    return true;
+}
+
 bool ls_rt_sub_ack_rejected(const char *body, size_t len) {
     yyjson_doc *doc = yyjson_read((char *)body, len, 0);
     if (doc == 0) {
@@ -327,7 +453,7 @@ static void log_sub_ack_reject(const char *body, size_t len) {
     const char *rsp_cd = yyjson_get_str(yyjson_obj_get(header, "rsp_cd"));
     const char *rsp_msg = yyjson_get_str(yyjson_obj_get(header, "rsp_msg"));
     if (rsp_cd != 0) {
-        fprintf(stderr, "ls-rt: 구독 거절 tr_cd=%s rsp_cd=%s rsp_msg=%s\n",
+        fprintf(stderr, "ls-rt: subscription rejected tr_cd=%s rsp_cd=%s rsp_msg=%s\n",
                 tr_cd != 0 ? tr_cd : "?", rsp_cd, rsp_msg != 0 ? rsp_msg : "");
     }
     yyjson_doc_free(doc);
@@ -454,6 +580,11 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
     }
     case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
     case LWS_CALLBACK_CLIENT_CLOSED:
+        if (reason == LWS_CALLBACK_CLIENT_CONNECTION_ERROR) {
+            char line[512];
+            ls_rt_format_conn_error(in, len, line, sizeof(line));
+            fputs(line, stderr);
+        }
         rt->wsi = 0;
         if (rt->state != LS_RT_FAILED) {
             rt->state = LS_RT_RECONNECTING;
@@ -467,7 +598,7 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
             int next_ms = ls_rt_next_retry_ms(survived_ms, rt->retry_ms,
                                               rt->cfg.reconnect_min_ms, rt->cfg.reconnect_max_ms);
             if (survived_ms >= 0 && survived_ms < LS_RT_HEALTHY_MS) {
-                fprintf(stderr, "ls-rt: 짧은 세션 (%lldms 유지 후 단절) — 백오프 유지 %dms\n",
+                fprintf(stderr, "ls-rt: short session (%lldms, then dropped) - keeping backoff %dms\n",
                         (long long)survived_ms, next_ms);
             }
             /* 연속 단기 세션은 서버 측 토큰 무효화 가능성 — 강제 재발급 후 재접속한다.
@@ -477,11 +608,11 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
             if (ls_rt_should_reauth(rt->consec_short, rt->last_reauth_us, now)) {
                 rt->last_reauth_us = now;
                 if (ls_auth_refresh(rt->cfg.auth)) {
-                    fprintf(stderr, "ls-rt: 연속 단기 세션 %d회 — 토큰 강제 갱신 후 재시도\n",
+                    fprintf(stderr, "ls-rt: %d short sessions in a row - forcing token refresh, then retry\n",
                             rt->consec_short);
                     rt->consec_short = 0;
                 } else {
-                    fprintf(stderr, "ls-rt: 연속 단기 세션 %d회 — 토큰 강제 갱신 실패, 카운터 유지\n",
+                    fprintf(stderr, "ls-rt: %d short sessions in a row - token refresh failed, keeping the counter\n",
                             rt->consec_short);
                 }
             }
@@ -505,6 +636,47 @@ static const struct lws_protocols protocols[] = {
 
 /* ---------- 수명 ---------- */
 
+#ifdef _WIN32
+/* lws 4.3.5의 MbedTLS 래퍼는 CA를 넘기지 않으면 신뢰 앵커가 없다.
+ * 한 장이라도 파싱에 실패하면 이미 읽은 체인 전체를 버린다 (x509_pm_load).
+ * 그래서 Windows ROOT에서 MbedTLS가 받아들이는 인증서만 PEM으로 모은다. */
+static bool ls_rt_der_acceptable(const unsigned char *der, size_t der_len) {
+    mbedtls_x509_crt crt;
+    mbedtls_x509_crt_init(&crt);
+    int rc = mbedtls_x509_crt_parse_der(&crt, der, der_len);
+    mbedtls_x509_crt_free(&crt);
+    return rc == 0;
+}
+
+static char *ls_rt_windows_root_pem(size_t *out_len, int *out_count) {
+    *out_len = 0;
+    *out_count = 0;
+    HCERTSTORE store = CertOpenSystemStoreA(0, "ROOT");
+    if (store == 0) {
+        return 0;
+    }
+    char *buf = 0;
+    size_t len = 0;
+    size_t cap = 0;
+    PCCERT_CONTEXT ctx = 0;
+    while ((ctx = CertEnumCertificatesInStore(store, ctx)) != 0) {
+        if (ctx->pbCertEncoded == 0 || ctx->cbCertEncoded == 0) {
+            continue;
+        }
+        if (!ls_rt_der_acceptable(ctx->pbCertEncoded, ctx->cbCertEncoded)) {
+            continue;
+        }
+        if (!ls_rt_append_pem_cert(&buf, &len, &cap, ctx->pbCertEncoded, ctx->cbCertEncoded)) {
+            break;
+        }
+        (*out_count)++;
+    }
+    CertCloseStore(store, 0);
+    *out_len = len;
+    return buf;
+}
+#endif
+
 tr_ls_rt_t *tr_ls_rt_open(const ls_rt_config_t *cfg, char *errbuf, size_t errlen) {
     if (cfg == 0 || cfg->auth == 0 || cfg->queue_capacity == 0) {
         return 0;
@@ -526,7 +698,22 @@ tr_ls_rt_t *tr_ls_rt_open(const ls_rt_config_t *cfg, char *errbuf, size_t errlen
     info.protocols = protocols;
     info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT | LWS_SERVER_OPTION_NO_LWS_SYSTEM_STATES;
     info.user = rt;
+#ifdef _WIN32
+    size_t ca_len = 0;
+    int ca_count = 0;
+    char *ca_pem = ls_rt_windows_root_pem(&ca_len, &ca_count);
+    if (ca_count > 0 && ca_pem != 0 && ca_len <= 0xffffffffu) {
+        fprintf(stderr, "ls-rt: loaded %d Windows root CAs\n", ca_count);
+        info.client_ssl_ca_mem = ca_pem;
+        info.client_ssl_ca_mem_len = (unsigned int)ca_len;
+    } else {
+        fprintf(stderr, "ls-rt: failed to read Windows root CAs\n");
+    }
+#endif
     rt->ctx = lws_create_context(&info);
+#ifdef _WIN32
+    free(ca_pem);
+#endif
     if (rt->ctx == 0) {
         if (errbuf != 0 && errlen > 0) {
             snprintf(errbuf, errlen, "lws_create_context failed");

@@ -11,6 +11,7 @@
       "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
+      "installDir": "${sourceDir}/dist",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
@@ -30,6 +31,7 @@
       "displayName": "Windows Debug 구성 (MinGW GCC, Ninja)",
       "inherits": "base",
       "binaryDir": "${sourceDir}/build-windows",
+      "installDir": "${sourceDir}/dist-windows",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "gcc"
       },
@@ -45,6 +47,7 @@
       "inherits": "base",
       "binaryDir": "${sourceDir}/build-windows-cross",
       "toolchainFile": "${sourceDir}/cmake/toolchain-windows-mingw.cmake",
+      "installDir": "${sourceDir}/dist-windows",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",

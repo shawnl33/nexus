@@ -8,6 +8,7 @@
 
 #include "test_util.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "adapters/ls/ls_realtime.h"
@@ -304,6 +305,68 @@ static void test_reauth_cooldown(void) {
     TR_CHECK(ls_rt_should_reauth(LS_RT_REAUTH_THRESHOLD + 2, t0, t0 + LS_RT_REAUTH_COOLDOWN_US));
 }
 
+static void test_conn_error_text(void) {
+    char out[80];
+    /* 원인이 없으면 한 줄만 남긴다 */
+    ls_rt_format_conn_error(0, 0, out, sizeof(out));
+    TR_CHECK(strcmp(out, "ls-rt: connection error\n") == 0);
+    ls_rt_format_conn_error(0, 4, out, sizeof(out));
+    TR_CHECK(strcmp(out, "ls-rt: connection error\n") == 0);
+
+    const char *msg = "server cert invalidca";
+    ls_rt_format_conn_error(msg, strlen(msg), out, sizeof(out));
+    TR_CHECK(strcmp(out, "ls-rt: connection error: server cert invalidca\n") == 0);
+
+    /* 여러 줄 원인은 로그 한 줄로 접는다. len 너머는 읽지 않는다 */
+    const char *nl = "line1\nline2\rXXXX";
+    ls_rt_format_conn_error(nl, 12, out, sizeof(out));
+    TR_CHECK(strcmp(out, "ls-rt: connection error: line1 line2 \n") == 0);
+
+    char tiny[8];
+    memset(tiny, 'X', sizeof(tiny));
+    ls_rt_format_conn_error(msg, strlen(msg), tiny, sizeof(tiny));
+    TR_CHECK(tiny[sizeof(tiny) - 1] == '\0');
+    TR_CHECK(strlen(tiny) == sizeof(tiny) - 1);
+}
+
+static void test_append_pem_cert(void) {
+    const unsigned char der[] = {0x30, 0x03, 0x01, 0x02, 0x03};
+    const char *expect =
+        "-----BEGIN CERTIFICATE-----\n"
+        "MAMBAgM=\n"
+        "-----END CERTIFICATE-----\n";
+    char *buf = 0;
+    size_t len = 0, cap = 0;
+    TR_CHECK(ls_rt_append_pem_cert(&buf, &len, &cap, der, sizeof(der)));
+    TR_CHECK(len == strlen(expect));
+    TR_CHECK(buf != 0 && memcmp(buf, expect, len) == 0);
+
+    TR_CHECK(ls_rt_append_pem_cert(&buf, &len, &cap, der, sizeof(der)));
+    TR_CHECK(len == strlen(expect) * 2);
+    TR_CHECK(memcmp(buf + strlen(expect), expect, strlen(expect)) == 0);
+
+    size_t kept = len;
+    TR_CHECK(!ls_rt_append_pem_cert(&buf, &len, &cap, der, 0));
+    TR_CHECK(!ls_rt_append_pem_cert(&buf, &len, &cap, 0, sizeof(der)));
+    TR_CHECK(len == kept);
+    free(buf);
+
+    /* 본문은 64자마다 줄을 나눈다. 49바이트 DER → base64 68자 = 64 + 4 */
+    unsigned char wide[49];
+    memset(wide, 0x61, sizeof(wide));
+    buf = 0;
+    len = 0;
+    cap = 0;
+    TR_CHECK(ls_rt_append_pem_cert(&buf, &len, &cap, wide, sizeof(wide)));
+    const char *body = strstr(buf, "\n");
+    TR_CHECK(body != 0);
+    body++;
+    const char *nl = strchr(body, '\n');
+    TR_CHECK(nl != 0 && (size_t)(nl - body) == 64);
+    TR_CHECK(nl[1] != '\n' && strchr(nl + 1, '\n') != 0);
+    free(buf);
+}
+
 static void test_sub_ack_rejected(void) {
     /* 정상 ACK: rsp_cd "00000" → 조용히 통과 */
     const char *ok =
@@ -336,6 +399,8 @@ int main(void) {
     test_retry_backoff();
     test_consec_short_counter();
     test_reauth_cooldown();
+    test_conn_error_text();
+    test_append_pem_cert();
     test_sub_ack_rejected();
     TR_TEST_SUMMARY();
 }
