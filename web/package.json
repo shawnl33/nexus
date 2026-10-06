@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "C Trading Engine 관리 대시보드 (로컬 전용)",
+  "description": "Nexus Trading Engine 관리 대시보드 (로컬 전용)",
   "engines": {
     "node": ">=20"
   },

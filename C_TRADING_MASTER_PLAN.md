@@ -80,7 +80,7 @@ flowchart TB
     WEB["브라우저 대시보드"] <--> NODE["Node 관리 서버"]
     NODE <--> IPC
     NODE --> WS["화면틀 저장"]
-    subgraph ENGINE["C Trading Engine"]
+    subgraph ENGINE["Nexus Trading Engine"]
         IPC["IPC 어댑터"] <--> RUN["runtime"]
         BROKER["LS 어댑터"] <--> RUN
         RUN <--> CORE["core"]

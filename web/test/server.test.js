@@ -421,7 +421,7 @@ test("static index.html served", async () => {
   const res = await fetch(`${base}/`);
   assert.equal(res.status, 200);
   const html = await res.text();
-  assert.ok(html.includes("C Trading Engine 대시보드")); // 헤더 제목 (9144137에서 미래곡선 → 현재 제목)
+  assert.ok(html.includes("Nexus Trading Engine 대시보드")); // 헤더 제목
   // 정적 파일은 캐시하지 않는다 — 구버전 JS/HTML과 새 서버의 엇갈림 방지
   assert.equal(res.headers.get("cache-control"), "no-store");
 });

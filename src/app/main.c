@@ -1538,7 +1538,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
 #endif
 
 static void print_usage(const char *prog) {
-    printf("C Trading Engine %s\n", TRADING_ENGINE_VERSION);
+    printf("Nexus Trading Engine %s\n", TRADING_ENGINE_VERSION);
     printf("\n");
     printf("Usage: %s [options]\n", prog);
     printf("\n");

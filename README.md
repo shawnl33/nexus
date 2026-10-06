@@ -1,4 +1,4 @@
-# C Trading Engine
+# Nexus Trading Engine
 
 C 기반 개인용 자동매매 시스템. 기준 명세는 [C_TRADING_MASTER_PLAN.md](C_TRADING_MASTER_PLAN.md)다.
 

@@ -35,7 +35,7 @@
 #define TRADERCTL_VERSION "0.1.0"
 
 static void print_usage(const char *prog) {
-    printf("traderctl %s — C Trading Engine 관리 CLI\n", TRADERCTL_VERSION);
+    printf("traderctl %s — Nexus Trading Engine 관리 CLI\n", TRADERCTL_VERSION);
     printf("\nUsage: %s [options] <command> [args]\n", prog);
     printf("\nOptions:\n");
     printf("  --endpoint EP   엔진 명령 엔드포인트 (기본 tcp://127.0.0.1:5555)\n");
