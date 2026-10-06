@@ -24,7 +24,7 @@ cmake --build --preset default
 ctest --preset default
 ```
 
-Windows (MinGW GCC + Ninja, MSYS2 환경 또는 gcc/ninja가 PATH에 있는 상태):
+Windows (MinGW GCC + Ninja). 설치부터 따라가는 절차는 [docs/windows-build.md](docs/windows-build.md)다.
 
 ```bat
 cmake --preset windows
@@ -32,7 +32,7 @@ cmake --build --preset windows
 ctest --preset windows
 ```
 
-정적 라이브러리 접두는 따로 넘기지 않는다. `MINGW_PREFIX`, 저장소 옆 `mingw-prefix`, `$HOME/mingw-prefix` 순으로 있으면 그 경로를 쓴다.
+정적 라이브러리는 `third_party/mingw-prefix`에 있다. `MINGW_PREFIX`가 있으면 그 경로를 쓴다.
 
 빌드 디렉터리는 OS별로 분리된다: Linux는 `build/`, Windows는 `build-windows/`.
 WSL 공유 폴터처럼 양쪽 OS가 같은 소스를 보는 환경에서도 충돌하지 않는다.

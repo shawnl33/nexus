@@ -14,12 +14,15 @@ else()
 endif()
 
 # Windows에서 빌드할 때 정적 의존성 접두를 자동으로 넣는다.
-# MINGW_PREFIX, 저장소 옆 mingw-prefix, $HOME/mingw-prefix, %USERPROFILE%\mingw-prefix 순이다.
+# MINGW_PREFIX, 저장소의 third_party/mingw-prefix, 저장소 옆 mingw-prefix,
+# $HOME/mingw-prefix, %USERPROFILE%\mingw-prefix 순이다.
 # 크로스 컴파일은 툴체인이 $HOME/mingw-prefix 를 따로 넣는다.
 if(WIN32 AND NOT CMAKE_CROSSCOMPILING)
     set(_tr_mingw_prefix "")
     if(DEFINED ENV{MINGW_PREFIX} AND NOT "$ENV{MINGW_PREFIX}" STREQUAL "")
         set(_tr_mingw_prefix "$ENV{MINGW_PREFIX}")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/mingw-prefix/lib")
+        set(_tr_mingw_prefix "${CMAKE_SOURCE_DIR}/third_party/mingw-prefix")
     elseif(EXISTS "${CMAKE_SOURCE_DIR}/../mingw-prefix")
         set(_tr_mingw_prefix "${CMAKE_SOURCE_DIR}/../mingw-prefix")
     elseif(DEFINED ENV{HOME} AND EXISTS "$ENV{HOME}/mingw-prefix")

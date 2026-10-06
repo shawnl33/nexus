@@ -42,9 +42,16 @@ vcpkg는 도입하지 않는다. 이 프로젝트는 Windows에서도 MSVC가 �
   3~15초에서 17~27ms로 해소됐다.
 - 컨텍스트 생성 시 `LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT` 사용, 클라이언트 TLS는 `LCCSCF_USE_SSL`.
 
-## Windows 독립 MinGW 빌드 절차 (미검증 기록)
+## Windows MinGW 정적 라이브러리
 
-1. SQLite: 공식 amalgamation(`sqlite3.c`)을 사용하거나 소스 빌드.
-2. libzmq: 공식 CMake 빌드를 같은 MinGW로 수행 (`-DBUILD_SHARED=OFF -DBUILD_TESTS=OFF -DWITH_LIBSODIUM=OFF`),
-   `CMAKE_INSTALL_PREFIX`에 설치 후 이 프로젝트 구성 시 `-DCMAKE_PREFIX_PATH=<prefix>` 지정.
-3. yyjson: `third_party/yyjson`을 그대로 사용.
+`third_party/mingw-prefix`에 Windows 빌드용 정적 라이브러리와 헤더를 둔다. `cmake --preset windows`가 이 경로를 찾으므로 클론한 뒤 따로 받지 않는다. `MINGW_PREFIX`가 있으면 그 경로가 우선이다.
+
+| 라이브러리 | 버전 | 파일 |
+|---|---|---|
+| SQLite | 3.50.4 | `libsqlite3.a` |
+| ZeroMQ | 4.3.5 | `libzmq.a` |
+| libcurl | 8.16.0 | `libcurl.a` |
+| libwebsockets | 4.3.5 | `libwebsockets.a` |
+| Mbed TLS | 2.28.9 | `libmbedtls.a`, `libmbedx509.a`, `libmbedcrypto.a` |
+
+yyjson은 `third_party/yyjson`을 그대로 사용한다.
