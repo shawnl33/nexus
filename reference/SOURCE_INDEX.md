@@ -8,7 +8,7 @@
 
 이 자료는 해당 프로젝트의 구현 참고용이다. 원본을 수정할 때에는 별도 작업 파일과 변경 이력을 사용한다. HTML의 동봉되지 않은 설명서 링크는 원본 그대로이며, HTML 자체를 원본 수치 비교의 정답으로 사용하지 않는다.
 
-원본은 종류별로 세 폴드에 둔다: 함수 원본은 `yeslanguage/functions/`, 지표 원본은 `yeslanguage/indicators/`, 전략 원본은 `yeslanguage/strategies/`이며, C 포팅 쪽도 같은 3분할(`src/core/functions|indicators|strategies/`)을 거울처럼 따른다(규약은 [docs/PORTING.md](../docs/PORTING.md)). 새 원본은 처음부터 종류에 맞는 폴드에 직접 추가한다.
+원본 폴더 이름을 C 포팅 폴더 이름으로 그대로 쓴다. 함수는 `yeslanguage/functions/`, 지표는 `yeslanguage/indicators/`, 시그널은 `yeslanguage/signals/`, 전략은 `yeslanguage/strategies/`이며, C 쪽은 `src/core/` 아래 같은 이름이다(규약은 [docs/PORTING.md](../docs/PORTING.md)). 시그널 원본을 전략 폴더로 옮기지 않는다.
 
 | 원래 파일명 | 묶음 내 위치 | 바이트 | 용도 |
 |---|---|---:|---|
