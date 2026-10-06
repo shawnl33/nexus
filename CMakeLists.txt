@@ -213,6 +213,20 @@ else()
     endif()
 endif()
 
+# WinLibs POSIX GCC 는 win32 스레드용 __gthr_win32_* 와 옛 vsnprintf_s 가 없다.
+set(TR_MINGW_POSIX_THREADS FALSE)
+if(WIN32 AND NOT MSVC)
+    execute_process(
+        COMMAND ${CMAKE_C_COMPILER} -v
+        OUTPUT_VARIABLE _tr_cc_out
+        ERROR_VARIABLE _tr_cc_err
+    )
+    if("${_tr_cc_out}${_tr_cc_err}" MATCHES "Thread model: posix")
+        set(TR_MINGW_POSIX_THREADS TRUE)
+        message(STATUS "POSIX 스레드 MinGW: 정적 라이브러리 호환 심볼을 넣는다")
+    endif()
+endif()
+
 # IPC 어댑터: ZeroMQ는 시스템 패키지를 사용한다.
 find_library(ZMQ_LIBRARY NAMES zmq libzmq)
 find_path(ZMQ_INCLUDE_DIR NAMES zmq.h)
@@ -226,6 +240,9 @@ if(ZMQ_LIBRARY AND ZMQ_INCLUDE_DIR)
     if(WIN32)
         target_compile_definitions(ipc PUBLIC ZMQ_STATIC)
         target_link_libraries(ipc PUBLIC ws2_32 iphlpapi winpthread stdc++)
+        if(TR_MINGW_POSIX_THREADS)
+            target_sources(ipc PRIVATE src/compat/mingw_posix_compat.c)
+        endif()
     endif()
     target_include_directories(ipc PUBLIC src ${ZMQ_INCLUDE_DIR})
     target_compile_options(ipc PRIVATE ${TR_WARNINGS})
@@ -267,16 +284,17 @@ if(TR_IPC_FOUND)
         target_compile_definitions(trading-engine PRIVATE TR_HAS_STORE=1)
     endif()
     if(WIN32)
-        # third_party/windows-runtime 에 보관한 MinGW 런타임을 exe 옆으로 복사한다.
+        # 링크한 컴파일러의 DLL을 우선 복사한다. 저장소의 DLL은 그 컴파일러에 없을 때의 예비다.
+        get_filename_component(_tr_cc_bin "${CMAKE_C_COMPILER}" DIRECTORY)
         set(TR_WIN_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/third_party/windows-runtime")
-        set(TR_WIN_RUNTIME_DLLS
-            "${TR_WIN_RUNTIME_DIR}/libgcc_s_seh-1.dll"
-            "${TR_WIN_RUNTIME_DIR}/libstdc++-6.dll"
-            "${TR_WIN_RUNTIME_DIR}/libwinpthread-1.dll"
-        )
-        foreach(_dll ${TR_WIN_RUNTIME_DLLS})
-            if(NOT EXISTS "${_dll}")
-                message(FATAL_ERROR "윈도우 런타임 DLL 없음: ${_dll}")
+        set(TR_WIN_RUNTIME_DLLS "")
+        foreach(_name libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
+            if(EXISTS "${_tr_cc_bin}/${_name}")
+                list(APPEND TR_WIN_RUNTIME_DLLS "${_tr_cc_bin}/${_name}")
+            elseif(EXISTS "${TR_WIN_RUNTIME_DIR}/${_name}")
+                list(APPEND TR_WIN_RUNTIME_DLLS "${TR_WIN_RUNTIME_DIR}/${_name}")
+            else()
+                message(FATAL_ERROR "윈도우 런타임 DLL 없음: ${_name}")
             endif()
         endforeach()
         foreach(_tgt traderctl trading-engine)
