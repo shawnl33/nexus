@@ -24,9 +24,11 @@
 #include <shellapi.h>
 #include <signal.h>
 #else
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -58,7 +60,8 @@ static void print_usage(const char *prog) {
     printf("                          Starts with no symbol. Open symbols in the dashboard\n");
     printf("                          --live SYM | --live-fut SYM | --replay FILE [--replay-delay MS]\n");
     printf("                          --web DIR (default ./web). Ctrl+C stops both\n");
-    printf("                          Runs npm install first if packages are missing or fail to load\n");
+    printf("                          Runs npm install when packages are missing.\n");
+    printf("                          A broken node_modules is removed and installed again.\n");
     printf("  engine restart          Restart the engine after it has exited\n");
     printf("                          --symbol X (default A016C000) --log PATH (default /tmp/engine-lived2.log)\n");
     printf("                          --wait SEC (default 240) --pidfile PATH (default /tmp/trading-engine-<endpoint port>.pid)\n");
@@ -827,7 +830,103 @@ static int web_npm_install(const char *web) {
     return spawn_and_wait((char *const *)av, web, err, sizeof(err));
 }
 
-/* 패키지가 없거나 이 OS에서 불러오지 못하면 npm install 을 한 번 한다. */
+/* 디렉터리, 심볼릭 링크, 파일을 지운다. 링크는 따라가지 않는다. 없으면 0. */
+static int remove_path(const char *path) {
+#ifdef _WIN32
+    DWORD attr = GetFileAttributesA(path);
+    if (attr == INVALID_FILE_ATTRIBUTES) {
+        return 0;
+    }
+    if ((attr & FILE_ATTRIBUTE_DIRECTORY) && (attr & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+        char pattern[2048];
+        int n = snprintf(pattern, sizeof(pattern), "%s/*", path);
+        if (n < 0 || (size_t)n >= sizeof(pattern)) {
+            return -1;
+        }
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern, &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) {
+                    continue;
+                }
+                char child[2048];
+                int cn = snprintf(child, sizeof(child), "%s/%s", path, fd.cFileName);
+                if (cn < 0 || (size_t)cn >= sizeof(child) || remove_path(child) != 0) {
+                    FindClose(h);
+                    return -1;
+                }
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
+        SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+        return RemoveDirectoryA(path) ? 0 : -1;
+    }
+    SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+    if (attr & FILE_ATTRIBUTE_DIRECTORY) {
+        return RemoveDirectoryA(path) ? 0 : -1;
+    }
+    return DeleteFileA(path) ? 0 : -1;
+#else
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        return errno == ENOENT ? 0 : -1;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        if (d == 0) {
+            return -1;
+        }
+        struct dirent *ent;
+        while ((ent = readdir(d)) != 0) {
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+                continue;
+            }
+            char child[2048];
+            int cn = snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+            if (cn < 0 || (size_t)cn >= sizeof(child) || remove_path(child) != 0) {
+                closedir(d);
+                return -1;
+            }
+        }
+        closedir(d);
+        return rmdir(path) == 0 ? 0 : -1;
+    }
+    return unlink(path) == 0 ? 0 : -1;
+#endif
+}
+
+static int path_exists(const char *path) {
+#ifdef _WIN32
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+#else
+    struct stat st;
+    return lstat(path, &st) == 0;
+#endif
+}
+
+static int install_and_recheck(const char *web) {
+    int rc = web_npm_install(web);
+    if (rc == -2) {
+        return -2;
+    }
+    if (rc != 0) {
+        fprintf(stderr, "error: npm install failed (exit %d)\n", rc);
+        return 6;
+    }
+    int ok = web_modules_ok(web);
+    if (ok == -2) {
+        return -2;
+    }
+    if (ok != 0) {
+        fprintf(stderr, "error: dashboard packages still failed to load after npm install\n");
+        return 6;
+    }
+    return 0;
+}
+
+/* 패키지가 없으면 npm install 한다.
+ * 이미 node_modules 가 있는데 불러오지 못하면 지우고 다시 받는다. 그 뒤에만 종료한다. */
 static int ensure_web_modules(const char *web) {
     int ok = web_modules_ok(web);
     if (ok == 0) {
@@ -840,25 +939,25 @@ static int ensure_web_modules(const char *web) {
         fprintf(stderr, "error: node was not found. Install Node.js 20 or newer\n");
         return 6;
     }
-    printf("dashboard packages are missing or failed to load. Running npm install\n");
-    fflush(stdout);
-    int rc = web_npm_install(web);
-    if (rc == -2) {
-        return -2;
-    }
-    if (rc != 0) {
-        fprintf(stderr, "error: npm install failed (exit %d)\n", rc);
+
+    char mods[2048];
+    int n = snprintf(mods, sizeof(mods), "%s/node_modules", web);
+    if (n < 0 || (size_t)n >= sizeof(mods)) {
+        fprintf(stderr, "error: node_modules path is too long\n");
         return 6;
     }
-    ok = web_modules_ok(web);
-    if (ok == -2) {
-        return -2;
+    if (path_exists(mods)) {
+        printf("dashboard packages failed to load. Removing node_modules and reinstalling\n");
+        fflush(stdout);
+        if (remove_path(mods) != 0) {
+            fprintf(stderr, "error: failed to remove node_modules\n");
+            return 6;
+        }
+    } else {
+        printf("dashboard packages are missing or failed to load. Running npm install\n");
+        fflush(stdout);
     }
-    if (ok != 0) {
-        fprintf(stderr, "error: dashboard packages still failed to load after npm install\n");
-        return 6;
-    }
-    return 0;
+    return install_and_recheck(web);
 }
 
 /* node 가 listen 하기 전에 브라우저를 열면 실패 화면이 남는다. */
