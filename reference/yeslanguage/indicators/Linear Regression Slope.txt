@@ -1,0 +1,8 @@
+Input : Period(14);
+var : Slope(0);
+
+Slope = LRS(C,Period);
+
+Plot1(Slope, "LRS");
+PlotBaseLine1(0, "기준선");
+

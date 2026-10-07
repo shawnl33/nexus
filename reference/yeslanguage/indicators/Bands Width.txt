@@ -1,0 +1,10 @@
+Inputs: Period(20), D(2);
+Variables: BBTop(0), BBMid(0), BBBot(0),Bwidth(0);
+
+BBTop = BollBandUp(Period,D);
+BBMid = ma(C,Period);
+BBBot = BollBandDown(Period,D);
+
+BWidth = ((BBTop - BBBot)/ BBMid);
+
+Plot1(Bwidth, "Band Width");

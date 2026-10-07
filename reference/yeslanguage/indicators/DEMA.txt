@@ -1,0 +1,20 @@
+INPUTS:	LENGTH1(5),LENGTH2(20),LENGTH3(60);
+VARS : DEMA1(0),DEMA2(0),DEMA3(0);
+
+var1= EMA(C,LENGTH1);
+value1= EMA(EMa(C,LENGTH1),LENGTH1);
+
+var2= EMA(C,LENGTH2);
+value2= EMA(EMa(C,LENGTH2),LENGTH2);
+
+var3= EMA(C,LENGTH3);
+value3= EMA(EMa(C,LENGTH3),LENGTH3);
+
+DEMA1 = var1 * 2 - value1;
+DEMA2 = var2 * 2 - value2;
+DEMA3 = var3 * 2 - value3;
+
+PLOT1(DEMA1, "DEMA1");
+PLOT2(DEMA2, "DEMA2");
+PLOT3(DEMA3, "DEMA3");
+

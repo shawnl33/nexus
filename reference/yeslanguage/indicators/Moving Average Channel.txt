@@ -1,0 +1,13 @@
+Input : Period(10), P(2);
+var : UPchennel(0),UPline(0),Dnline(0),DNchennel(0);
+
+UPchennel = ma(H,period)*(1+P/100);
+UPline = ma(H,period);
+dnline = ma(L,period);
+DNchennel = ma(L,period)*(1-P/100);
+
+Plot1(UPchennel, "상한채널");
+Plot2(UPline, "상한선");
+Plot3(dnline, "하한선");
+Plot4(DNchennel, "하한채널");
+

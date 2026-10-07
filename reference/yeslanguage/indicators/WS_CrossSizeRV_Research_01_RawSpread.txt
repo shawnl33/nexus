@@ -1,0 +1,14 @@
+// 지표명: WS_CrossSizeRV_Research_01_RawSpread
+// 목적: 동일 만기의 NQ(Data1)와 MNQ(Data2) 종가 차이를 연구용으로 표시합니다.
+// Data1: E-mini Nasdaq-100 선물 NQ(주종목, 동일 월물)
+// Data2: Micro E-mini Nasdaq-100 선물 MNQ(참조종목, 동일 월물)
+// 주의: 주문, 진입, 청산 등 자동매매 코드는 포함하지 않습니다.
+
+// RawSpread 변수에 현재 봉의 NQ와 MNQ 종가 차이를 저장합니다.
+var : RawSpread(0);
+
+// Data2(MNQ) 종가에서 Data1(NQ) 종가를 빼서 Raw Spread를 계산합니다.
+RawSpread = data2(C) - C;
+
+// 계산된 Raw Spread를 첫 번째 Plot으로 출력합니다.
+plot1(RawSpread, "RawSpread");

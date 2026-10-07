@@ -1,0 +1,11 @@
+Inputs: Length(NumericSimple);
+Variables: DMIP(0), DMIM(0);
+
+DMIP = DIPlus(Length);
+DMIM = DIMinus(Length);
+
+If DMIP + DMIM == 0 Then 
+	DMI = 0;
+Else
+	DMI = 100 * AbsValue(DMIP - DMIM) / (DMIP + DMIM);
+

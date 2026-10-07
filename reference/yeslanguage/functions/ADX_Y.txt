@@ -1,0 +1,26 @@
+/*	Description : (A)verage (D)irectinal Movement Inde(x)
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: period(Numeric);
+Var		: diff_High(0), diff_Low(0);
+
+diff_High	= H - H[1];
+diff_Low	= L[1] - L;
+
+value1		= 0;
+value2		= 0;
+
+if diff_High > 0 && diff_High > diff_Low then
+	value1	= diff_High;
+
+if diff_Low > 0 && diff_High < diff_Low then
+	value2	= diff_Low;
+
+value3 = ma(value1, period);
+value4 = ma(value2, period);
+
+ADX_Y = ma(abs(value3 - value4) / (value3 + value4) * 100, Period);
+

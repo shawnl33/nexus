@@ -1,0 +1,22 @@
+/*	Description : (P)ositive (V)olume (I)ndex
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+
+if CurrentBar <= 1 then
+{
+	Pvi = 100;
+}
+else
+{
+    if V > V[1] then
+    {
+        PVI = PVI[1] + (((C-C[1]) / C[1]) * PVI[1]);
+    }
+    else
+    {
+        PVI = PVI[1];
+    }
+}
+

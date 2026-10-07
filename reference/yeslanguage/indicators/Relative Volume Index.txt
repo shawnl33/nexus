@@ -1,0 +1,12 @@
+Inputs: Length(12);
+Variables : Trendval(0), VolDiff(0), RVIval(0);
+
+If Close > Close[Length] Then
+	Trendval = 1;
+Else
+	Trendval = -1;
+
+VolDiff = V/ma(V, Length);
+RVIval = ma(Trendval* VolDiff, Length);
+
+Plot1(RVIval, "Relative Volume Index");

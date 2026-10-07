@@ -1,0 +1,17 @@
+/*	Description : Mass Index
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs: Length1(NumericSimple), Length2(NumericSimple);
+Variables: XAvg(0), SmoothXAvg(0);
+
+XAvg = Ema(Range, Length1);
+SmoothXAvg = Ema(Ema(Range, Length1), Length1);
+
+If SmoothXAvg <> 0 Then
+	MassIndex = AccumN(XAvg / SmoothXAvg,Length2);
+Else
+	MassIndex = 0;
+

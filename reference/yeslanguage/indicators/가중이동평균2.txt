@@ -1,0 +1,10 @@
+Input : Period1(5), Period2(20);
+
+var1 = wma(C,Period1);
+var2 = wma(C,Period2);
+
+Plot1(var1, "가중이동평균1");
+Plot2(var2, "가중이동평균2");
+
+
+

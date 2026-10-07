@@ -63,6 +63,9 @@ add_library(core STATIC
     src/core/functions/fx_predict_v2.c
     src/core/functions/fx_reg_v1.c
     src/core/functions/fx_swing_v1.c
+    src/core/functions/fx_session_profile_v2.c
+    src/core/functions/fx_decision_v2.c
+    src/core/functions/fx_squeeze_v1.c
     src/core/functions/fx_synthetic_lines_v1.c
     src/core/functions/ks_session_v1.c
     src/core/functions/ks_synthetic_v1.c
@@ -84,6 +87,10 @@ add_library(core STATIC
     src/core/indicators/fx_persist_gap.c
     src/core/indicators/fx_yangmae.c
     src/core/indicators/fx_sniper.c
+    src/core/indicators/fx_os_scope.c
+    src/core/indicators/fx_curve_os.c
+    src/core/indicators/fx_entry_cand.c
+    src/core/indicators/fx_sniper_co.c
     src/core/indicators/market_profile.c
     src/core/indicators/memory_lines.c
     src/core/indicators/past_prediction.c
@@ -348,7 +355,7 @@ endif()
 enable_testing()
 
 # 0개 테스트 실행을 통과로 간주하지 않는다(계획서 §25).
-foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict fx_curve fx_swing fx_future fx_synthetic ks_session ks_synthetic ks_values ks_score wpair wplot fx_mirae fx_mirae_v3 fx_persist_gap fx_yangmae fx_sniper osf_flow fx_trend_state fx_align fx_adx fx_gap fx_market fx_trend)
+foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict fx_curve fx_swing fx_future fx_synthetic ks_session ks_synthetic ks_values ks_score wpair wplot fx_mirae fx_mirae_v3 fx_persist_gap fx_yangmae fx_sniper osf_flow fx_trend_state fx_align fx_adx fx_gap fx_market fx_trend fx_session_profile fx_decision fx_squeeze fx_os_scope fx_curve_os fx_sniper_co fx_entry_cand)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE core)
     target_compile_options(test_${t} PRIVATE ${TR_WARNINGS})

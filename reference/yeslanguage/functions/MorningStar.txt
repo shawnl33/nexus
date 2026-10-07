@@ -1,0 +1,18 @@
+/*	Description : Morning Star
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Length(Numeric);
+Var		: LongBody(False), OCRange(0), Hollow(False), Filled(False);
+
+Hollow = Close > Open;
+Filled = Close < Open;
+
+OCRange 	= Abs(Open - Close);
+LongBody 	= OCRange > MA(OCRange, Length);
+MorningStar = False;
+
+If Filled[2] AND Max(Close[1], Open[1]) < Close[2] AND Hollow AND LongBody[2] AND Close > Close[2] Then 
+	MorningStar = True;

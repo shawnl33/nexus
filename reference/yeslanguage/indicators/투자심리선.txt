@@ -1,0 +1,9 @@
+Input : Period(10);
+var : Simri(0);
+
+Simri = Simrido(Period);
+
+Plot1(Simri, "투자심리선");
+PlotBaseLine1(25, "기준선1");
+PlotBaseLine2(75, "기준선2");
+

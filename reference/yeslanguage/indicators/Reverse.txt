@@ -1,0 +1,19 @@
+Input : Short(12), Long(24);
+
+value1 = accumN(C-C[1],Short);
+value2 = accumN(C-C[1],Long);
+value3 = iff(C>C[1],C-C[1],0);
+value4 = iff(C<C[1],C-C[1],0);
+
+If  value1 > 0 Then  
+	plot1(value1*(-100)/accumN(value3,Short), "reverse1");
+Else 
+	plot1(value1*100/accumN(value4,Short), "reverse1");
+If  value2 > 0 then  
+	plot2(value2*(-100)/accumN(value3,Long),"reverse2");
+Else
+	plot2(value2*100/accumN(value4,Long),"reverse2");
+	
+PlotBaseLine1(0, "기준선 0");
+PlotBaseLine2(75, "기준선 75");
+PlotBaseLine3(-75, "기준선 -75");

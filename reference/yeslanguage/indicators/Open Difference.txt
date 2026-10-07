@@ -1,0 +1,11 @@
+Inputs: Length(15);
+Variables: OpenDiff(0);
+
+OpenDiff = Abs(Highest(Open -Close[1], Length)) - Abs(Lowest(Open-Close[1], Length));
+
+If OpenDiff > 0 Then
+	Plot1(OpenDiff, "Open Difference",RED);
+Else
+	Plot1(OpenDiff, "Open Difference",BLUE);
+
+PlotBaseLine1(0, "기준선1");

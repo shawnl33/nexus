@@ -4,8 +4,10 @@
 #include <string.h>
 
 /* 상승 대기 확정 (원본 198~248줄): 지난하락 메모리 확정 + 지난상승 유지/붕괴/확장
- * + 지난하락 구조약화. 이전 구간이 하락(leg_dir==-1)일 때만 메모리를 갱신한다. */
-static void confirm_up(tr_fxsw_state_t *t) {
+ * + 지난하락 구조약화. 이전 구간이 하락(leg_dir==-1)일 때만 메모리를 갱신한다.
+ * 스윙연결=1이면 새 상승 저점을 직전 하락 저점과 잇는다 (WSF_FXSwingV2 247~249줄).
+ * 방향은 그 비교 뒤에 덮어쓴다. */
+static void confirm_up(tr_fxsw_state_t *t, int swing_link) {
     if (t->leg_dir == -1) {
         t->ldn.high = t->dn_high;
         t->ldn.low = t->dn_low;
@@ -52,13 +54,17 @@ static void confirm_up(tr_fxsw_state_t *t) {
     }
     t->up_high = t->wait_high;
     t->up_low = t->wait_low;
+    if (swing_link == 1 && t->leg_dir == -1) {
+        t->up_low = fmin(t->wait_low, t->dn_low);
+    }
     t->up_count = t->wait_count;
     t->leg_dir = 1;
 }
 
 /* 하락 대기 확정 (원본 249~299줄): 지난상승 메모리 확정 + 지난하락 유지/붕괴/확장
- * + 지난상승 구조약화. 이전 구간이 상승(leg_dir==1)일 때만 메모리를 갱신한다. */
-static void confirm_dn(tr_fxsw_state_t *t) {
+ * + 지난상승 구조약화. 이전 구간이 상승(leg_dir==1)일 때만 메모리를 갱신한다.
+ * 스윙연결=1이면 새 하락 고점을 직전 상승 고점과 잇는다 (WSF_FXSwingV2 300~302줄). */
+static void confirm_dn(tr_fxsw_state_t *t, int swing_link) {
     if (t->leg_dir == 1) {
         t->lup.high = t->up_high;
         t->lup.low = t->up_low;
@@ -104,6 +110,9 @@ static void confirm_dn(tr_fxsw_state_t *t) {
         t->lup.weak = t->ldn.keep_500;
     }
     t->dn_high = t->wait_high;
+    if (swing_link == 1 && t->leg_dir == 1) {
+        t->dn_high = fmax(t->wait_high, t->up_high);
+    }
     t->dn_low = t->wait_low;
     t->dn_count = t->wait_count;
     t->leg_dir = -1;
@@ -182,9 +191,9 @@ void tr_fxsw_eval(tr_fxsw_t *s, const tr_fxsw_input_t *in) {
                 t->wait_low = fmin(t->wait_low, in->low);
                 if (t->wait_count >= (double)in->min_hold_bars) {
                     if (t->wait_dir == 1) {
-                        confirm_up(t);
+                        confirm_up(t, in->swing_link);
                     } else {
-                        confirm_dn(t);
+                        confirm_dn(t, in->swing_link);
                     }
                     t->wait_dir = 0;
                     t->wait_count = 0.0;

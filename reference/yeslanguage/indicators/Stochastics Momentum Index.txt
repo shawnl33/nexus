@@ -1,0 +1,10 @@
+input : Period1(13),Period2(25),Period3(2),Length1(26),Length2(50),Length3(2);
+var : StMomentum1(0),StMomentum2(0);
+
+StMomentum1 = SMI(Period1,Period2,Period3);
+StMomentum2 = SMI(Length1,Length2,Length3);
+
+plot1(StMomentum1);
+plot2(StMomentum2);
+PlotBaseLine1(40,"과열");
+PlotBaseLine2(-40,"침체");

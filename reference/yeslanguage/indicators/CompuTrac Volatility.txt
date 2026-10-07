@@ -1,0 +1,8 @@
+Inputs: Length(10);
+Variables: value(0),CompuTrac(0);
+
+value = ma((High-Low)/Close, Length);
+CompuTrac = (value/value[Length]-1)*100;
+
+Plot1(CompuTrac, "CompuTrac Volatility");
+PlotBaseLine1(0,"기준선0");

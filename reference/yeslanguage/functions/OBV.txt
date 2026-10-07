@@ -1,0 +1,18 @@
+/*	Description : (O)n (B)alance (V)olume
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+If CurrentBar > 0 Then
+{
+	If Close[0] > Close[1] Then 
+		OBV = OBV[1] + Volume;
+	Else 
+		If Close[0] < Close[1] Then 
+			OBV = OBV[1] - Volume;
+		Else
+			OBV = OBV[1];
+}
+Else
+	OBV = 0;

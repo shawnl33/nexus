@@ -181,21 +181,14 @@ void tr_fxfv_eval(tr_fxfv_t *s, const tr_fxfv_input_t *in) {
         }
     }
 
-    /* 핵심마켓 (원본 298~305줄): (H+L)/2 단순평균, 세션봉수 상한 */
-    int32_t mcalc = bars < (s->cfg.market_period > 1 ? s->cfg.market_period : 1)
-                        ? bars
-                        : (s->cfg.market_period > 1 ? s->cfg.market_period : 1);
-    double mid_sum = 0.0;
-    for (int32_t j = 0; j < mcalc; j++) {
-        tr_fxfv_bar_t b;
-        if (!tr_ring_at(&s->bar_win, (size_t)j, &b)) {
-            break;
-        }
-        mid_sum += (b.h + b.l) / 2.0;
+    /* 핵심마켓 (원본 298~305줄): 차트에 그리는 거래량 가중 마켓중심.
+     * 무효 봉은 중심 0. 기울기는 세션봉수>1 이고 이번·직전 봉이 모두 유효일 때만. */
+    double core_mkt = 0.0;
+    if (s->mkt_valid) {
+        core_mkt = s->state_mkt_center;
     }
-    double core_mkt = mid_sum / (double)mcalc;
     double mkt_slope = 0.0;
-    if (bars > 1) {
+    if (bars > 1 && s->mkt_valid && s->series.prev_mkt_valid) {
         mkt_slope = core_mkt - s->series.prev_core_mkt;
     }
     int mkt_dir = 0;
@@ -206,10 +199,13 @@ void tr_fxfv_eval(tr_fxfv_t *s, const tr_fxfv_input_t *in) {
         mkt_dir = -1;
     }
 
-    /* 단계화_1분_통합 (원본 309~315줄). 리셋 봉은 0 */
+    /* 단계화_1분_통합 (원본 309~315줄, 기세 기준은 V3_CO 312~318줄). 리셋 봉은 0.
+     * 기세무시틱 0이면 변화의 부호만 본다. 음수는 0과 같다. */
+    double mom_change = cur_future - s->series.prev_future_dir;
+    double mom_basis = fmax(0.0, s->cfg.momentum_ignore_ticks) * ps;
     double score = (cur_future > 0.0 ? 2.0 : (cur_future < 0.0 ? -2.0 : 0.0)) +
-                   (cur_future > s->series.prev_future_dir ? 1.0 : 0.0) +
-                   (cur_future < s->series.prev_future_dir ? -1.0 : 0.0) +
+                   (mom_change > mom_basis ? 1.0 : 0.0) +
+                   (mom_change < -mom_basis ? -1.0 : 0.0) +
                    (double)mkt_dir + (double)reg_dir;
     if (reset) {
         score = 0.0;
@@ -225,6 +221,7 @@ void tr_fxfv_eval(tr_fxfv_t *s, const tr_fxfv_input_t *in) {
     win.high = in->high;
     win.low = in->low;
     win.is_new_bar = is_new_bar;
+    win.swing_link = s->cfg.swing_link;
     tr_fxsw_eval(&s->swing, &win);
 
     /* 출력 (원본 337~357줄) */
@@ -257,6 +254,7 @@ void tr_fxfv_eval(tr_fxfv_t *s, const tr_fxfv_input_t *in) {
     s->series.prev_pred_dir2 = s->predict.pred_dir[1];
     s->series.prev_future_dir = cur_future;
     s->series.prev_core_mkt = core_mkt;
+    s->series.prev_mkt_valid = s->mkt_valid ? 1 : 0;
 }
 
 bool tr_fxfv_relink(tr_fxfv_t *s) {

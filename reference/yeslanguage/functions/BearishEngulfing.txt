@@ -1,0 +1,15 @@
+/*	Description : Bearish Engulfing
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Length(NumericSimple);
+Var		: Value(0);
+
+Value = ma(Close, Length);
+
+If Value > Value[1] AND Close < Open AND Close[1] > Open[1] AND Close < Open[1] AND Open > Close[1] then
+	BearishEngulfing = True;
+Else
+	BearishEngulfing = False;

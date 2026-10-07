@@ -1,0 +1,11 @@
+input : Period(14);
+var : ADXv(0),DP(0),DM(0);
+
+ADXv = ADX(Period);
+DP = DiPlus(Period);
+DM = DiMinus(Period);
+
+plot1(ADXv,"ADX");
+plot2(DP,"+DI");
+plot3(DM,"-DI");
+

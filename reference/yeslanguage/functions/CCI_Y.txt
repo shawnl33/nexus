@@ -1,0 +1,14 @@
+/*	Description : (C)ommodity (C)hannel (I)ndex
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(Numeric);
+Var 	: value1(0), value2(0), diff_Value(0);
+
+value1 		= (H + L + C) / 3;
+value2 		= ma(value1, Period);
+diff_Value 	= value1 - value2;
+
+CCI_Y = (diff_Value) / (ma(abs(diff_Value), Period) * 0.015);

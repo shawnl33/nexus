@@ -1,0 +1,11 @@
+Input : Period(20), D(2);
+var : BBdown(0),BBUp(0),BandB(0);
+
+BBDown = BollBandDown(Period,D);
+BBUp = BollBandUp(Period,D);
+BandB = ((C-BBDown)/(BBUp-BBDown))*100;
+
+Plot1(BandB, "Band %b");
+PlotBaseLine1(10, "기준선10");
+PlotBaseLine2(90, "기준선90");
+

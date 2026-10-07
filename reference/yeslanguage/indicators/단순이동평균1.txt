@@ -1,0 +1,6 @@
+Input : Period1(5);
+
+var1 = ma(C,Period1);
+
+Plot1(var1, "이동평균1");
+

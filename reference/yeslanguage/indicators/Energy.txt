@@ -1,0 +1,9 @@
+Input : N(20);
+var : Energe1(0),Energe2(0);
+
+Energe1 = accumN(H-O,N)/accumN(O-L,N)*100;
+Energe2 = accumN(H-C,N)/accumN(C-L,N)*100;
+
+plot1(accumN(H-O,N)/accumN(O-L,N)*100, "Energy1");
+plot2(accumN(H-C,N)/accumN(C-L,N)*100, "Energy2");
+

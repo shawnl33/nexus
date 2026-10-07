@@ -1,0 +1,16 @@
+/*	Description : Percent R
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+
+Input	: Length(NumericSimple);
+Var		: HiLoDiff(0), ValueHigiest(0);
+
+ValueHigiest 	= Highest(High, Length);
+HiLoDiff 		= ValueHigiest - Lowest(Low, Length);
+
+If HiLoDiff != 0 Then 
+	PercentR = 100 - ((ValueHigiest - Close) / HiLoDiff) * 100;
+Else
+	PercentR = 0;

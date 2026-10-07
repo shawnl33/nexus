@@ -1,0 +1,8 @@
+Input: Period(14);
+var : MoneyFlow(0);
+
+MoneyFlow = MFI(Period);
+
+Plot1(MoneyFlow, "MFI");
+PlotBaseLine1(20, "하단기준선");
+PlotBaseLine2(80, "상단기준선");

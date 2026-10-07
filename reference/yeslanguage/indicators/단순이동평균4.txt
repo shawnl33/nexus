@@ -1,0 +1,15 @@
+Input : Period1(5), Period2(20), Period3(60), Period4(120);
+
+var1 = ma(C,Period1);
+var2 = ma(C,Period2);
+var3 = ma(C,Period3);
+var4 = ma(C,Period4);
+
+Plot1(var1, "이동평균1");
+Plot2(var2, "이동평균2");
+Plot3(var3, "이동평균3");
+Plot4(var4, "이동평균4");
+
+
+
+

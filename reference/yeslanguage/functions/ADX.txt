@@ -1,0 +1,25 @@
+/*	Description : (A)verage (D)irectinal Movement Inde(x)
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+
+Inputs: Length(Numeric);
+Variables: Counter(0), CummDMI(0), Return(0), DMIV(0);
+
+Return = 0;
+DMIV = DMI(Length);
+
+If CurrentBar >= 1 AND Length > 0 Then Begin
+	If CurrentBar < Length Then begin
+		CummDMI = 0;
+		for Counter = 0 To CurrentBar - 1 Begin
+			CummDMI = CummDMI + DMIV[Counter];
+		End;
+		Return = CummDMI / CurrentBar;
+	End
+	Else 
+		Return = (ADX[1] * (Length - 1) + DMI(Length)) / Length;
+End;
+
+ADX = Return;

@@ -1,0 +1,10 @@
+Input : Period1(5),Period2(10);
+
+var1 = ma(C,Period1);
+var2 = ma(C,Period2);
+
+Plot1(var1, "이동평균1");
+Plot2(var2, "이동평균2");
+
+
+

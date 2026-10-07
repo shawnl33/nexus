@@ -1,0 +1,28 @@
+/*	Description : Day Close
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs	: DaysAgo(Numeric);
+Array	: CloseArray[50](-1);
+
+If DataCompress <= 2 Then
+{
+	If Date > Date[1] Then Begin
+		For Var1 = 49 DownTo 1 Begin
+			CloseArray[Var1] = CloseArray[Var1 - 1];
+		End;
+		CloseArray[0] = Close[1];
+	End;
+
+	If DaysAgo < 50 AND DaysAgo > 0 && CloseArray[DaysAgo - 1] != -1 Then 
+		CloseD = CloseArray[DaysAgo - 1];
+
+	If DaysAgo == 0 Then 
+		CloseD = Close;
+}
+else
+{
+    CloseD = Close[DaysAgo];
+}

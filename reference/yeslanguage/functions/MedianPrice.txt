@@ -1,0 +1,7 @@
+/*	Description : Median Price
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+MedianPrice = (High + Low) * 0.5;

@@ -1,0 +1,10 @@
+Input : Period(52);
+var : Negative(0),NegativeSig(0);
+
+Negative = NVI();
+NegativeSig = ma(NVI(),Period);
+
+
+plot1(Negative, "NVI");
+plot2(NegativeSig, "NVI_Sig");
+

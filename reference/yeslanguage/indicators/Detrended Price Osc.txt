@@ -1,0 +1,17 @@
+INPUTS: LENGTH(14); 
+VARIABLES: DPO(0); 
+
+DPO = DETREND(C, LENGTH);
+
+if DPO > 0 then
+{
+	PLOT1(DPO, "DETREND OSC+");
+	PLOT2(0, "DETREND OSC-");
+}
+Else
+{
+	PLOT1(0, "DETREND OSC+");
+	PLOT2(DPO, "DETREND OSC-");
+}
+
+PlotBaseLine1(0, "기준선0");

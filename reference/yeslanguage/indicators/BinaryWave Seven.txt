@@ -1,0 +1,53 @@
+Input: shortPeriod(12), longPeriod(26), Period(9), maPeriod(20), ROCPeriod(12), stoPeriod1(5), 
+       stoPeriod2(3), CCIPeriod(9);
+var: value(0),BW_SEVEN(0);
+
+//문장1 : MACD가 MACD 시그널선 보다 큼
+if ema(C,shortPeriod)-ema(C,longPeriod) >= ema(ema(C,shortPeriod)-ema(C,longPeriod),Period) then 
+    value = 1;
+else
+    value = -1;
+ 
+//문장2 : 종가가 이동평균선보다 큼
+if C >= ma(C, maPeriod) then
+    value = value + 1;
+else
+    value = value - 1;
+
+//문장3 : Price ROC가 0선보다 큼
+if (C - C[ROCPeriod]) / C[ROCPeriod] * 100 >= 0 then
+    value = value + 1;
+else
+    value = value - 1;
+
+//문장4 : StochasticsK선이 50선 보다 큼
+if ema((C-lowest(L, stoPeriod1)) / (highest(H, stoPeriod1) - lowest(L, stoPeriod1)) * 100, stoPeriod2)>=50 then
+	value = value + 1;
+else
+	value = value - 1;
+
+//CCI가 0선 보다 큼
+if CCI(CCIPeriod) > 0 then
+	value = value + 1;
+else
+    value = value - 1;
+
+//CO가 0선 보다 큼
+if ema(accum(((C -L)-(H- C))/ (H-L)*V), 3) - ema(accum(((C -L)-(H- C))/(H-L)*V), 10) >=0 then 
+	value = value + 1;
+else
+    value = value - 1;
+
+//문장7 : 종가가 파라볼릭보다 큼
+if SAR(0.02,0.2) < C then
+	value = value + 1;
+else
+    value = value - 1;
+
+
+BW_SEVEN = value;
+
+Plot1(BW_SEVEN,"세븐 바이너리웨이브");
+PlotBaseLine1(0,"기준선0");
+
+

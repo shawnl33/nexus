@@ -1,0 +1,13 @@
+input : Period(100);
+var : Hval(0),Lval(0),UPV(0),MID(0),DOWNV(0);
+
+Hval = highest(H,Period);
+Lval = Lowest(L,Period);
+
+UPV = Hval - (Hval-Lval)/3;
+MID = Lval + (Hval-Lval)/2;
+DOWNV = Lval + (Hval-Lval)/3; 
+
+plot1(UPV,"최고선");
+plot2(MID,"중간선");
+plot3(DOWNV,"바닥선");

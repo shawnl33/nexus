@@ -32,6 +32,9 @@
 #include "core/indicators/fx_yangmae.h"
 #include "core/functions/osf_clv_vol_flow_v1.h"
 #include "core/indicators/fx_sniper.h"
+#include "core/indicators/fx_os_scope.h"
+#include "core/indicators/fx_curve_os.h"
+#include "core/indicators/fx_sniper_co.h"
 #include "core/functions/ks_score_v1.h"
 #include "core/market/bar_builder.h"
 
@@ -148,6 +151,36 @@ typedef struct {
     int ray_sign;
     double ray_px[5], ray_up[5], ray_dn[5];
     int8_t ray_dir[5];
+    /* 해외선물 1분통합판정·매물대압축. os_on=0이면 국내 봉 */
+    int os_on;
+    int os_judge;
+    uint32_t os_judge_rgb;
+    int os_fut, os_prof, os_di, os_adx;
+    int os_sq_on, os_sq_len, os_sq_w;
+    uint32_t os_sq_rgb;
+    int os_hold;
+    uint32_t os_hold_rgb;
+    int os_ratio_on;
+    double os_ratio;
+    uint32_t os_ratio_rgb;
+    int os_rel_on, os_rel_len, os_rel_w;
+    uint32_t os_rel_rgb;
+    int os_cf_on, os_cf_len, os_cf_w;
+    uint32_t os_cf_rgb;
+    int os_ent_on, os_ent_y, os_ent_w;
+    uint32_t os_ent_rgb;
+    /* #우드스탁_미래곡선_해외선물. 켜진 Plot만 */
+    int cu_n;
+    uint16_t cu_id[TR_FXCU_PLOTS];
+    double cu_v[TR_FXCU_PLOTS];
+    uint32_t cu_rgb[TR_FXCU_PLOTS];
+    uint8_t cu_w[TR_FXCU_PLOTS];
+    /* #우드스탁_스나이퍼스코프_해외선물_CO_V3 */
+    int snco_n;
+    uint16_t snco_id[TR_SNCO_PLOTS];
+    double snco_v[TR_SNCO_PLOTS];
+    uint32_t snco_rgb[TR_SNCO_PLOTS];
+    uint8_t snco_w[TR_SNCO_PLOTS];
 } tr_bar_status_t;
 
 typedef struct tr_engine tr_engine_t;
@@ -198,6 +231,9 @@ typedef struct {
     tr_fxpgap_t mgap;           /* 마켓중심차 1/5/15/30분 */
     tr_fxymae_t ymae;
     tr_fxsniper_t sniper;
+    tr_fxos_t os_scope; /* 1분통합판정·매물대압축. is_ovs 일 때만 init */
+    tr_fxcu_t curve_os; /* #우드스탁_미래곡선_해외선물 */
+    tr_snco_t snco;     /* #우드스탁_스나이퍼스코프_해외선물_CO_V3 */
     tr_osf_combo_t osf; /* 해외선물 1분봉 호가 대체. 국내 파이프는 읽지 않는다 */
     int64_t pgap_key;
     bool pgap_has_key;
@@ -268,6 +304,9 @@ struct tr_engine {
             tr_fxpgap_t mgap;
             tr_fxymae_t ymae;
     tr_fxsniper_t sniper;
+    tr_fxos_t os_scope; /* 1분통합판정·매물대압축. is_ovs 일 때만 init */
+    tr_fxcu_t curve_os; /* #우드스탁_미래곡선_해외선물 */
+    tr_snco_t snco;     /* #우드스탁_스나이퍼스코프_해외선물_CO_V3 */
     tr_osf_combo_t osf; /* 해외선물 1분봉 호가 대체. 국내 파이프는 읽지 않는다 */
             int64_t pgap_key;
             bool pgap_has_key;
@@ -328,6 +367,9 @@ TR_ENGINE_PIPE_LAYOUT_CHECK(rgap);
 TR_ENGINE_PIPE_LAYOUT_CHECK(mgap);
 TR_ENGINE_PIPE_LAYOUT_CHECK(ymae);
 TR_ENGINE_PIPE_LAYOUT_CHECK(sniper);
+TR_ENGINE_PIPE_LAYOUT_CHECK(os_scope);
+TR_ENGINE_PIPE_LAYOUT_CHECK(curve_os);
+TR_ENGINE_PIPE_LAYOUT_CHECK(snco);
 TR_ENGINE_PIPE_LAYOUT_CHECK(osf);
 TR_ENGINE_PIPE_LAYOUT_CHECK(pgap_key);
 TR_ENGINE_PIPE_LAYOUT_CHECK(pgap_has_key);

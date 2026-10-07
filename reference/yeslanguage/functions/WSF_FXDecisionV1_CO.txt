@@ -1,0 +1,65 @@
+// WSF_FXDecisionV1_CO  (_CO = Claude Opus 작성)
+// 국내 WSF_1m_FutureDecisionV1의 판정 규칙을 해외선물용으로 이식. 호가 항목 제거.
+// 1. 미래곡선이 매매 방향을 결정한다.
+// 2. 세션 매물대와 세션 ADX/DI는 방향 확인에만 사용한다.
+// 출력 통합상태
+//    100 : 매수 확인  (미래 상승 + 매물대 하단1 이상 + DI 상승 + ADX 추세기준 이상)
+//     50 : 매수 관찰  (미래 상승, 나머지 조건 미충족)
+//      0 : 중립
+//    -50 : 매도 관찰
+//   -100 : 매도 확인
+Input : 미래방향입력(Numeric),
+        매물대5상태입력(Numeric),
+        매물대유효입력(Numeric),
+        ADX입력(Numeric),
+        상승DI입력(Numeric),
+        하락DI입력(Numeric),
+        ADX유효입력(Numeric),
+        ADX추세기준입력(Numeric),
+        ADX강세기준입력(Numeric),
+        통합상태(NumericRef),
+        매물대상태(NumericRef),
+        ADX상태(NumericRef),
+        DI방향(NumericRef);
+Var : 미래방향(0),
+      ADX추세기준값(0),
+      ADX강세기준값(0);
+
+미래방향 = IFF(미래방향입력 > 0, 1, IFF(미래방향입력 < 0, -1, 0));
+
+ADX추세기준값 = Abs(ADX추세기준입력);
+ADX강세기준값 = Abs(ADX강세기준입력);
+If ADX추세기준값 < 1 Then ADX추세기준값 = 1;
+If ADX강세기준값 < ADX추세기준값 Then ADX강세기준값 = ADX추세기준값;
+
+매물대상태 = 0;
+If 매물대유효입력 == 1 Then
+    매물대상태 = IFF(매물대5상태입력 > 0, 1, IFF(매물대5상태입력 < 0, -1, 0));
+
+DI방향 = 0;
+ADX상태 = 0;
+If ADX유효입력 == 1 Then
+{
+    DI방향 = IFF(상승DI입력 > 하락DI입력, 1, IFF(상승DI입력 < 하락DI입력, -1, 0));
+    If Abs(ADX입력) >= ADX강세기준값 Then ADX상태 = 2;
+    Else If Abs(ADX입력) >= ADX추세기준값 Then ADX상태 = 1;
+};
+
+통합상태 = 0;
+If 미래방향 == 1 Then
+{
+    통합상태 = 50;
+    If 매물대유효입력 == 1 && 매물대상태 >= 0 &&
+       DI방향 == 1 && ADX상태 >= 1 Then
+        통합상태 = 100;
+};
+If 미래방향 == -1 Then
+{
+    통합상태 = -50;
+    If 매물대유효입력 == 1 && 매물대상태 <= 0 &&
+       DI방향 == -1 && ADX상태 >= 1 Then
+        통합상태 = -100;
+};
+
+Value1 = 통합상태;
+WSF_FXDecisionV1_CO = Value1;

@@ -1,0 +1,6 @@
+var : WAD(0);
+
+WAD = WillA;
+
+Plot1(WAD, "Willams'A_D");
+PlotBaseLine1(0,"기준선0");

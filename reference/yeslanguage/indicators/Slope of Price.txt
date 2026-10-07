@@ -1,0 +1,17 @@
+Inputs: Length(14);
+Variables: idx(0), sum(0),Avgv(0),Power(0),PowAvg(0),Mean(0),PowStd(0),PriceSlope(0);
+
+idx = accum(1);
+Sum = accumn(idx*C,Length);
+Avgv = (accumn(idx,Length)*(accumn(C,Length)))/Length;
+Power = (accumn(Pow(idx,2),Length));
+PowAvg = Pow(accumn(idx,Length),2)/Length;
+Mean = Sum - avgv;
+PowStd = Power - PowAvg;
+
+If PowStd == 0 Then
+	PriceSlope = 0;
+Else
+	PriceSlope = Mean / PowStd;
+
+Plot1(PriceSlope,"Slope of Price");

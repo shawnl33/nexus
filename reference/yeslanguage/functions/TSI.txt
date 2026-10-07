@@ -1,0 +1,16 @@
+/*	Description : TSI
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Price(NumericSeries), r(NumericSimple), s(NumericSimple), u(NumericSimple);
+VAR 	: value1(0), value2(0);
+
+Value1	= 100 * TXAverage(Price - Price[1], r, s, u) ;
+Value2	= TXAverage(Abs(Price - Price[1]), r, s, u) ;
+
+If Value2 <> 0 then 
+	TSI = Value1 / Value2;
+Else 
+	TSI = 0;

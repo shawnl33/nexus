@@ -1,0 +1,10 @@
+/*	Description : True High
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+If C[1] > H then
+	TrueHigh = C[1];
+else
+	TrueHigh = H;

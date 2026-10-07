@@ -1,0 +1,52 @@
+Input : Period(5);
+
+Plot1(wma(C,Period*1), "가중이동평균1");
+Plot2(wma(C,Period*2), "가중이동평균2");
+Plot3(wma(C,Period*3), "가중이동평균3");
+Plot4(wma(C,Period*4), "가중이동평균4");
+Plot5(wma(C,Period*5), "가중이동평균5");
+Plot6(wma(C,Period*6), "가중이동평균6");
+Plot7(wma(C,Period*7), "가중이동평균7");
+Plot8(wma(C,Period*8), "가중이동평균8");
+Plot9(wma(C,Period*9), "가중이동평균9");
+Plot10(wma(C,Period*10), "가중이동평균10");
+Plot11(wma(C,Period*11), "가중이동평균11");
+Plot12(wma(C,Period*12), "가중이동평균12");
+Plot13(wma(C,Period*13), "가중이동평균13");
+Plot14(wma(C,Period*14), "가중이동평균14");
+Plot15(wma(C,Period*15), "가중이동평균15");
+Plot16(wma(C,Period*16), "가중이동평균16");
+Plot17(wma(C,Period*17), "가중이동평균17");
+Plot18(wma(C,Period*18), "가중이동평균18");
+Plot19(wma(C,Period*19), "가중이동평균19");
+Plot20(wma(C,Period*20), "가중이동평균20");
+Plot21(wma(C,Period*21), "가중이동평균21");
+Plot22(wma(C,Period*22), "가중이동평균22");
+Plot23(wma(C,Period*23), "가중이동평균23");
+Plot24(wma(C,Period*24), "가중이동평균24");
+Plot25(wma(C,Period*25), "가중이동평균25");
+Plot26(wma(C,Period*26), "가중이동평균26");
+Plot27(wma(C,Period*27), "가중이동평균27");
+Plot28(wma(C,Period*28), "가중이동평균28");
+Plot29(wma(C,Period*29), "가중이동평균29");
+Plot30(wma(C,Period*30), "가중이동평균30");
+Plot31(wma(C,Period*31), "가중이동평균31");
+Plot32(wma(C,Period*32), "가중이동평균32");
+Plot33(wma(C,Period*33), "가중이동평균33");
+Plot34(wma(C,Period*34), "가중이동평균34");
+Plot35(wma(C,Period*35), "가중이동평균35");
+Plot36(wma(C,Period*36), "가중이동평균36");
+Plot37(wma(C,Period*37), "가중이동평균37");
+Plot38(wma(C,Period*38), "가중이동평균38");
+Plot39(wma(C,Period*39), "가중이동평균39");
+Plot40(wma(C,Period*40), "가중이동평균30");
+Plot41(wma(C,Period*41), "가중이동평균41");
+Plot42(wma(C,Period*42), "가중이동평균42");
+Plot43(wma(C,Period*43), "가중이동평균43");
+Plot44(wma(C,Period*44), "가중이동평균44");
+Plot45(wma(C,Period*45), "가중이동평균45");
+Plot46(wma(C,Period*46), "가중이동평균46");
+Plot47(wma(C,Period*47), "가중이동평균47");
+Plot48(wma(C,Period*48), "가중이동평균48");
+Plot49(wma(C,Period*49), "가중이동평균49");
+Plot50(wma(C,Period*50), "가중이동평균50");

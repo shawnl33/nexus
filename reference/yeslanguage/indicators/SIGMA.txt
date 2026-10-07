@@ -1,0 +1,9 @@
+Input : Period(20), Period1(10); 
+var : Sigma(0);
+
+Sigma = (C-ma(C,Period))/STD(C,Period);
+
+Plot1(Sigma, "SIGMA");
+PlotBaseLine1(0, "기준선0");
+PlotBaseLine2(3, "기준선3");
+PlotBaseLine3(-3, "기준선-3");

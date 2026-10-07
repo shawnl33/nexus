@@ -1,0 +1,52 @@
+Input : Period(5);
+
+Plot1(ema(C,Period*1), "지수이동평균1");
+Plot2(ema(C,Period*2), "지수이동평균2");
+Plot3(ema(C,Period*3), "지수이동평균3");
+Plot4(ema(C,Period*4), "지수이동평균4");
+Plot5(ema(C,Period*5), "지수이동평균5");
+Plot6(ema(C,Period*6), "지수이동평균6");
+Plot7(ema(C,Period*7), "지수이동평균7");
+Plot8(ema(C,Period*8), "지수이동평균8");
+Plot9(ema(C,Period*9), "지수이동평균9");
+Plot10(ema(C,Period*10), "지수이동평균10");
+Plot11(ema(C,Period*11), "지수이동평균11");
+Plot12(ema(C,Period*12), "지수이동평균12");
+Plot13(ema(C,Period*13), "지수이동평균13");
+Plot14(ema(C,Period*14), "지수이동평균14");
+Plot15(ema(C,Period*15), "지수이동평균15");
+Plot16(ema(C,Period*16), "지수이동평균16");
+Plot17(ema(C,Period*17), "지수이동평균17");
+Plot18(ema(C,Period*18), "지수이동평균18");
+Plot19(ema(C,Period*19), "지수이동평균19");
+Plot20(ema(C,Period*20), "지수이동평균20");
+Plot21(ema(C,Period*21), "지수이동평균21");
+Plot22(ema(C,Period*22), "지수이동평균22");
+Plot23(ema(C,Period*23), "지수이동평균23");
+Plot24(ema(C,Period*24), "지수이동평균24");
+Plot25(ema(C,Period*25), "지수이동평균25");
+Plot26(ema(C,Period*26), "지수이동평균26");
+Plot27(ema(C,Period*27), "지수이동평균27");
+Plot28(ema(C,Period*28), "지수이동평균28");
+Plot29(ema(C,Period*29), "지수이동평균29");
+Plot30(ema(C,Period*30), "지수이동평균30");
+Plot31(ema(C,Period*31), "지수이동평균31");
+Plot32(ema(C,Period*32), "지수이동평균32");
+Plot33(ema(C,Period*33), "지수이동평균33");
+Plot34(ema(C,Period*34), "지수이동평균34");
+Plot35(ema(C,Period*35), "지수이동평균35");
+Plot36(ema(C,Period*36), "지수이동평균36");
+Plot37(ema(C,Period*37), "지수이동평균37");
+Plot38(ema(C,Period*38), "지수이동평균38");
+Plot39(ema(C,Period*39), "지수이동평균39");
+Plot40(ema(C,Period*40), "지수이동평균30");
+Plot41(ema(C,Period*41), "지수이동평균41");
+Plot42(ema(C,Period*42), "지수이동평균42");
+Plot43(ema(C,Period*43), "지수이동평균43");
+Plot44(ema(C,Period*44), "지수이동평균44");
+Plot45(ema(C,Period*45), "지수이동평균45");
+Plot46(ema(C,Period*46), "지수이동평균46");
+Plot47(ema(C,Period*47), "지수이동평균47");
+Plot48(ema(C,Period*48), "지수이동평균48");
+Plot49(ema(C,Period*49), "지수이동평균49");
+Plot50(ema(C,Period*50), "지수이동평균50");

@@ -1,0 +1,16 @@
+/*	Description : Detrend
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs	: Price(NumericSeries), Length(NumericSimple);
+Var		: AvgVal(0), DFact(0);
+
+AvgVal 	= Ma(Price, Length);
+DFact 	= (Length * 0.5) + 1;
+
+If CurrentBar > DFact Then 
+	Detrend = Price - AvgVal[DFact];
+Else
+	Detrend = 0;

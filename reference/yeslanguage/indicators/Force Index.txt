@@ -1,0 +1,10 @@
+Inputs: ShortPeriod(5),LongPeriod(20);
+Variables: Fval(0),FvalFast(0),FvalSlow(0);
+
+Fval = ((Close - Close[1]) * Volume) ;
+
+FvalFast = Ema(Fval, ShortPeriod);
+FvalSlow = Ema(Fval, LongPeriod);
+
+Plot1(FvalFast, "Force Index1");
+Plot2(FvalSlow, "Force Index2");

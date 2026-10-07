@@ -1,0 +1,9 @@
+/*	Description : (Boll)inger (Band) (Down)
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input : Period(Numeric), D(Numeric);
+
+BollBandDown = ma(C, Period) - (D * std(C, Period));

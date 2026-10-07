@@ -1,0 +1,12 @@
+/*	Description : (C)haikin (V)olatility
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(Numeric);
+Var 	: value(0);
+
+value = ema(H - L, Period);
+
+CV = (value - value[Period]) / value[Period] * 100;

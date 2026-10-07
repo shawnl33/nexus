@@ -1,0 +1,14 @@
+/*	Description : (Osc)illator (P)rice
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: shortPeriod(Numeric), longPeriod(Numeric);
+Var 	: value1(0), value2(0);
+
+value1 = ma(C, shortPeriod);
+value2 = ma(C, longPeriod);
+
+OSCP = (value1 - value2) / value1 * 100;
+

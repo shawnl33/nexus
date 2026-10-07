@@ -1,0 +1,22 @@
+Input : shortPeriod(12), longPeriod(26), Period(9);
+Var : MACDv(0), MACDsig(0),macdosc(0) ;
+
+MACDv = MACD(shortPeriod, longPeriod);
+MACDsig = ema(MACDv,Period);
+macdosc = MACDv-ema(MACDv,Period);
+
+if macdosc > 0 then
+{
+	plot1(macdosc, "MACDOscillator+");
+	Plot2(0, "MACDOscillator-");
+}
+else
+{
+    Plot1(0, "MACDOscillator+");
+	Plot2(macdosc, "MACDOscillator-");
+}
+
+Plot3(MACDv, "MACD");
+Plot4(MACDsig, "MACDSignal");	
+PlotBaseLine1(0, "기준선1");
+

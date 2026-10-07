@@ -1,0 +1,6 @@
+Input : shortPeriod(Numeric), longPeriod(Numeric), Period(Numeric);
+ 
+value1 = ema(C,shortPeriod);
+value2 = ema(C,longPeriod);
+
+MACD_OSC = (value1-value2)-ema(value1-value2,Period);

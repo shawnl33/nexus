@@ -1,0 +1,10 @@
+Inputs: Period(13);
+Variables: BullP(0), BearP(0);
+
+BullP = HIGH - ema(Close,Period);
+BearP = LOW - ema(Close,Period);
+
+Plot1(BullP, "BEAR");
+Plot2(BearP, "BULL");
+
+PlotBaseLine1(0,"기준선");

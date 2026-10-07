@@ -1,0 +1,8 @@
+Input : Period(14);
+var : LRLv(0);
+
+LRLv = LRL(C,Period);
+
+Plot1(LRLv, "LRS");
+
+

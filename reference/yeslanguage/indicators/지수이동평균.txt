@@ -1,0 +1,12 @@
+Input : Period1(5),Period2(20),Period3(60);
+var : Xma1(0),Xma2(0),Xma3(0);
+
+Xma1 = ema(C,Period1);
+Xma2 = ema(C,Period2);
+Xma3 = ema(C,Period3);
+
+Plot1(Xma1, "지수이동평균1");
+Plot2(Xma2, "지수이동평균2");
+Plot3(Xma3, "지수이동평균3");
+
+

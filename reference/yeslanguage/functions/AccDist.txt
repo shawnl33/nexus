@@ -1,0 +1,7 @@
+/*	Description : (Acc)umulation (Dist)ribution
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+AccDist = Accum(((C - L) - (H - C)) / (H - L) * V);

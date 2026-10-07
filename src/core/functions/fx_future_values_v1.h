@@ -17,9 +17,12 @@
  * - Round(v/PriceScale,0)*PriceScale은 국내 엔진과 같은 floor(v/ps+0.5)*ps 패턴.
  *
  * 18값 산출 경로:
- *   단계화_1분_통합 = IFF(미래>0,2,IFF(<0,−2,0)) + 미래↔미래[1] 비교 ±1 +
+ *   단계화_1분_통합 = IFF(미래>0,2,IFF(<0,−2,0)) + 기세 ±1 +
  *     핵심마켓방향 + 핵심회귀방향 (리셋 봉은 0) — 미래=FXCurve 방향(리셋 봉 0),
  *     회귀방향=FXReg#2 유효&&신뢰도 충족 시 C vs 평탄회귀선. 국내판과 달리 호가방향 항이 없다.
+ *     기세 ±1은 (미래−미래[1])이 ±기세무시틱*PriceScale을 넘을 때만. 0이면 부호 비교와 같다.
+ *     핵심마켓중심은 마켓계산유효일 때만 상태_마켓중심가격(표시 VWAP)이고, 아니면 0.
+ *     기울기는 FX세션봉수>1 이고 마켓계산유효와 마켓계산유효[1]이 모두 1일 때만 (원본 298~305줄).
  *   곡선회귀선_평탄 = FXReg#1 유효 시 Round(회귀선/PS)×PS (매 평가 갱신, 유효 시에만 출력).
  *   마켓중심가격 = 최근 Min(Max(1,마켓계산기간),세션봉수)봉의 (H+L+C)/3 거래량가중평균
  *     (누적거래량>0 && 계산봉수>=2일 때만 출력) — 캔들 시리즈 윈도우(tr_ring, yl_var 대상 아님).
@@ -49,6 +52,8 @@ typedef struct {
     int32_t market_period;   /* 마켓계산기간 */
     int32_t min_hold_bars;   /* 최소전환유지봉수 */
     double price_scale;      /* PriceScale (>0 필수) */
+    int32_t swing_link;      /* 스윙연결 (WSF_FXFutureValuesV2). 0=V1 */
+    double momentum_ignore_ticks; /* 기세무시틱 (V3_CO 312~318줄). 0이면 미래방향 변화 ±1을 그대로 */
 } tr_fxfv_config_t;
 
 typedef struct {
@@ -84,6 +89,7 @@ typedef struct {
     int prev_pred_dir2;      /* MTF예측방향2[1] */
     double prev_future_dir;  /* 핵심세션미래방향[1] */
     double prev_core_mkt;    /* 핵심마켓중심[1] */
+    int prev_mkt_valid;      /* 마켓계산유효[1] */
 } tr_fxfv_series_t;
 
 typedef struct {

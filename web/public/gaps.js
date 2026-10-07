@@ -2,7 +2,8 @@
 // 2026-09-30 RT 공백 사건 후속 G2의 재설계).
 // 연속 봉 사이의 1분 초과 공백을 전부 분당 1칸 whitespace({time}만 있는 항목)로 펼쳐
 // 캔들 사이에 섞는다 — 밤·주말·프리마켓·무틱 공백을 가리지 않는다. lightweight-charts
-// whitespace 항목은 가격 필드가 없어 그 자리는 캔들 없이 빈 칸으로 그려진다.
+// whitespace 항목은 가격 필드가 없다. 그 칸은 캔들 없이 남고, 화면의 사선 표시는
+// gap-shade.js가 whitespaceRuns로 묶어서 그린다.
 //
 // 왜 엔진 gaps 페이로드를 쓰지 않는가: 종목마다 구멍 채움 정책이 달라(선물은 쉬는
 // 시간을 분당 1칸으로 채우지만 밤은 1칸으로 압축, 주식은 밤 전체가 1칸) 엔진 gaps는
@@ -44,7 +45,30 @@ const Gaps = (() => {
     return out;
   }
 
-  return { withWhitespace, MIN_SEC };
+  // 가격이 없는 연속 항목을 {start, end}로 묶는다. start·end는 그 구간의 첫·마지막 시각(초).
+  // open·close·value가 있으면 봉이다. 0도 가격이다. 앞뒤 공백도 구간에 넣는다.
+  function whitespaceRuns(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const runs = [];
+    let start = null;
+    let end = null;
+    for (const row of rows) {
+      const priced = row != null && (row.open != null || row.close != null || row.value != null);
+      if (row == null || row.time == null || priced) {
+        if (start != null) {
+          runs.push({ start, end });
+          start = null;
+        }
+        continue;
+      }
+      if (start == null) start = row.time;
+      end = row.time;
+    }
+    if (start != null) runs.push({ start, end });
+    return runs;
+  }
+
+  return { withWhitespace, whitespaceRuns, MIN_SEC };
 })();
 
 if (typeof globalThis !== "undefined") {

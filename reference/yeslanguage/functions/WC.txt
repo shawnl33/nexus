@@ -1,0 +1,6 @@
+/*	Description : (W)eight (C)lose
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+WC = (C * 2 + H + L) / 4;

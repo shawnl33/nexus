@@ -1,0 +1,12 @@
+Input : Period(12), Period1(5), Period2(5);
+var : StoK(0),StoD(0);
+
+StoK = StochasticsK(Period,Period1);
+StoD = StochasticsD(Period,Period1,Period2);
+
+Plot1(StoK, "StochasticsK");
+Plot2(StoD, "StochasticsD");
+PlotBaseLine1(20, "기준선20");
+PlotBaseLine2(80, "기준선80");
+
+

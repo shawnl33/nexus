@@ -1,0 +1,7 @@
+Input : Period(20);
+var : VolumeRatio(0);
+
+VolumeRatio = VR(Period);
+
+Plot1(VolumeRatio,"VR");
+

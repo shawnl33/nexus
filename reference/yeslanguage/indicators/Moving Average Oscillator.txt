@@ -1,0 +1,17 @@
+Input : shortPeriod(5), longPeriod(20);
+var : mao(0);
+
+mao = ma(C,shortPeriod)-ma(C,longPeriod);
+
+if MAO > 0 Then
+{
+	plot1(mao,"MAO+");
+	plot2(0,"MAO-");
+}
+Else
+{
+	plot1(0,"MAO+");
+	plot2(mao,"MAO-");
+}
+PlotBaseLine1(0, "기준선");
+

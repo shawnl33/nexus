@@ -1,0 +1,17 @@
+/*	Description : Dark Cloud
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Length(NumericSimple);
+Var		: LongBody(False), OCRange(0);
+
+OCRange 	= Abs(Open - Close);
+LongBody 	= OCRange > MA(OCRange, Length);
+DarkCloud 	= False;
+
+If Close[1] > Open[1] AND Close[1] - Open[1] > Max(High[1] - Close[1], Open[1] - Low[1]) Then Begin
+	If LongBody[1] AND Open > High[1] AND Close <= MedianPrice()[1] Then 
+		DarkCloud = True;
+End;

@@ -1,0 +1,4 @@
+Var : user(0);
+
+Plot1(AccDist(), "AccDist");
+PlotBaseLine1(0,"기준선 0");

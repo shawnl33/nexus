@@ -1,0 +1,11 @@
+Input : Period1(9),Period2(10);
+var : CCIv(0),CCIsig(0);
+
+CCIv = CCI(Period1);
+CCIsig = ema(CCIv,Period2);
+
+
+Plot1(CCIv, "CCI");
+Plot2(CCIsig, "CCI Signal");
+PlotBaseLine1(100, "기준선 +100");
+PlotBaseLine2(-100, "기준선 -100");

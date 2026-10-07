@@ -1,0 +1,27 @@
+/*	Description : (N)egative (V)olume (I)ndex
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+
+if CurrentBar <= 1 then
+{
+    NVI = 100;
+}   
+else
+{
+    if V < V[1] then
+    {
+        NVI = NVI[1] + (((C - C[1]) / C[1]) * NVI[1]);
+    }
+    else
+    {
+        NVI = NVI[1];
+    }
+    
+}
+
+
+    
+  
+

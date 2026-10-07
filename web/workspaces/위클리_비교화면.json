@@ -1,0 +1,619 @@
+{
+  "schema_version": 2,
+  "name": "위클리_비교화면",
+  "current_symbol": "A016C000",
+  "cols": 2,
+  "colWeights": [
+    0.5078125,
+    0.4921875
+  ],
+  "frames": [
+    {
+      "height": 0.5,
+      "overlays": [
+        "BAFC0A57",
+        "CAFC0A33"
+      ],
+      "overlayStyles": {},
+      "overlayScale": "shared",
+      "panels": [
+        {
+          "height": 0.6009184845005741,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [],
+          "systems": [
+            "pair-short"
+          ],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A33",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A57",
+              "fut": "A016C000"
+            }
+          },
+          "systemVars": {
+            "pair-short": {
+              "매매종료": 0,
+              "총투자금": 10000000,
+              "익절률": 10,
+              "손절률": 10,
+              "진입시작": 90000,
+              "전량청산": 151500,
+              "만남방식": 1,
+              "허용오차": 0,
+              "진단출력사용": 1,
+              "분할청산": 1,
+              "만기잔량익절률": 60,
+              "잔량익절대기분": 15,
+              "저수익대기분": 60,
+              "저수익기준률": 5,
+              "저수익청산비율": 30
+            }
+          },
+          "overlayStyles": {
+            "BAFC0A57": "candle",
+            "CAFC0A33": "candle"
+          }
+        },
+        {
+          "height": 0.2057405281285879,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "ks_data2",
+              "layers": {
+                "three": true,
+                "reg": true,
+                "market": true,
+                "price": true,
+                "marks": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A33",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A57",
+              "fut": "A016C000"
+            }
+          },
+          "overlayStyles": {
+            "BAFC0A57": "none",
+            "CAFC0A33": "none"
+          }
+        },
+        {
+          "height": 0.1933409873708381,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "w_ret_short",
+              "layers": {
+                "ret": true,
+                "zero": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A33",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A57",
+              "fut": "A016C000"
+            }
+          },
+          "overlayStyles": {
+            "BAFC0A57": "none",
+            "CAFC0A33": "none"
+          }
+        }
+      ]
+    },
+    {
+      "height": 0.5,
+      "overlays": [
+        "BAFC0A49",
+        "CAFC0A41"
+      ],
+      "overlayStyles": {},
+      "overlayScale": "shared",
+      "panels": [
+        {
+          "height": 0.6017094017094017,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [],
+          "systems": [
+            "pair-short"
+          ],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A41",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A49",
+              "fut": "A016C000"
+            }
+          },
+          "systemVars": {
+            "pair-short": {
+              "매매종료": 0,
+              "총투자금": 20000000,
+              "익절률": 10,
+              "손절률": 10,
+              "진입시작": 90000,
+              "전량청산": 151500,
+              "만남방식": 1,
+              "허용오차": 0,
+              "진단출력사용": 1,
+              "분할청산": 1,
+              "만기잔량익절률": 60,
+              "잔량익절대기분": 15,
+              "저수익대기분": 60,
+              "저수익기준률": 5,
+              "저수익청산비율": 30
+            }
+          },
+          "systemBasis": {
+            "pair-short": "P"
+          },
+          "overlayStyles": {
+            "BAFC0A49": "candle",
+            "CAFC0A41": "candle"
+          }
+        },
+        {
+          "height": 0.20341880341880347,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "ks_data2",
+              "layers": {
+                "three": true,
+                "reg": true,
+                "market": true,
+                "price": true,
+                "marks": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A41",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A49",
+              "fut": "A016C000"
+            }
+          },
+          "overlayStyles": {
+            "BAFC0A49": "none",
+            "CAFC0A41": "none"
+          }
+        },
+        {
+          "height": 0.19487179487179485,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "w_ret_short",
+              "layers": {
+                "ret": true,
+                "zero": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A41",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A49",
+              "fut": "A016C000"
+            }
+          },
+          "overlayStyles": {
+            "BAFC0A49": "none",
+            "CAFC0A41": "none"
+          }
+        }
+      ]
+    },
+    {
+      "height": 0.5,
+      "overlays": [
+        "BAFC0A57",
+        "CAFC0A29"
+      ],
+      "overlayStyles": {},
+      "overlayScale": "shared",
+      "panels": [
+        {
+          "height": 0.5726495726495728,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [],
+          "systems": [
+            "pair-long"
+          ],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A29",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A57",
+              "fut": "A016C000"
+            }
+          },
+          "systemVars": {
+            "pair-long": {
+              "매매종료": 0,
+              "총투자금": 10000000,
+              "익절률": 10,
+              "손절률": 10,
+              "진입시작봉수": 15,
+              "오후전환봉수": 195,
+              "전량청산": 151500,
+              "오전삼선만남최대비율": 70,
+              "오후삼선만남최대비율": 50,
+              "만남방식": 1,
+              "허용오차": 0,
+              "진단출력사용": 1,
+              "분할청산": 1,
+              "만기잔량익절률": 60,
+              "잔량익절대기분": 15,
+              "저수익대기분": 60,
+              "저수익기준률": 5,
+              "저수익청산비율": 30
+            }
+          },
+          "systemBasis": {
+            "pair-long": "C"
+          },
+          "overlayStyles": {
+            "BAFC0A57": "candle",
+            "CAFC0A29": "candle"
+          }
+        },
+        {
+          "height": 0.22222222222222213,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "w_ret_long",
+              "layers": {
+                "ret": true,
+                "zero": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A29",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A57",
+              "fut": "A016C000"
+            }
+          },
+          "systemVars": {
+            "pair-long": {
+              "매매종료": 0,
+              "총투자금": 10000000,
+              "익절률": 10,
+              "손절률": 10,
+              "진입시작봉수": 15,
+              "오후전환봉수": 195,
+              "전량청산": 151500,
+              "오전삼선만남최대비율": 70,
+              "오후삼선만남최대비율": 50,
+              "만남방식": 1,
+              "허용오차": 0,
+              "진단출력사용": 1,
+              "분할청산": 1,
+              "만기잔량익절률": 60,
+              "잔량익절대기분": 15,
+              "저수익대기분": 60,
+              "저수익기준률": 5,
+              "저수익청산비율": 30
+            }
+          },
+          "systemBasis": {
+            "pair-long": "C"
+          },
+          "overlayStyles": {
+            "BAFC0A57": "none",
+            "CAFC0A29": "none"
+          }
+        },
+        {
+          "height": 0.2051282051282051,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "ks_data2",
+              "layers": {
+                "three": true,
+                "reg": true,
+                "market": true,
+                "price": true,
+                "marks": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A29",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A57",
+              "fut": "A016C000"
+            }
+          },
+          "systemVars": {
+            "pair-long": {
+              "매매종료": 0,
+              "총투자금": 10000000,
+              "익절률": 10,
+              "손절률": 10,
+              "진입시작봉수": 15,
+              "오후전환봉수": 195,
+              "전량청산": 151500,
+              "오전삼선만남최대비율": 70,
+              "오후삼선만남최대비율": 50,
+              "만남방식": 1,
+              "허용오차": 0,
+              "진단출력사용": 1,
+              "분할청산": 1,
+              "만기잔량익절률": 60,
+              "잔량익절대기분": 15,
+              "저수익대기분": 60,
+              "저수익기준률": 5,
+              "저수익청산비율": 30
+            }
+          },
+          "systemBasis": {
+            "pair-long": "C"
+          },
+          "overlayStyles": {
+            "BAFC0A57": "none",
+            "CAFC0A29": "none"
+          }
+        }
+      ]
+    },
+    {
+      "height": 0.5,
+      "overlays": [
+        "BAFC0A57",
+        "CAFC0A29"
+      ],
+      "overlayStyles": {},
+      "overlayScale": "shared",
+      "panels": [
+        {
+          "height": 0.5726495726495726,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [],
+          "systems": [
+            "pair-long"
+          ],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A29",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A57",
+              "fut": "A016C000"
+            }
+          },
+          "systemVars": {
+            "pair-long": {
+              "매매종료": 0,
+              "총투자금": 10000000,
+              "익절률": 10,
+              "손절률": 10,
+              "진입시작봉수": 15,
+              "오후전환봉수": 195,
+              "전량청산": 151500,
+              "오전삼선만남최대비율": 70,
+              "오후삼선만남최대비율": 50,
+              "만남방식": 1,
+              "허용오차": 0,
+              "진단출력사용": 1,
+              "분할청산": 1,
+              "만기잔량익절률": 60,
+              "잔량익절대기분": 15,
+              "저수익대기분": 60,
+              "저수익기준률": 5,
+              "저수익청산비율": 30
+            }
+          },
+          "systemBasis": {
+            "pair-long": "P"
+          },
+          "overlayStyles": {
+            "BAFC0A57": "candle",
+            "CAFC0A29": "candle"
+          }
+        },
+        {
+          "height": 0.23076923076923084,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "w_ret_long",
+              "layers": {
+                "ret": true,
+                "zero": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A29",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A57",
+              "fut": "A016C000"
+            }
+          },
+          "systemVars": {
+            "pair-long": {
+              "매매종료": 0,
+              "총투자금": 10000000,
+              "익절률": 10,
+              "손절률": 10,
+              "진입시작봉수": 15,
+              "오후전환봉수": 195,
+              "전량청산": 151500,
+              "오전삼선만남최대비율": 70,
+              "오후삼선만남최대비율": 50,
+              "만남방식": 1,
+              "허용오차": 0,
+              "진단출력사용": 1,
+              "분할청산": 1,
+              "만기잔량익절률": 60,
+              "잔량익절대기분": 15,
+              "저수익대기분": 60,
+              "저수익기준률": 5,
+              "저수익청산비율": 30
+            }
+          },
+          "systemBasis": {
+            "pair-long": "P"
+          },
+          "overlayStyles": {
+            "BAFC0A57": "none",
+            "CAFC0A29": "none"
+          }
+        },
+        {
+          "height": 0.19658119658119655,
+          "symbol": "A016C000",
+          "panelOpen": false,
+          "data2": "",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "ks_data2",
+              "layers": {
+                "three": true,
+                "reg": true,
+                "market": true,
+                "price": true,
+                "marks": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "CAFC0A29",
+              "fut": "A016C000"
+            },
+            "w_link_short": {
+              "opp": "BAFC0A57",
+              "fut": "A016C000"
+            }
+          },
+          "systemVars": {
+            "pair-long": {
+              "매매종료": 0,
+              "총투자금": 10000000,
+              "익절률": 10,
+              "손절률": 10,
+              "진입시작봉수": 15,
+              "오후전환봉수": 195,
+              "전량청산": 151500,
+              "오전삼선만남최대비율": 70,
+              "오후삼선만남최대비율": 50,
+              "만남방식": 1,
+              "허용오차": 0,
+              "진단출력사용": 1,
+              "분할청산": 1,
+              "만기잔량익절률": 60,
+              "잔량익절대기분": 15,
+              "저수익대기분": 60,
+              "저수익기준률": 5,
+              "저수익청산비율": 30
+            }
+          },
+          "systemBasis": {
+            "pair-long": "P"
+          },
+          "overlayStyles": {
+            "BAFC0A57": "none",
+            "CAFC0A29": "none"
+          }
+        }
+      ]
+    }
+  ]
+}

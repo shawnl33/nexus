@@ -1,0 +1,10 @@
+/*	Description : (V)ertical (H)orizontal (F)ilter
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input : P(Numeric);
+ 
+VHF = abs(Highest(C, P) - Lowest(C, P)) / AccumN(abs(C - C[1]), P);
+

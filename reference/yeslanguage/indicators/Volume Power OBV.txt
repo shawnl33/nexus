@@ -1,0 +1,11 @@
+Var : value(0),VPOBV(0);
+
+If upVol > downVol Then 
+	value = V;
+Else 
+	value = -V;
+
+VPOBV = accum(value);
+
+Plot1(VPOBV, "VP_OBV");
+PlotBaseLine1(0, "기준선 0");

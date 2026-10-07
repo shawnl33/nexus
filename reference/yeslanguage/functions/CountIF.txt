@@ -1,0 +1,17 @@
+/*	Description : Count IF
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs	: Criteria(logical), Length(Numeric);
+Var		: Accumv(0), Counter(0);
+
+For Counter = 0 To Length - 1 Begin	
+	If Criteria[Counter] Then
+		Accumv = Accumv + 1;
+End;
+
+CountIF = Accumv;
+Accumv 	= 0;
+

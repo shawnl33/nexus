@@ -1,0 +1,7 @@
+Input : Length(10);
+Var : Breadth(0),Thrust(0);
+
+Breadth = Open/(Open + High);
+Thrust = ma(Breadth, Length)*100;
+
+Plot1(Thrust,"Breadth Thrust");

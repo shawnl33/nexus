@@ -1,0 +1,20 @@
+var		: BarCountInDay(0);
+
+if BarIndex <= 0 then
+{
+    BarCountInDay = 0;
+}
+else
+{
+	if Date > Date[1] then
+	{
+		BarCountInDay = 0;
+	}
+	else
+	{
+		BarCountInDay = BarCountInDay + 1;
+	}
+}
+
+   
+DayIndex = BarCountInDay;

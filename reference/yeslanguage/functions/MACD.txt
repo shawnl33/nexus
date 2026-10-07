@@ -1,0 +1,9 @@
+/*	Description : (M)oving (A)verage (C)onvergence/(D)ivergence
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input : shortPeriod(NumericSimple), longPeriod(NumericSimple);
+
+MACD = ema(C, shortPeriod) - ema(C, longPeriod);

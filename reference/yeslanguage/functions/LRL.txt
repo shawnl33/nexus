@@ -1,0 +1,16 @@
+/* LRS : (L)inear (R)egression (L)ine
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Value(NumericSeries), Period(NumericSimple);
+Var 	: value1(0), value2(0), AccumValue(0);
+
+AccumValue = accum(1);
+
+value1 = ma(AccumValue, Period);
+value2 = ma(Value, Period);
+
+LRL = (ma(Value * AccumValue, Period) - value1 * value2) /
+	  (ma(AccumValue^2, Period) - (ma(AccumValue, Period)^2)) * (AccumValue - value1) + value2;

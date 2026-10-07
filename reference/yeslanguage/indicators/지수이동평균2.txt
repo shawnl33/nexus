@@ -1,0 +1,10 @@
+Input : Period1(5), Period2(20);
+
+var1 = ema(C,Period1);
+var2 = ema(C,Period2);
+
+Plot1(var1, "지수이동평균1");
+Plot2(var2, "지수이동평균2");
+
+
+

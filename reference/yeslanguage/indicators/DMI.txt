@@ -1,0 +1,12 @@
+Input : Period(14) ;
+var : DMIv(0),DP(0),DM(0);
+
+DMIv = DMI(Period); 
+DP = DIPlus(Period);
+DM = DIMinus(Period);
+
+Plot1(DMIv, "Directional Movement Index");
+Plot2(DP, "DIPlus");
+Plot3(DM, "DIMinus");
+
+

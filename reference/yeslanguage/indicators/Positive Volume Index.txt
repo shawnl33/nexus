@@ -1,0 +1,9 @@
+Input : Period(52);
+var : Positive(0),PositiveSig(0);
+
+Positive = PVI();
+PositiveSig = ma(PVI(),Period);
+
+Plot1(Positive, "PVI");
+Plot2(PositiveSig, "PVISIG");
+

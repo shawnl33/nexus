@@ -1,0 +1,12 @@
+Variables : body(0),MidBody(0),value(0);
+
+body = Abs(O-C);
+MidBody = (Open+Close)/2;
+	
+If C[1] < Ma(C,10)[1] and body[1] > Ma(body[1],10)*2 and C[1] < O[1] and C > O and
+	O < L[1] and C > C[1] and C < MidBody[1] Then
+	value = 1;
+Else
+	value = 0;
+
+Find(value);

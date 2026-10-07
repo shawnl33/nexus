@@ -64,6 +64,10 @@ const RENDERERS = {
   fx_ugap: PgapLayers.makeUnion("fx_ugap"),
   fx_ymae: YmaeLayers.YmaeRenderer,
   fx_sniper: Data2Layers.Data2Renderer,
+  fx_curve_os: { createHandle: (chart) => CuLayers.createHandle(chart) },
+  fx_snco: { createHandle: (chart) => SncoLayers.createHandle(chart) },
+  fx_judge_v3: { createHandle: (chart) => OsLayers.judgeHandle(chart) },
+  fx_pack_v4: { createHandle: (chart) => OsLayers.packHandle(chart) },
   fx_pvc: PvcLayers.PvcRenderer,
   fx_data2: Data2Layers.Data2Renderer,
   ks_data2: Data2Layers.Data2Renderer,
@@ -453,6 +457,25 @@ function pricePoint(row, draw) {
   return row;
 }
 
+// 미래곡선 해외가 켜진 칸은 봉마다 단계 색으로 강도를 칠한다.
+function curveStageTint(pane, time) {
+  if (!pane?.active?.has("fx_curve_os")) return "";
+  const list = paneCache(pane)?.barInd?.get(time)?.cu;
+  if (!Array.isArray(list)) return "";
+  const row = list.find((r) => r.id === 1) || list.find((r) => r.id === 2) || list.find((r) => r.id === 3);
+  if (!row || !Number.isFinite(Number(row.rgb))) return "";
+  return "#" + (Number(row.rgb) >>> 0).toString(16).padStart(6, "0");
+}
+
+function candlePoint(pane, row, draw) {
+  const point = pricePoint(row, draw || pane.barDraw);
+  const tint = curveStageTint(pane, row && row.time);
+  if (!tint || point.open == null) return point;
+  if ((draw || pane.barDraw) === "line") return { ...point, color: tint };
+  if (pane.barStyle === "outline") return { ...point, borderColor: tint, wickColor: tint };
+  return { ...point, color: tint, borderColor: tint, wickColor: tint };
+}
+
 const CANDLE_UP = "#ef5350";
 const CANDLE_DN = "#2962ff";
 
@@ -509,7 +532,7 @@ function candleBorderPrimitive() {
                   let bottom = Math.round(Math.max(yo, yc) * vr);
                   if (bottom - top < border) bottom = top + border;
                   ctx.beginPath();
-                  ctx.strokeStyle = bar.close >= bar.open ? upTint : downTint;
+                  ctx.strokeStyle = bar.borderColor || bar.color || (bar.close >= bar.open ? upTint : downTint);
                   ctx.lineWidth = border;
                   const inset = border / 2;
                   ctx.strokeRect(
@@ -559,19 +582,24 @@ function hideCrosshairMarkers(chart) {
 }
 
 function makePriceSeries(chart, draw, hollow) {
-  if (draw === "bar") {
-    return chart.addBarSeries({
+  const series = draw === "bar"
+    ? chart.addBarSeries({
       upColor: CANDLE_UP, downColor: CANDLE_DN,
       thinBars: false,
-    });
-  }
-  if (draw === "line") {
-    return chart.addLineSeries({
-      color: "#d1d4dc", lineWidth: 2,
-      priceLineVisible: true, lastValueVisible: true,
-    });
-  }
-  return chart.addCandlestickSeries(candleColors(hollow ? "outline" : "fill"));
+    })
+    : draw === "line"
+      ? chart.addLineSeries({
+        color: "#d1d4dc", lineWidth: 2,
+        priceLineVisible: true, lastValueVisible: true,
+      })
+      : chart.addCandlestickSeries(candleColors(hollow ? "outline" : "fill"));
+  attachGapShade(series);
+  return series;
+}
+
+function attachGapShade(series) {
+  if (!series || typeof series.attachPrimitive !== "function" || typeof GapShade === "undefined") return;
+  series.attachPrimitive(GapShade.primitive());
 }
 
 function syncCandleBorder(pane, hollow) {
@@ -598,7 +626,7 @@ function setBarStyle(pane, style) {
   if (pane.barDraw !== draw) {
     const cache = feed.get(pane.symbol);
     const bars = cache ? cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean) : [];
-    const rows = bars.length ? Gaps.withWhitespace(bars).map((r) => pricePoint(r, draw)) : [];
+    const rows = bars.length ? Gaps.withWhitespace(bars).map((r) => candlePoint(pane, r, draw)) : [];
     mutePaneRange(pane);
     if (pane.candleSeries) pane.chart.removeSeries(pane.candleSeries);
     pane.candleBorder = null;
@@ -699,7 +727,7 @@ async function addChart(frame) {
       pane.systemBasis = { ...(src.systemBasis || {}) };
       pane.linkLegs = WeeklyLegs.copy(src.linkLegs);
       refreshWeeklyPlots(pane);
-      if (src.data2) await setPaneData2(pane, src.data2);
+      syncFrameData2(frame);
       setBarStyle(pane, src.barStyle || "candle");
       buildPaneTools(pane);
     });
@@ -1265,6 +1293,7 @@ async function applyFrameCode(frame, code, pickedName) {
       delete frame.overlayStyles[code];
       for (const other of frame.panes) dropOverlaySeries(other, code);
       forgetPairCode(frame, code);
+      syncFrameData2(frame);
     }
     await selectPaneSymbol(pane, code, pickedName);
     syncFrameChips(frame);
@@ -1414,54 +1443,30 @@ async function selectPaneSymbol(pane, shcode, name) {
     if (prev) releaseSymbol(prev);
     await seedSymbol(shcode);
     if (seq !== pane.selSeq) return;
-    if (pane.active.has("fx_data2")) await ensureDefaultData2(pane);
+    syncFrameData2(pane.frame);
   });
   if (fail) alert(fail);
 }
 
-// 참조가 비어 있으면 ES↔NQ 같은 월물을 넣어 바로 관측한다.
-function ensureDefaultData2(pane) {
-  if (pane.data2 || !pane.symbol) return Promise.resolve();
-  const code = Data2Layers.defaultCode(pane.symbol);
-  if (!code || code === pane.symbol) return Promise.resolve();
-  return setPaneData2(pane, code);
+// 스나이퍼 Data2의 참조는 이 화면틀의 두 번째 종목(첫 겹침)이다.
+function frameSecondSymbol(frame) {
+  return frame?.overlays?.[0] || "";
 }
 
-// 스나이퍼 Data2: 참조 종목의 1분 비율을 이 칸 차트에 겹친다.
-async function setPaneData2(pane, code) {
-  const epoch = loadEpoch;
-  const next = String(code ?? "").trim().toUpperCase();
-  const prev = pane.data2 || "";
-  pane.data2 = next;
-  if (!pane.active.has("fx_data2")) activateIndicator(pane, "fx_data2");
-  const entry = pane.active.get("fx_data2");
-  if (!next) {
-    if (entry) entry.handle.clear();
-    if (prev && WatchGuard.staleWatchLeaks(prev, panes)) releaseSymbol(prev);
-    buildPaneTools(pane);
-    return;
+function syncFrameData2(frame) {
+  if (!frame) return;
+  const code = frameSecondSymbol(frame);
+  for (const pane of frame.panes || []) {
+    pane.data2 = code;
+    const entry = pane.active.get("fx_data2");
+    if (!entry) continue;
+    try {
+      if (!code) entry.handle.clear();
+      else entry.handle.setSource(feed.get(code) || null);
+    } catch (err) {
+      console.error(`[${code}] Data2 반영 실패`, err);
+    }
   }
-  const w = await watchSymbol(next);
-  if (!loadStill(epoch) || pane.data2 !== next) {
-    finishSeedIfIdle(next);
-    return;
-  }
-  if (!w.ok) {
-    pane.data2 = prev;
-    alert(`참조 종목 관측 실패 (${next}): ${w.error}`);
-    buildPaneTools(pane);
-    finishSeedIfIdle(next);
-    return;
-  }
-  if (w.name) feed.forSymbol(next).name = w.name;
-  await seedSymbol(next);
-  if (!loadStill(epoch)) return;
-  if (entry && pane.data2 === next) {
-    try { entry.handle.setSource(feed.get(next)); }
-    catch (err) { console.error(`[${next}] 참조 지표 시딩 실패`, err); }
-  }
-  if (prev && prev !== next && WatchGuard.staleWatchLeaks(prev, panes)) releaseSymbol(prev);
-  buildPaneTools(pane);
 }
 
 function clearPaneData(pane) {
@@ -2026,7 +2031,6 @@ function buildIndNode(pane, meta, source) {
   box.onchange = () => {
     if (box.checked) activateIndicator(pane, meta.id);
     else deactivateIndicator(pane, meta.id);
-    if (box.checked && meta.id === "fx_data2" && !pane.data2) ensureDefaultData2(pane);
     if (WPLOT_IDS.includes(meta.id)) syncPairLegs(pane.frame);
     buildPaneTools(pane);
     updateBadgeVisibility();
@@ -2037,18 +2041,6 @@ function buildIndNode(pane, meta, source) {
   if (source) name.title = sourceTitle(source);
   row.append(box, name);
   node.append(row);
-  if (meta.id === "fx_data2") {
-    const ref = document.createElement("input");
-    ref.className = "data2-ref";
-    ref.placeholder = "참조 코드";
-    ref.size = 8;
-    ref.value = pane.data2 || "";
-    ref.title = "이 칸에 겹칠 참조 종목. Enter로 적용";
-    ref.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter") setPaneData2(pane, ref.value);
-    });
-    node.append(ref);
-  }
 
   const entry = pane.active.get(meta.id);
   if (entry) {
@@ -2088,13 +2080,17 @@ function activateIndicator(pane, indId, savedLayers) {
   pane.active.set(indId, { renderer, handle, layers });
   handle.setLayers(layers);
   if (indId === "fx_data2") {
-    if (pane.data2) handle.setSource(feed.get(pane.data2));
+    syncFrameData2(pane.frame);
   } else if (indId === "ks_data2") {
     const fut = WeeklyLegs.futForData2(pane.linkLegs);
     if (fut) handle.setSource(feed.get(fut));
   } else {
     const cache = pane.symbol ? feed.get(pane.symbol) : undefined;
     if (cache) handle.applySeed(ctxFor(cache));
+  }
+  if (indId === "fx_curve_os" && pane.symbol) {
+    const cache = feed.get(pane.symbol);
+    if (cache) rebuildPaneCandles(pane, cache);
   }
   if (WPLOT_IDS.includes(indId)) refreshWeeklyPlots(pane);
 }
@@ -2105,6 +2101,10 @@ function deactivateIndicator(pane, indId) {
   pane.active.delete(indId);
   if (typeof entry.handle.destroy === "function") entry.handle.destroy();
   else entry.handle.clear();
+  if (indId === "fx_curve_os" && pane.symbol) {
+    const cache = feed.get(pane.symbol);
+    if (cache) rebuildPaneCandles(pane, cache);
+  }
   if (WPLOT_IDS.includes(indId)) refreshWeeklyPlots(pane);
 }
 
@@ -2237,7 +2237,7 @@ function applyStatus(msg) {
             mutePaneRange(pane);
             for (const w of liveWs) pane.candleSeries.update(pricePoint(w, pane.barDraw));
           }
-          pane.candleSeries.update(pricePoint(cache.bars.get(t), pane.barDraw));
+          pane.candleSeries.update(candlePoint(pane, cache.bars.get(t)));
         } else {
           // 늦은 정정/구멍 채움(과거 시각): candleSeries.update()는 시리즈 마지막보다
           // 과거 시각에 throw("Cannot update oldest data")하므로 캐시에서 다시 깐다.
@@ -2259,12 +2259,25 @@ function applyStatus(msg) {
   ind.mgap = PgapLayers.parseSide(p.mgap);
   ind.ymae = YmaeLayers.parseYmae(p.ymae);
   ind.sniper = SniperLayers.parseSniper(p.sniper);
+  ind.os = OsLayers.parse(p.os);
+  ind.cu = CuLayers.parse(p.cu);
+  ind.snco = SncoLayers.parse(p.snco);
   ind.pvc = PvcLayers.parsePvc(p.pvc);
   ind.score = Number.isFinite(p.score) ? p.score : NaN;
   ind.pred = Array.isArray(p.pred) ? p.pred : undefined;
   ind.resid = p.resid ?? 0;
   ind.pvol = p.pvol ?? 0;
   cache.barInd.set(t, ind);
+  if (!seedInflight.has(sh)) {
+    const painted = cache.bars.get(t);
+    if (painted) {
+      for (const pane of panes) {
+        if (pane.symbol !== sh || !pane.active.has("fx_curve_os") || !pane.candleSeries) continue;
+        try { pane.candleSeries.update(candlePoint(pane, painted)); }
+        catch { /* 과거 시각은 아래 재구성이 맡는다 */ }
+      }
+    }
+  }
   if (typeof p.tick === "number" && Number.isFinite(p.tick) && p.tick > 0) cache.tickRaw = p.tick;
 
   // ⑥⑦ 봉별 아이템은 렌더러 on/off와 무관하게 캐시에 기록한다 (복원 대비)
@@ -2281,7 +2294,7 @@ function applyStatus(msg) {
   for (const pane of panes) {
     if (pane.symbol !== sh || seedingNow) continue;
     for (const [indId, { handle }] of pane.active) {
-      if (indId === "fx_data2" && pane.data2 && pane.data2 !== sh) continue;
+      if (indId === "fx_data2") continue;
       if (indId === "ks_data2") continue;
       // 지표 시리즈도 칸별로 격리한다 — 한 지표의 실패가 다른 지표·칸으로 번지지 않게.
       try {
@@ -2416,7 +2429,7 @@ function rebuildPaneCandles(pane, cache) {
   const rows = Gaps.withWhitespace(bars); // 균일 분 그리드 — renderSymbolPanes와 같은 계약
   const range = pane.chart.timeScale().getVisibleRange(); // 시각 창 (데이터 없으면 null)
   mutePaneRange(pane);
-  pane.candleSeries.setData(rows.map((r) => pricePoint(r, pane.barDraw)));
+  pane.candleSeries.setData(rows.map((r) => candlePoint(pane, r)));
   applyPairMarkers(pane);
   cache.wsCount = rows.length - bars.length;
   cache.seriesTimes = rows.map((r) => r.time);
@@ -2463,7 +2476,7 @@ function renderSymbolPanes(shcode) {
     // 돌아가며 내는 범위 이벤트가 같은 화면틀의 다른 칸 탐색 위치를 빼앗지 않게 뮤트한다.
     mutePaneRangeForSeeding(pane);
     try {
-      pane.candleSeries.setData(rows.map((r) => pricePoint(r, pane.barDraw)));
+      pane.candleSeries.setData(rows.map((r) => candlePoint(pane, r)));
     } catch (err) {
       console.error(`[${shcode}] 캔들 시딩 실패`, err);
       continue;
@@ -2505,7 +2518,7 @@ function renderSymbolPanes(shcode) {
 // 한 지표가 실패해도 같은 칸의 나머지와 다른 칸은 계속 그린다.
 function applyPaneSeed(pane, ctx) {
   for (const [indId, { handle }] of pane.active) {
-    if (indId === "fx_data2" && pane.data2 && pane.data2 !== pane.symbol) continue;
+    if (indId === "fx_data2") continue;
     if (indId === "ks_data2") continue;
     try {
       handle.applySeed(ctx);
@@ -2687,6 +2700,7 @@ function ensureOverlaySeries(pane, shcode) {
     : style === "bar"
       ? pane.chart.addBarSeries({ ...common, upColor: color, downColor: down, thinBars: false })
       : pane.chart.addCandlestickSeries({ ...common, ...symbolPaint(color, hollow) });
+  attachGapShade(series);
   pane.overlaySeries.set(shcode, series);
   pane.overlayDrawn.set(shcode, drawnKey);
   syncOverlayScale(pane);
@@ -2779,6 +2793,7 @@ function takeFrameOverlays(frame) {
   frame.overlayColors = {};
   frame.overlayStyles = {};
   for (const pane of frame.panes || []) pane.overlayStyles = {};
+  syncFrameData2(frame);
   return codes;
 }
 
@@ -2854,6 +2869,7 @@ async function removeFrameOverlay(frame, shcode) {
   delete frame.overlayStyles[shcode];
   forgetPairCode(frame, shcode);
   syncPairLegs(frame);
+  syncFrameData2(frame);
   for (const pane of frame.panes) {
     if (pane.overlayStyles) delete pane.overlayStyles[shcode];
     dropOverlaySeries(pane, shcode);
@@ -2915,6 +2931,7 @@ async function addFrameOverlay(frame, shcode, name) {
     }
     syncMainBarColors(frame);
     syncPairLegs(frame);
+    syncFrameData2(frame);
     await seedSymbol(shcode);
   });
   if (fail) alert(fail);
@@ -3060,11 +3077,15 @@ async function seedSymbolNow(shcode) {
           const mgrows = p.mgap ?? [];
           const ymrows = p.ymae ?? [];
           const snrows = p.sniper ?? [];
+          const osrows = p.os ?? [];
+          const curows = p.cu ?? [];
+          const sncorows = p.snco ?? [];
           const pvcrows = p.pvc ?? [];
           all.push({
             time: Number(t) / 1e6, open: o, high: h, low: l, close: c,
             ind: inds[ri], fx3: fx3rows[ri], pgap: pgrows[ri], rgap: rgrows[ri],
             mgap: mgrows[ri], ymae: ymrows[ri], sniper: snrows[ri], pvc: pvcrows[ri],
+            os: osrows[ri], cu: curows[ri], snco: sncorows[ri],
           });
         }
         // ⑥⑦ 갱신·저장 이벤트 (희소) — 페이지 경계에서 중복되지 않게 시각으로 모은다
@@ -3100,6 +3121,9 @@ async function seedSymbolNow(shcode) {
         ind.mgap = PgapLayers.parseSide(b.mgap);
         ind.ymae = YmaeLayers.parseYmae(b.ymae);
         ind.sniper = SniperLayers.parseSniper(b.sniper);
+        ind.os = OsLayers.parse(b.os);
+        ind.cu = CuLayers.parse(b.cu);
+        ind.snco = SncoLayers.parse(b.snco);
         ind.pvc = PvcLayers.parsePvc(b.pvc);
         cache.barInd.set(b.time, ind);
       }
@@ -3416,7 +3440,6 @@ async function applyWorkspace(parsed) {
     for (const spec of specs) {
       for (const panel of spec.panels ?? []) {
         if (panel.symbol) seedCodes.push(panel.symbol);
-        if (panel.data2) seedCodes.push(panel.data2);
       }
       for (const code of spec.overlays || []) seedCodes.push(code);
     }
@@ -3444,16 +3467,10 @@ async function applyWorkspace(parsed) {
         pane.systemVars = panel.systemVars ? JSON.parse(JSON.stringify(panel.systemVars)) : {};
         pane.systemBasis = { ...(panel.systemBasis || {}) };
         if (panel.linkLegs) pane.linkLegs = WeeklyLegs.copy(panel.linkLegs);
-        // 참조 코드를 먼저 적어 두면 종목 시딩이 기본 참조를 따로 걸지 않는다.
-        // 참조 시딩은 그 종목 시딩이 끝난 뒤에 한다. 같이 돌리면 메인 시딩이
-        // 방금 그린 참조 지표를 지우거나, 참조가 빈 채로 남는다.
-        if (panel.data2) pane.data2 = panel.data2;
         buildPaneTools(pane);
         jobs.push((async () => {
           try {
             if (frameSymbol) await selectPaneSymbol(pane, frameSymbol);
-            if (!loadStill(epoch)) return;
-            if (panel.data2) await setPaneData2(pane, panel.data2);
           } catch (err) {
             // 한 칸이 실패해도 다른 칸 시딩과 마지막 다시 그리기는 계속한다.
             console.error(`화면틀 칸 적용 실패 (${panel.symbol || "?"})`, err);

@@ -1,0 +1,54 @@
+/*	Description : Swing Low Bar
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Occur(NumericSimple), Value(NumericSeries), Left(NumericSimple), Right(NumericSimple), Length(NumericSimple);
+Var		: Result(0), X(0), J(0), Z(0), Ltrue(FALSE), Counter(0), Found(FALSE);
+
+if CurrentBar >= Length - 1 then
+{
+    Result 	= -1;
+    Z		= 0;
+    
+    X 		= Right;
+    Counter	= 0;
+    Found 	= FALSE;
+    while Counter < Length && X + Left < Length && Found == FALSE
+    Begin
+    	J 		= X + Left;
+    	Ltrue 	= TRUE;
+    	while Ltrue && J > X
+    	Begin
+        	if Value[X] > Value[J] then Ltrue = FALSE;
+
+    		J = J - 1;
+    	End
+    
+    	J = X - 1;
+    	while Ltrue && J >= X - Right
+    	Begin
+        	if Value[X] >= Value[J] then Ltrue = FALSE;
+
+    		J = J - 1;
+    	End
+    
+	    if LTrue == TRUE then 
+		{
+    		Z = Z + 1;
+			if Z >= Occur then
+			{
+				Result 	= X;
+				Found 	= TRUE;
+			}
+		}
+    	X = X + 1;
+    	Counter = Counter + 1;
+    End
+
+	if Z == 0 then
+		SwingLowBar = -1;
+	else
+		SwingLowBar = Result;
+}

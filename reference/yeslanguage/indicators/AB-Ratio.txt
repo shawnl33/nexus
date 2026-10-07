@@ -1,0 +1,14 @@
+Inputs: Length(20);
+Variables : ABull(0), ABear(0), BBull(0), BBear(0),ARatio(0), BRatio(0);
+
+ABull = accumn(High - Open, Length);
+ABear = Accumn(Open - Low, Length);
+BBull = Accumn(High - Close[1], Length);
+BBear = Accumn(Close[1] - Low, Length);
+
+ARatio = ABull / ABear * 100;
+BRatio = BBull / BBear * 100;
+
+Plot1(ARatio, "A-ratio");
+Plot2(BRatio, "B-ratio");
+PlotBaseLine1(100,"기준선 100");

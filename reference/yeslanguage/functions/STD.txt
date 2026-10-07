@@ -1,0 +1,21 @@
+/*	Description : Standard Deviation
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Price(NumericSeries), Length(NumericSimple);
+Var		: SumSqrt(0), Avg(0), Counter(0);
+
+If Length != 0 Then Begin
+	Avg = Ma(Price, Length);
+	SumSqrt = 0;
+
+	For Counter = 0 To Length - 1 Begin
+		SumSqrt = SumSqrt + (Price[Counter] - Avg) * (Price[Counter] - Avg);
+	End;
+
+	Std = SquareRoot(SumSqrt / Length);
+End
+Else 
+	Std = 0;

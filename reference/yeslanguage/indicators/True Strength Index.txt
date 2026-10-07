@@ -1,0 +1,10 @@
+INPUTS: R(4),  S(8), U(6), ZEROLINE(0), SMTHLEN(10);
+var : Truestrength(0),Truestrengthsig(0);
+
+Truestrength = TSI(C, R, S, U);
+Truestrengthsig = Ema(TSI(C, R, S, U), SMTHLEN);
+
+PLOT1(Truestrength, "TSI");
+PLOT2(Truestrengthsig, "Signal");
+PLOTBASELINE1(0," 기준선 0");
+

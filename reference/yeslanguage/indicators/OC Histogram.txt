@@ -1,0 +1,17 @@
+Input: CloseLen(10), OpenLen(10); 
+var : OCH(0);
+
+OCH = EMA(Close, CloseLen) - EMA(Open, OpenLen);
+
+If OCH > 0 Then
+{
+	plot1(OCH,"OC Histogram");
+	plot2(0,"OC Histogram");
+}
+Else
+{
+	plot1(0,"OC Histogram");
+	plot2(OCH,"OC Histogram");
+}
+
+PlotBaseLine1(0,"기준선 0");

@@ -1,0 +1,14 @@
+/*	Description : (Osc)illator (V)olume
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: shortPeriod(NumericSimple), longPeriod(NumericSimple);
+Var 	: value1(0), value2(0);
+
+value1 = ma(V, shortPeriod);
+value2 = ma(V, longPeriod);
+
+OSCV = (value1 - value2) / value1 * 100;
+

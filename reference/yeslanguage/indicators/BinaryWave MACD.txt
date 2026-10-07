@@ -1,0 +1,10 @@
+Input : maPeriod(20), ROCPeriod(12), stoPeriod1(5), stoPeriod2(3), sPeriod(12), IPeriod(26),sigPeriod(9);
+var : BinaryWave(0),BWMACD(0),BWMACDsig(0);
+
+BinaryWave = BW(maPeriod,ROCPeriod,stoPeriod1,stoPeriod2);
+BWMACD = ema(BinaryWave,sPeriod)-ema(BinaryWave,IPeriod);
+BWMACDsig = ema(BWMACD,sigPeriod);
+
+Plot1(BWMACD,"BW MACD");
+Plot2(BWMACDsig,"BW MACD_Sig");
+PlotBaseLine1(0, "기준선0");

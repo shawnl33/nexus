@@ -1,0 +1,50 @@
+// 지표명: WS_CrossSizeRV_Research_05_DataSync
+// 목적: 현재 계산에서 참조하는 두 데이터의 봉 시작날짜와 시작시간을 비교합니다.
+// 설정: Data1과 Data2에 동일 만기의 NQ와 MNQ를 각각 1분봉으로 연결합니다.
+// 두 종목의 Data1/Data2 순서를 바꾸어도 일치 여부의 의미는 같습니다.
+// 상태값: 1 = 날짜/시간 일치, 0 = 날짜/시간 불일치, -1 = 비교 데이터 부족.
+// 제한: 봉 시각 일치는 마지막 체결시각 일치나 실시간 수신 동시성을 보장하지 않습니다.
+// 제한: 플랫폼이 보간한 봉이나 두 종목 모두 누락된 구간은 이 비교만으로 판별하지 못합니다.
+// 제한: 만기와 봉 주기는 차트에서 확인해야 하며, 이 지표는 자동 검증하지 않습니다.
+// 연구용 확인 지표이며 주문 코드는 없습니다.
+
+// 각 데이터의 봉 시작날짜, 시작시간, 종가를 현재 계산 시점에 저장합니다.
+var : D1StartDate(0), D2StartDate(0), D1StartTime(0), D2StartTime(0);
+var : D1Close(0), D2Close(0);
+// 비교 가능 여부와 출력 상태를 저장합니다.
+var : DataReady(False), SyncState(-1);
+
+// 주종목의 봉 시작날짜와 시작시간 및 종가를 읽습니다.
+D1StartDate = sDate;
+D1StartTime = sTime;
+D1Close = C;
+// 참조종목의 봉 시작날짜와 시작시간 및 종가를 읽습니다.
+D2StartDate = data2(sDate);
+D2StartTime = data2(sTime);
+D2Close = data2(C);
+
+// 모든 비교 데이터가 N/A가 아닌지 확인합니다.
+DataReady = IsNan(D1StartDate) == False and IsNan(D2StartDate) == False
+    and IsNan(D1StartTime) == False and IsNan(D2StartTime) == False
+    and IsNan(D1Close) == False and IsNan(D2Close) == False;
+
+// 매 계산마다 상태를 초기화하여 이전 봉의 정상 상태가 남지 않게 합니다.
+SyncState = -1;
+if DataReady == True Then {
+    // 날짜 0은 미준비 값으로 취급합니다. 자정의 시간 0은 유효합니다.
+    if D1StartDate > 0 and D2StartDate > 0 Then {
+        // 비교 가능한 데이터가 있으나 날짜 또는 시간이 다르면 상태는 0입니다.
+        SyncState = 0;
+        // 두 봉의 시작날짜와 시작시간이 모두 같으면 상태는 1입니다.
+        if D1StartDate == D2StartDate and D1StartTime == D2StartTime Then {
+            SyncState = 1;
+        }
+    }
+}
+
+// 별도 보조지표 영역에 동기화 상태를 표시합니다.
+plot1(SyncState, "DataSync");
+// 상태값을 읽기 쉽도록 일치, 불일치, 데이터 부족 기준선을 표시합니다.
+plot2(1, "Matched");
+plot3(0, "Mismatch");
+plot4(-1, "Unavailable");

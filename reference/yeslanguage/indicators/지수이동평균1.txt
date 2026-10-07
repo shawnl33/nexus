@@ -1,0 +1,7 @@
+Input : Period1(5);
+
+var1 = ema(C,Period1);
+
+Plot1(var1, "지수이동평균1");
+
+

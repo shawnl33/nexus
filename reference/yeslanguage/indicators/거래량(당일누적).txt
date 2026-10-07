@@ -1,0 +1,6 @@
+input : N(0);
+var : DayV(0);
+
+DayV = DayVolume(N);
+
+plot1(DayV,"당일누적");

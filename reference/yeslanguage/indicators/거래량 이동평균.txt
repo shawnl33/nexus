@@ -1,0 +1,7 @@
+Input : Period1(5), Period2(20), Period3(60);
+
+plot1(V,"거래량");
+Plot2(ma(V,Period1), "거래량이평1");
+Plot3(ma(V,Period2), "거래량이평2");
+Plot4(ma(V,Period3), "거래량이평3");
+

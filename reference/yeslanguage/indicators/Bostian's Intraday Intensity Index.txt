@@ -1,0 +1,6 @@
+var : BIII(0);
+
+BIII = accum(V*(Pow(C-L,2)-Pow(H-C, 2)) / (H-L));
+
+Plot1(BIII, "Bostian's Intraday Intensity Index");
+PlotBaseLine1(0,"기준선0");

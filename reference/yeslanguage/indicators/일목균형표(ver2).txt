@@ -1,0 +1,21 @@
+Inputs: shortperiod(9), midperiod(26), longperiod(52);  
+Variables: 기준선(0), 전환선(0), 후행스팬(0), 선행스팬1(0), 선행스팬2(0);
+
+전환선 = (Highest(High, shortperiod) + Lowest(Low, shortperiod)) / 2; 
+기준선 = (Highest(High, midperiod) + Lowest(Low, midperiod)) / 2;
+후행스팬 = Close ;
+선행스팬1 = (전환선 + 기준선) / 2 ;
+선행스팬2 = (Highest(High, longperiod) + Lowest(Low, longperiod)) / 2;
+
+Plot1(전환선, "전환선");
+Plot2(기준선, "기준선");
+Plot3(후행스팬, "후행스팬");
+Plot4(선행스팬1," 선행스팬1");
+Plot5(선행스팬2, "선행스팬2");
+
+/*
+지표속성창 차트표시탭
+후행스팬 수평이동 -25
+선행스팬1 수평이동 +25
+선행스팬2 수평이동 +25
+*?

@@ -1,0 +1,6 @@
+Input : Period1(5),Period2(10);
+
+Plot1(ma(C,Period1), "이동평균1");
+Plot2(ma(C,Period2), "이동평균2");
+
+

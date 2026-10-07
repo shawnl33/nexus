@@ -1,0 +1,127 @@
+/*	Description : Parabolic (S)top (A)nd (R)eversal
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: AF(NumericSimple), AFMAX(NumericSimple);
+Var		: Direction(0), SAR_Value(Close), AF_Value(.02), HighValue(High), LowValue(Low), EP(0);
+
+if EP != 0 Then
+{
+    if Direction == 1 then
+    {
+        EP = HighValue;
+		SAR_Value = SAR_Value + AF_Value * (EP - SAR_Value);
+
+		if High > HighValue then
+		{
+			HighValue = High;
+			AF_Value = AF_Value + AF;
+			if AF_Value >= AFMAX then AF_Value = AFMAX;
+		}
+
+		if Low < SAR_Value then
+		{
+			Direction 	= -1;
+			SAR_Value 	= EP;
+			AF_Value 	= 0;
+			EP 			= 0;
+			LowValue 	= low;
+		}
+    }
+    else
+    {
+        EP = LowValue;
+		SAR_Value = SAR_Value + AF_Value * (EP - SAR_Value);
+
+		if Low < LowValue then
+		{
+			LowValue = Low;
+			AF_Value = AF_Value + Af;
+			if AF_Value >= AFMAX then AF_Value = AFMAX;
+		}
+
+		if High > SAR_Value then
+		{
+			Direction = 1;
+			SAR_Value = EP;
+			AF_Value = 0;
+			EP = 0;
+			HighValue = High;
+		}
+    }
+    
+    Sar = SAR_Value;
+}
+else
+{
+    if SAR_Value != 0 && EP == 0 then
+    {
+        if Direction == 1 then
+		{
+			EP = HighValue;
+			AF_Value = AF;
+			SAR_Value = SAR_Value + AF_Value * (EP - SAR_Value);
+
+			if High > HighValue  then
+			{
+				HighValue = High;
+				AF_Value = AF_Value + AF;
+
+				if AF_Value >= AFMAX then AF_Value = AFMAX;
+			}
+		}
+		else
+		{
+			EP = LowValue;
+			AF_Value = Af;
+			SAR_Value = SAR_Value + AF_Value * (EP - SAR_Value);
+
+			if Low < LowValue then
+			{
+				LowValue = Low;
+				AF_Value = AF_Value + AF;
+
+				if AF_Value >= AFMAX then AF_Value = AFMAX;
+			}
+		}
+		
+		Sar = SAR_Value;
+    }
+    else
+    {
+        if Direction == 0 then
+		{
+			if Close > Close[1] then Direction = 1;
+			else 
+				if Close < Close[1] then Direction = -1;
+
+		}
+		else 
+		{
+    		if Direction == 1 then
+    		{
+				if Close < Close[1] then
+				{
+					Direction = -1;
+					SAR_Value = HighValue;
+					Sar = SAR_Value;
+				}
+			}
+
+			if Direction == -1 then
+    		{
+		        if Close > Close[1] then
+				{
+					Direction = 1;
+					SAR_Value = LowValue;
+					Sar = SAR_Value;
+				}
+    		}
+		}
+
+		LowValue 	= min(Low, LowValue);
+		HighValue 	= max(High, HighValue);
+    }
+}

@@ -1,0 +1,7 @@
+Input : Length(7);
+Var : MixMomt(0);
+
+MixMomt = (Close+Close[2]) - (Close[Length]+Close[Length+2]);
+
+Plot1(MixMomt , "Morris Mixed Momentum");
+plotbaseline1(0,"기준선");

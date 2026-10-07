@@ -1,0 +1,52 @@
+Input : Period(5);
+
+Plot1(ma(C,Period*1), "이동평균1");
+Plot2(ma(C,Period*2), "이동평균2");
+Plot3(ma(C,Period*3), "이동평균3");
+Plot4(ma(C,Period*4), "이동평균4");
+Plot5(ma(C,Period*5), "이동평균5");
+Plot6(ma(C,Period*6), "이동평균6");
+Plot7(ma(C,Period*7), "이동평균7");
+Plot8(ma(C,Period*8), "이동평균8");
+Plot9(ma(C,Period*9), "이동평균9");
+Plot10(ma(C,Period*10), "이동평균10");
+Plot11(ma(C,Period*11), "이동평균11");
+Plot12(ma(C,Period*12), "이동평균12");
+Plot13(ma(C,Period*13), "이동평균13");
+Plot14(ma(C,Period*14), "이동평균14");
+Plot15(ma(C,Period*15), "이동평균15");
+Plot16(ma(C,Period*16), "이동평균16");
+Plot17(ma(C,Period*17), "이동평균17");
+Plot18(ma(C,Period*18), "이동평균18");
+Plot19(ma(C,Period*19), "이동평균19");
+Plot20(ma(C,Period*20), "이동평균20");
+Plot21(ma(C,Period*21), "이동평균21");
+Plot22(ma(C,Period*22), "이동평균22");
+Plot23(ma(C,Period*23), "이동평균23");
+Plot24(ma(C,Period*24), "이동평균24");
+Plot25(ma(C,Period*25), "이동평균25");
+Plot26(ma(C,Period*26), "이동평균26");
+Plot27(ma(C,Period*27), "이동평균27");
+Plot28(ma(C,Period*28), "이동평균28");
+Plot29(ma(C,Period*29), "이동평균29");
+Plot30(ma(C,Period*30), "이동평균30");
+Plot31(ma(C,Period*31), "이동평균31");
+Plot32(ma(C,Period*32), "이동평균32");
+Plot33(ma(C,Period*33), "이동평균33");
+Plot34(ma(C,Period*34), "이동평균34");
+Plot35(ma(C,Period*35), "이동평균35");
+Plot36(ma(C,Period*36), "이동평균36");
+Plot37(ma(C,Period*37), "이동평균37");
+Plot38(ma(C,Period*38), "이동평균38");
+Plot39(ma(C,Period*39), "이동평균39");
+Plot40(ma(C,Period*40), "이동평균30");
+Plot41(ma(C,Period*41), "이동평균41");
+Plot42(ma(C,Period*42), "이동평균42");
+Plot43(ma(C,Period*43), "이동평균43");
+Plot44(ma(C,Period*44), "이동평균44");
+Plot45(ma(C,Period*45), "이동평균45");
+Plot46(ma(C,Period*46), "이동평균46");
+Plot47(ma(C,Period*47), "이동평균47");
+Plot48(ma(C,Period*48), "이동평균48");
+Plot49(ma(C,Period*49), "이동평균49");
+Plot50(ma(C,Period*50), "이동평균50");

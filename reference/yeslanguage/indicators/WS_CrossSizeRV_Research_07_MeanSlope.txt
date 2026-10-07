@@ -1,0 +1,45 @@
+// 지표명: WS_CrossSizeRV_Research_07_MeanSlope
+// 목적: 스프레드 이동평균의 봉당 변화량을 표시하여 평균 자체의 이동을 관찰합니다.
+// Data1: E-mini Nasdaq-100 선물 NQ(주종목)
+// Data2: Micro E-mini Nasdaq-100 선물 MNQ(참조종목)
+// 설정: 동일 월물, 동일 시간축의 1분봉을 사용하며 NQ가 Data1인 왼쪽 화면에 적용합니다.
+// 계산: (현재 스프레드 평균 - SlopePeriod봉 전 평균) / SlopePeriod
+// 단위: 포인트/봉입니다. 연속된 1분봉에서는 포인트/분으로 해석할 수 있습니다.
+// 이 계산은 두 시점 사이의 평균 변화율이며 선형회귀 기울기는 아닙니다.
+// 양수는 평균 상승, 음수는 평균 하락, 0은 두 시점의 평균이 같음을 뜻합니다.
+// 0이라고 중간 구간의 평균이 일정했거나 평균회귀가 보장되는 것은 아닙니다.
+// 큰 스프레드 값이 이동평균 구간에 들어오거나 빠질 때도 기울기가 변합니다.
+// 주문이나 기울기 임계값에 따른 매매 필터는 포함하지 않습니다.
+
+// 평균 기간은 기존 02/04/06 지표와 맞춥니다. 두 입력값은 1 이상의 정수로 설정합니다.
+// SlopePeriod 기본값 10은 관찰용 비교 간격이며 최적화된 매매 기준이 아닙니다.
+input : RollingPeriod(120), SlopePeriod(10);
+
+// 원시 스프레드, 현재 평균, 과거 평균 및 봉당 평균 변화량을 저장합니다.
+var : RawSpread(0), SpreadMean(0), PreviousMean(Nan), MeanSlope(Nan);
+
+// MNQ 종가에서 NQ 종가를 빼서 기존 지표와 같은 방향의 스프레드를 구합니다.
+RawSpread = data2(C) - C;
+// 과거 평균을 참조할 수 있도록 이동평균을 매 계산 시점에 계산합니다.
+SpreadMean = ma(RawSpread, RollingPeriod);
+
+// 계산 조건을 충족하지 못할 때 이전 값이 남지 않도록 N/A로 초기화합니다.
+PreviousMean = Nan;
+MeanSlope = Nan;
+// 유효한 입력과 평균 기간에 비교 간격을 더한 봉 수 조건을 확인합니다.
+if RollingPeriod >= 1 and SlopePeriod >= 1 Then {
+    if CurrentBar >= RollingPeriod + SlopePeriod Then {
+        // 대괄호로 주종목 시간축의 SlopePeriod봉 전 스프레드 평균을 참조합니다.
+        PreviousMean = SpreadMean[SlopePeriod];
+        // 현재와 과거 평균이 모두 유효할 때만 계산합니다.
+        if IsNan(SpreadMean) == False and IsNan(PreviousMean) == False Then {
+            // 두 평균의 차이를 비교 봉 수로 나누어 봉당 변화량을 구합니다.
+            MeanSlope = (SpreadMean - PreviousMean) / SlopePeriod;
+        }
+    }
+}
+
+// 별도 보조지표 영역에 평균의 봉당 변화량을 표시합니다.
+plot1(MeanSlope, "MeanSlope");
+// 평균의 상승과 하락을 구분하는 0 기준선을 표시합니다.
+plot2(0, "SlopeZero");

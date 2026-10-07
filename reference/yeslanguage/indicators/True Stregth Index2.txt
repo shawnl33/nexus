@@ -1,0 +1,14 @@
+input : R1(20),S1(8),U1(8),R2(16),S2(5),U2(1),SMTHLEN1(1);
+var : MidPrice(0);
+
+MidPrice = (H+L)/2;
+
+VALUE1 = TSI(MidPrice, R1, S1, U1);
+VALUE2 = Ema(TSI(MidPrice, R1, S1, U1), SMTHLEN1);
+VALUE3 = TSI(MidPrice, R2, S2, U2);
+
+PLOT1(VALUE1, "TSI1");
+PLOT2(VALUE2, "SIGLIN");
+PLOT3(VALUE3, "TSI2");
+PLOTBASELINE1(0," ZLINE");
+

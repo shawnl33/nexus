@@ -1,0 +1,15 @@
+/*	Description : (T)ripple (S)moothed (M)oving (A)verages
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(NumericSimple);
+Var 	: value1(0), value2(0), value3(0);
+
+value1 = ema(C, Period);
+value2 = ema(value1, Period);
+value3 = ema(value2, Period);
+
+TRIX = (value3 - value3[1]) / value3[1] * 100;
+

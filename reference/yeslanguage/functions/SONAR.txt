@@ -1,0 +1,13 @@
+/*	Description : Sonar
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(Numeric);
+Var		: value_EMA(0);
+
+value_EMA = ema(C, Period);
+
+SONAR = value_EMA - value_EMA[Period];
+

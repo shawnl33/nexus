@@ -1,0 +1,11 @@
+Input : Period(20), MultiD(2);
+var : MAv(0),BBup(0),BBdn(0);
+
+MAv = ma(C,Period);
+BBup = BollBandUp(Period,MultiD);
+BBdn = BollBandDown(Period,MultiD);
+
+Plot1(MAv, "이평");
+Plot2(BBup, "상단밴드");
+Plot3(BBdn, "하단밴드");
+

@@ -1,0 +1,9 @@
+Input : Period(14);
+var : WR(0);
+
+WR = WILLR(Period);
+
+Plot1(WR,"Williams'R");
+PlotBaseLine1(-20,"기준선-20");
+PlotBaseLine2(-80,"기준선-80");
+

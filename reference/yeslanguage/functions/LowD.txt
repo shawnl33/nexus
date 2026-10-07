@@ -1,0 +1,29 @@
+/*	Description :	Day Low
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs	: DaysAgo(Numeric);
+Array	: LowArray[50](-1);
+
+If DataCompress <= 2 Then
+{
+	If Date > Date[1] Then Begin
+		For Var1 = 49 DownTo 1 Begin
+			LowArray[Var1] = LowArray[Var1 - 1];
+		End;
+		LowArray[0] = Low;
+	End;
+	
+	If Low < LowArray[0] Then 
+		LowArray[0] = Low;
+
+	If DaysAgo < 50 && LowArray[DaysAgo] != -1 Then 
+		LowD = LowArray[DaysAgo];
+}
+Else
+{
+	LowD = Low[DaysAgo];
+}
+

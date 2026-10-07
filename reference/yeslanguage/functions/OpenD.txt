@@ -1,0 +1,24 @@
+/*	Description : Day Open
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs	: DaysAgo(Numeric);
+Array	: OpenArray[50](-1);
+
+If DataCompress <= 2 Then
+{
+	If Date > Date[1] Then Begin
+		For var1 = 49 DownTo 1 Begin
+			OpenArray[var1] = OpenArray[var1 - 1];
+		End;
+		OpenArray[0] = Open;
+	End;
+	If DaysAgo < 50 && OpenArray[DaysAgo] != -1 Then 
+		OpenD = OpenArray[DaysAgo];
+}
+Else
+{
+	OpenD = Open[DaysAgo];
+}

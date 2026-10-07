@@ -1,0 +1,22 @@
+/*	Description : Average FC
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Price(NumericSeries), Length(NumericSimple);
+Var		: Sum(0), Counter(0);
+
+If CurrentBar <= 0 Then Begin
+	Sum = 0;
+	For counter = 0 To Length - 1 	Begin
+		Sum = Sum + Price[counter];
+	End;
+End
+Else
+	Sum = Sum + Price - Price[Length];
+
+If Length > 0 Then 
+	AverageFC = Sum / Length;
+Else
+	AverageFC = 0;

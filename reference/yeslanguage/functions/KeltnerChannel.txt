@@ -1,0 +1,9 @@
+/*	Description : Keltner Channel
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs	: Price(NumericSeries), Length(NumericSimple), Factor(NumericSimple);
+
+KeltnerChannel = MA(Price, Length) + ATR(Length) * Factor;

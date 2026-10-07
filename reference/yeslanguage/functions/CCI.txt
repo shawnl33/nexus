@@ -1,0 +1,23 @@
+/*	Description : (C)ommodity (C)hannel (I)ndex
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs: Length(NumericSimple);
+Variables: Sum(0), Counter(0), MD(0), Avgvalue(0);
+
+If Length > 0 Then Begin
+	Avgvalue = Ma(High  + Low + Close, Length);
+	MD = 0;
+	For counter = 0 To Length - 1 Begin
+		MD = MD + Abs(High[counter] + Low[counter] + Close[counter] - Avgvalue);
+	End;
+	MD = MD / Length;
+	If MD == 0 Then 
+		CCI = 0; 
+	Else
+		CCI = (High + Low + Close - Avgvalue) / (0.015 * MD);
+End
+Else 
+	CCI = 0;

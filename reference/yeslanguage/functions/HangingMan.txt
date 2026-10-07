@@ -1,0 +1,18 @@
+/*	Description : HangingMan
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Length(Numeric), Tail(Numeric);
+Var		: Minv(0), Maxv(0);
+
+Minv = Min(Close, Open);
+Maxv = Max(Close, Open);
+HangingMan = False;
+
+If Minv > MedianPrice() AND Open <> Close Then Begin
+	If Minv - Low > (Maxv - Minv) * Tail AND High - Maxv < Maxv - Minv 
+	AND LRL(Close, Length) > LRL(Close, Length)[1] Then 
+		HangingMan = True;
+End;

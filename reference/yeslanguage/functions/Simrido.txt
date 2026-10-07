@@ -1,0 +1,16 @@
+/*	Description : Simrido
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(NumericSimple);
+Var		: Value(0);
+
+if C > C[1] then
+	Value = 1;
+else
+ 	Value = 0;
+
+Simrido = AccumN(Value, Period) * 100 / Period;
+

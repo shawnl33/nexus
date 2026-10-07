@@ -1,0 +1,20 @@
+/*	Description : Evening Star
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Length(Numeric);
+Var		: LongBody(False), OCRange(0), Hollow(False), Filled(False);
+
+Hollow = Close > Open;
+Filled = Close < Open;
+
+OCRange 	= Abs(Open-Close);
+LongBody 	= OCRange > MA(OCRange, Length);
+EveningStar = False;
+
+If CurrentBar >= Length Then Begin
+	If Hollow[2] AND Min(Close[1], Open[1]) > Close[2] AND Filled AND LongBody[2] AND Close < Close[2] Then 
+		EveningStar = True;
+End;

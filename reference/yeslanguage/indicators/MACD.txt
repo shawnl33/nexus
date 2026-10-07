@@ -1,0 +1,11 @@
+Input : shortPeriod(12), longPeriod(26), Period(9);
+Var : value(0) , macdosc(0) ;
+
+value = MACD(shortPeriod, longPeriod);
+macdosc = value-ema(value,Period);
+
+Plot1(value, "MACD");
+Plot2(ema(value,Period), "MACDSignal");
+PlotBaseLine1(0, "기준선1");
+
+

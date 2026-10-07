@@ -1,0 +1,9 @@
+Var: Upv(0),Downv(0),PVaccum(0);
+
+Upv = Iff(Close > Close[1] and Volume > Volume[1], 1, 0);
+Downv = Iff(Close < Close[1] and Volume < Volume[1], 1, 0);
+
+PVaccum = accum(Upv - Downv);
+
+Plot1(PVaccum, "Volume & Price Accumulator");
+PlotBaseLine1(0, "기준선0");

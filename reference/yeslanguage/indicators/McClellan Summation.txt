@@ -1,0 +1,7 @@
+Input : Length(13);
+Var : MAdiff(0);
+
+MAdiff =accum(ema(O-H,Length)-ema(O-H, Length*3));
+
+Plot1(MAdiff, "McClellan Summation");
+PlotBaseLine1(0, "기준선0");

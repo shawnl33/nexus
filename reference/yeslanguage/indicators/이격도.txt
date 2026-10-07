@@ -1,0 +1,8 @@
+Input : Period(20);
+var : DParity(0);
+
+DParity = Disparity(Period);
+
+Plot1(DParity, "이격도");
+PlotBaseLine1(100,"기준선");
+

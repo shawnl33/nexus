@@ -1,0 +1,37 @@
+// 지표명: WS_CrossSizeRV_Research_06_SpreadDeviation
+// 목적: 현재 스프레드가 최근 단순이동평균에서 벗어난 정도를 포인트로 표시합니다.
+// Data1: E-mini Nasdaq-100 선물 NQ(주종목)
+// Data2: Micro E-mini Nasdaq-100 선물 MNQ(참조종목)
+// 설정: 두 종목은 동일 월물, 동일 시간축의 1분봉을 사용합니다.
+// 주의: 이 수식은 NQ가 Data1인 왼쪽 화면용입니다.
+// 해석: 양수는 평균보다 위, 음수는 평균보다 아래, 0은 평균과 같음을 뜻합니다.
+// 한계: 평균 자체가 움직여도 편차가 줄어들 수 있으므로 RawSpread와 함께 확인합니다.
+// 이 값은 Z-score나 거래 손익이 아니며, 주문 코드는 포함하지 않습니다.
+
+// 평균 계산 기간입니다. 기존 02/04 지표와 같은 값으로 설정합니다.
+// 기본값 120은 120개 봉을 뜻하며, 휴장이나 결측이 있으면 경과시간 120분과 다릅니다.
+input : RollingPeriod(120);
+
+// 두 종가의 차이, 이동평균, 평균 대비 편차를 각각 저장합니다.
+var : RawSpread(0), SpreadMean(0), SpreadDeviation(Nan);
+
+// MNQ 종가에서 NQ 종가를 빼서 기존 지표와 같은 부호의 스프레드를 계산합니다.
+RawSpread = data2(C) - C;
+// 기존 02 지표와 동일한 단순이동평균을 매 계산 시점에 구합니다.
+SpreadMean = ma(RawSpread, RollingPeriod);
+
+// 이전 계산값이 남지 않도록 편차를 매번 N/A로 초기화합니다.
+SpreadDeviation = Nan;
+// 기존 04 지표와 같은 봉 수 조건을 사용합니다. 기간은 1 이상의 정수로 설정합니다.
+if RollingPeriod >= 1 and CurrentBar >= RollingPeriod Then {
+    // 스프레드와 평균이 모두 유효할 때만 편차를 계산합니다.
+    if IsNan(RawSpread) == False and IsNan(SpreadMean) == False Then {
+        // 표준편차로 나누지 않으므로 결과 단위는 가격 포인트입니다.
+        SpreadDeviation = RawSpread - SpreadMean;
+    }
+}
+
+// 첫 번째 선은 평균 대비 편차입니다. 계산 불가 구간은 N/A로 표시를 생략합니다.
+plot1(SpreadDeviation, "SpreadDeviation");
+// 두 번째 선은 현재 스프레드와 이동평균이 같은 위치를 나타내는 0 기준선입니다.
+plot2(0, "DeviationZero");

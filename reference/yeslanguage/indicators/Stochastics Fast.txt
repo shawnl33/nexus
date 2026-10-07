@@ -1,0 +1,11 @@
+Input : Period(5), Period1(5);
+var : FstK(0),FstD(0);
+
+FstK = FastK(Period);
+FstD = FastD(Period,Period1);
+
+Plot1(FstK, "Stoch-Fast");
+Plot2(FstD, "StochasticsK");
+PlotBaseLine1(20, "기준선20");
+PlotBaseLine2(80, "기준선80");
+

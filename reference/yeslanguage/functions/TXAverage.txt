@@ -1,0 +1,9 @@
+/*	Description : TXAverage
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs	: Price(NumericSeries), r(NumericSimple), s(NumericSimple), u(NumericSimple);
+
+TXAverage = Ema(Ema(Ema(Price, r), s), u) ;

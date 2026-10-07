@@ -1,0 +1,17 @@
+/*	Description : (Accum)ulation N
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Value(NumericSeries), Period(NumericSimple);
+Var		: Counter(0);
+
+var1 = Value;
+
+For Counter = 1 To Period - 1
+Begin
+	var1 = var1 + Value[Counter];
+End
+
+Accumn = var1;

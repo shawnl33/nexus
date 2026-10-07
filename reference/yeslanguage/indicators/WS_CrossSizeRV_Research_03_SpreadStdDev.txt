@@ -1,0 +1,20 @@
+// 지표명: WS_CrossSizeRV_Research_03_SpreadStdDev
+// 목적: NQ와 MNQ의 Raw Spread 변동성을 표준편차로 표시합니다.
+// Data1: E-mini Nasdaq-100 선물 NQ(주종목, 동일 월물)
+// Data2: Micro E-mini Nasdaq-100 선물 MNQ(참조종목, 동일 월물)
+// 주의: 주문, 진입, 청산 등 자동매매 코드는 포함하지 않습니다.
+
+// Spread 표준편차를 계산할 봉 수이며 기본값은 120개 1분봉입니다.
+input : RollingPeriod(120);
+
+// RawSpread는 두 종가의 차이, SpreadStdDev는 RawSpread의 표준편차를 저장합니다.
+var : RawSpread(0), SpreadStdDev(0);
+
+// Data2(MNQ) 종가에서 Data1(NQ) 종가를 빼서 Raw Spread를 계산합니다.
+RawSpread = data2(C) - C;
+// 지정한 기간 동안 Raw Spread의 표준편차를 계산합니다.
+SpreadStdDev = std(RawSpread, RollingPeriod);
+
+// 첫 번째 Plot으로 Raw Spread의 표준편차를 출력합니다.
+plot1(SpreadStdDev, "SpreadStdDev");
+

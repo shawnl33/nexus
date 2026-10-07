@@ -1,0 +1,14 @@
+Inputs: Length1(5),Length2(20),Length3(60);
+Variables: TLen1(0),TLen2(0),TLen3(0),TRIma1(0),TRIma2(0),TRIma3(0);
+
+TLen1 = Ceiling((Length1 + 1) * .5);
+TLen2 = Ceiling((Length2 + 1) * .5);
+TLen3 = Ceiling((Length3 + 1) * .5);
+
+TRIma1 = ma(ma(C, TLen1), TLen1);
+TRIma2 = ma(ma(C, TLen2), TLen2);
+TRIma3 = ma(ma(C, TLen3), TLen3);
+
+Plot1(Trima1, "5일삼각가중");
+Plot2(Trima2, "10일삼각가중");
+Plot3(Trima3, "20일삼각가중");

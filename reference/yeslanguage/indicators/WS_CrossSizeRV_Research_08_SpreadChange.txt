@@ -1,0 +1,38 @@
+// 지표명: WS_CrossSizeRV_Research_08_SpreadChange
+// 목적: 현재 스프레드와 직전 봉 스프레드의 차이를 포인트로 표시합니다.
+// Data1: E-mini Nasdaq-100 선물 NQ(주종목)
+// Data2: Micro E-mini Nasdaq-100 선물 MNQ(참조종목)
+// 설정: 동일 월물, 동일 시간축의 1분봉을 사용하며 NQ가 Data1인 왼쪽 화면에 적용합니다.
+// 계산: 현재 (MNQ - NQ) - 직전 봉의 (MNQ - NQ)
+// 양수: 부호 있는 스프레드가 증가했습니다. 음수: 부호 있는 스프레드가 감소했습니다.
+// 예: -4에서 -1로 변하면 +3입니다. 양수가 반드시 괴리 확대를 뜻하지는 않습니다.
+// 절대 괴리의 확대/축소는 RawSpread 및 SpreadDeviation과 함께 확인합니다.
+// 직전 봉은 주종목 시간축 기준입니다. 휴장이나 결측이 있으면 정확히 1분 전이 아닙니다.
+// 현재 진행 중인 봉의 값은 변할 수 있으므로 확정 봉의 결과와 구분합니다.
+// 날짜/시간 동기화는 05_DataSync로 별도 확인합니다. 이 수식은 불일치 봉을 자동 제외하지 않습니다.
+// 연구용 지표이며 주문이나 매매 신호 코드는 포함하지 않습니다.
+
+// 현재 스프레드, 직전 봉 스프레드, 두 값의 차이를 저장합니다.
+var : RawSpread(0), PreviousSpread(Nan), SpreadChange(Nan);
+
+// MNQ 종가에서 NQ 종가를 빼서 기존 지표와 같은 부호의 스프레드를 계산합니다.
+RawSpread = data2(C) - C;
+
+// 비교할 수 없는 구간에 이전 결과가 남지 않도록 매 계산마다 N/A로 초기화합니다.
+PreviousSpread = Nan;
+SpreadChange = Nan;
+// 이전 봉을 참조할 수 있는 구간에서만 비교를 진행합니다.
+if CurrentBar > 1 Then {
+    // 주종목 시간축에서 직전 봉에 계산한 스프레드를 읽습니다.
+    PreviousSpread = RawSpread[1];
+    // 현재와 직전 스프레드가 모두 유효할 때만 변화량을 계산합니다.
+    if IsNan(RawSpread) == False and IsNan(PreviousSpread) == False Then {
+        // 현재 스프레드에서 직전 스프레드를 뺍니다. 결과 단위는 포인트입니다.
+        SpreadChange = RawSpread - PreviousSpread;
+    }
+}
+
+// 별도 보조지표 영역에 직전 봉 대비 스프레드 변화량을 표시합니다.
+plot1(SpreadChange, "SpreadChange");
+// 두 봉의 스프레드가 같은 위치를 나타내는 0 기준선을 표시합니다.
+plot2(0, "ChangeZero");

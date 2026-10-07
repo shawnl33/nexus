@@ -1,0 +1,8 @@
+INPUTS: SETUP(27), TRIGGER(26.5);
+var : Mindex(0);
+
+Mindex = MASSINDEX(9, 25);
+
+PLOT1(Mindex, "MASSINDEX");
+PLOT2(SETUP, "SETUP");
+PLOT3(TRIGGER, "TRIGGER");

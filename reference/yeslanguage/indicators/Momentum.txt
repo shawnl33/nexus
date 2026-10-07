@@ -1,0 +1,9 @@
+Input : Period(5), Period1(5);
+var : MMT(0),MMTSig(0);
+
+MMT = Momentum(Period);
+MMTSig = ma(MMT,period1); 
+
+Plot1(MMT, "Momentum");
+Plot2(MMTSig, "지수Momentum");
+PlotBaseLine1(100, "기준선1");

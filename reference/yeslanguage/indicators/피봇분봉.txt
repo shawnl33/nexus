@@ -1,0 +1,14 @@
+Var : Pivot(0),R1(0),R2(0),S1(0),S2(0);
+
+Pivot = (DayHigh(1)+DayLow(1)+DayClose(1))/3;
+R1 = 2*Pivot-DayLow(1);
+R2 = Pivot+DayHigh(1)-DayLow(1);
+S1 = 2*Pivot-DayHigh(1);
+S2 = Pivot-DayHigh(1)+DayLow(1);
+
+Plot1(Pivot, "피봇포인트");
+Plot2(R1, "1차저항");
+Plot3(R2, "2차저항");
+Plot4(S1, "1차지지");
+Plot5(S2, "2차지지");
+

@@ -1,0 +1,22 @@
+/*	Description : (R)elative (S)trength (I)ndex
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(Numeric);
+Var 	: value1(0), value2(0);
+
+value1 = C - C[1];
+
+if  value1 > 0 Then
+{
+	value2 = value1;
+}
+Else  
+{
+	value1 = 0; 
+	value2 = C[1]-C;
+}
+
+RSI_Y = AccumN(value1, Period) / AccumN(value2, Period) * 100;

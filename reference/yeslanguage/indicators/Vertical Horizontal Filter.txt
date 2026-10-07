@@ -1,0 +1,7 @@
+Input : n(28);
+var : Vertical(0);
+
+Vertical = VHF(N);
+
+Plot1(Vertical,"VHF");
+

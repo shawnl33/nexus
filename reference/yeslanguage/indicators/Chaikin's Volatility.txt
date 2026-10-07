@@ -1,0 +1,8 @@
+Input : Period(10);
+var : CH_Volatility(0);
+
+CH_Volatility = CV(Period);
+
+Plot1(CH_Volatility, "Chaikin's Volatility");
+PlotBaseLine1(0,"기준선");
+

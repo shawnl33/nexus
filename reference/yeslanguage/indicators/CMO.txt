@@ -1,0 +1,9 @@
+INPUT: LENGTH(9),TOPBAND(50),LOWBAND(-50);
+var : Chandre(0);
+
+Chandre = CMO(LENGTH);
+
+PLOT1(Chandre,"CMO");
+PLOTBASELINE1(TOPBAND,"과매수");
+PLOTBASELINE2(LOWBAND,"과매도");
+

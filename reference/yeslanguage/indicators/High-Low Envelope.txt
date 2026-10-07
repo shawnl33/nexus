@@ -1,0 +1,6 @@
+Var : HLEnvelope(0);
+
+HLEnvelope = (High-Low)*(C/C[1]-1)*100;
+
+Plot1(HLEnvelope, "High-Low Envelope");
+plotbaseline1(0,"기준선");

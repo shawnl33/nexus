@@ -1,0 +1,22 @@
+input : Period(10);
+var : Counter(0), Lowval(0), Highval(0), DownVel(0),UpVel(0), DnAroon(0),UpAroon(0) ;
+
+Lowval= Lowest(Low, Period+1);
+Highval = Highest(High, Period+1);
+
+For counter= 0 To Period {
+	If Low[counter] == Lowval Then
+		DownVel = counter;		
+	If High[counter] == highval Then
+		UpVel = counter;
+}
+
+DnAroon = 100*(Period-DownVel)/Period;
+UpAroon = 100*(Period-UpVel)/Period;
+
+Plot1(DnAroon, "Aroon Dn");
+Plot2(UpAroon, "Aroon Up");
+plotbaseline1(70,"강세 70");
+plotbaseline2(30,"약세 30");
+
+

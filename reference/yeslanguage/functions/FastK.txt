@@ -1,0 +1,15 @@
+/*	Description : Fast %K
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(NumericSimple);
+Var 	: Value_Lowest(0), Value_Highest(0);
+
+Value_Lowest 	= Lowest(L, Period);
+Value_Highest 	= Highest(H, Period);
+
+FastK = (Close - Value_Lowest) / (Value_Highest - Value_Lowest) * 100;
+
+

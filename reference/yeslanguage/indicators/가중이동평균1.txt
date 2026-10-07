@@ -1,0 +1,8 @@
+Input : Period1(5);
+
+var1 = wma(C,Period1);
+
+Plot1(var1, "가중이동평균1");
+
+
+

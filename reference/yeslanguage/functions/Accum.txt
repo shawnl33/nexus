@@ -1,0 +1,16 @@
+/*	Description : (Accum)ulation
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs	: Price(NumericSeries);
+Var		: Value_Accum(0);
+
+if CurrentBar > 1 then
+	Value_Accum = Value_Accum + Price;
+else
+	Value_Accum = Price;
+
+Accum = Value_Accum;
+

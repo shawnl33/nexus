@@ -1,0 +1,10 @@
+Input : Period(20), Percent(2);
+var : center(0),UPline(0),DNline(0);
+
+center = ma(C, Period);
+UPline = EnvelopeUp(Period, Percent);
+Dnline = EnvelopeDown(Period, Percent);
+
+Plot1(center, "중앙선");
+Plot2(UPline, "EnvelopeUp");
+Plot3(Dnline, "EnvelopeDown");

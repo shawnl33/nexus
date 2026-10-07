@@ -1,0 +1,7 @@
+Input : Period(10);
+var : VolumeROC(0);
+
+VolumeROC = VROC(Period);
+
+Plot1(VolumeROC,"VROC");
+PlotBaseLine1(0,"기준선");

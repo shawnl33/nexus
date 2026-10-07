@@ -1,0 +1,10 @@
+/*	Description : Disparity
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(Numeric);
+
+Disparity = C / ma(C, Period) * 100;
+

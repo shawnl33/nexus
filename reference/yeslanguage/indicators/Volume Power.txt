@@ -1,0 +1,20 @@
+Input : p(5);
+var : Vpower(0),Upper(0),Lower(0);
+
+Vpower = upVol/(upVol+downVol)*100-50;
+
+If Vpower > 0 Then 
+	Upper = Vpower;
+Else 
+	Upper = 0;
+
+If Vpower <= 0 Then 
+	lower = Vpower;
+Else 
+	lower = 0;
+
+Plot1(Upper,"상승볼");
+Plot2(Lower,"하락볼");
+Plot3(ma(Vpower,p),"볼이평") ;
+plotBaseLine1(0,"기준선");
+

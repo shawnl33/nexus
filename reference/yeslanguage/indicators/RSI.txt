@@ -1,0 +1,8 @@
+Input : Period(9);
+var : Relative(0);
+
+Relative = RSI(Period);
+
+Plot1(Relative, "RSI");
+PlotBaseLine1(30, "기준선 30");
+PlotBaseLine2(70, "기준선 70");

@@ -1,0 +1,16 @@
+Input : shortPeriod(5), longPeriod(20);
+var : VolOsc(0);
+
+VolOsc = OSCV(shortPeriod,longPeriod);
+
+if VolOsc > 0 then
+{
+	Plot1(VolOsc,"+VO");
+	plot2(0,"-VO");
+}
+Else
+{
+	Plot1(0,"+VO");
+	plot2(VolOsc,"-VO");
+}
+PlotBaseLine1(0,"기준선 0");

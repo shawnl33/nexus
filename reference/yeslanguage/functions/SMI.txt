@@ -1,0 +1,5 @@
+Input: g(Numeric), r(Numeric), s(Numeric);
+
+SMI = ema(ema(c-(highest(H,g) + lowest(L,g))*0.5, r),s) * 100 / 
+(0.5 * ema(ema(highest(H,g)-lowest(L,g),r),s));
+

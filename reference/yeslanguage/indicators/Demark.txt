@@ -1,0 +1,19 @@
+If DayClose(1) > DayOpen(1) Then 
+	{
+		value1 = (DayHigh(1)+DayLow(1)+DayClose(1)+DayHigh(1))/2-DayLow(1);
+		value2 = (DayHigh(1)+DayLow(1)+DayClose(1)+DayHigh(1))/2-DayHigh(1);
+	}
+Else  If DayClose(1) < DayOpen(1) Then 
+    {
+		value1 = (DayHigh(1)+DayLow(1)+DayClose(1)+DayLow(1))/2-DayLow(1);
+		value2 = (DayHigh(1)+DayLow(1)+DayClose(1)+DayLow(1))/2-DayHigh(1);
+	}
+Else 
+	{
+			value1 = (DayHigh(1)+DayLow(1)+DayClose(1)+DayClose(1))/2-DayLow(1);
+			value2 = (DayHigh(1)+DayLow(1)+DayClose(1)+DayClose(1))/2-DayHigh(1);
+	}
+
+Plot1(value1, "Demark분봉상한");
+Plot2(value2, "Demark분봉하한");
+

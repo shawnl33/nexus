@@ -1,0 +1,12 @@
+/*	Description : Envelope Up
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(Numeric), Percent(Numeric);
+Var		: value_MA(0);
+
+value_MA = ma(C, Period);
+
+EnvelopeUp = value_MA + value_MA * (Percent / 100);

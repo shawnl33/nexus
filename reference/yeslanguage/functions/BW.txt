@@ -1,0 +1,35 @@
+/*	Description : (B)inary (W)ave
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: maPeriod(Numeric), ROCPeriod(Numeric), stoPeriod1(Numeric), stoPeriod2(Numeric);
+Var 	: value(0), value_EMA12(0), value_EMA26(0), value_Lowest(0);
+
+value_EMA12 = ema(C, 12);
+value_EMA26 = ema(C, 26);
+
+If value_EMA12 - value_EMA26 > ema(value_EMA12 - value_EMA26, 9) Then  
+	value = 1; 
+Else  
+	value = -1;
+
+If C > ma(C, maPeriod) Then  
+	value = value + 1; 
+Else 
+	value = value - 1;
+
+If (C - C[ROCPeriod]) / C[ROCPeriod] * 100 > 0 Then  
+	value = value + 1; 
+Else 
+	value = value - 1;
+
+value_Lowest = lowest(L, stoPeriod1);
+
+If  ema((C - value_Lowest) / (highest(H, stoPeriod1) - value_Lowest) * 100, stoPeriod2) > 50 Then  
+	value = value + 1; 
+Else  
+	value = value - 1;
+	
+BW = value;

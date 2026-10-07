@@ -1,0 +1,6 @@
+input : N(0);
+
+Plot1(dayOpen(N), "시가");
+Plot2(dayHigh(N), "고가");
+Plot3(dayLow(N), "저가");
+

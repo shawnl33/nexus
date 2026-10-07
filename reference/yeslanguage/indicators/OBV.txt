@@ -1,0 +1,5 @@
+Plot1(OBV(), "OBV");
+PlotBaseLine1(0,"기준선");
+
+
+

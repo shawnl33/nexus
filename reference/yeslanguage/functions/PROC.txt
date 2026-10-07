@@ -1,0 +1,10 @@
+/*	Description : (Pr)ice Moving Average (O)s(c)illator
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+input : Period(NumericSimple);
+
+PROC = (C - C[Period]) / C[Period] * 100;
+

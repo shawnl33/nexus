@@ -1,0 +1,17 @@
+/*	Description : (D)irectional Moving Average (I)ndex (Plus)
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(Numeric);
+Var 	: value(0), diff_high(0);
+
+diff_high = H - H[1];
+
+If diff_high > 0 && diff_high > L[1] - L Then  
+	value = diff_high;
+Else 
+	value = 0; 
+
+DIPlus_Y = ma(value, Period) / ma(max(H - L, abs(C[1] - H), abs(C[1] - L)), Period) * 100;

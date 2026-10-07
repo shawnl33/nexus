@@ -1,0 +1,4 @@
+Input : Period(14);
+
+Plot1(STD(C,Period), "STD");
+Plot2(Abs(C-Ma(C,Period)),"Deviation");

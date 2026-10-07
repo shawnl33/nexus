@@ -1,0 +1,16 @@
+Input : Period1(5), Period2(20), Period3(60), Period4(120), Period5(200);
+
+var1 = wma(C,Period1);
+var2 = wma(C,Period2);
+var3 = wma(C,Period3);
+var4 = wma(C,Period4);
+var5 = wma(C,Period5);
+
+Plot1(var1, "가중이동평균1");
+Plot2(var2, "가중이동평균2");
+Plot3(var3, "가중이동평균3");
+Plot4(var4, "가중이동평균4");
+Plot5(var5, "가중이동평균5");
+
+
+

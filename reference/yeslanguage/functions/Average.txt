@@ -1,0 +1,19 @@
+/*	Description : Average
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Price(NumericSeries), Length(NumericSimple);
+Var		: Sum(0), Counter(0);
+
+Sum = 0;
+
+For Counter = 0 To Length - 1 Begin
+	Sum = Sum + Price[counter];
+End;
+
+If Length > 0 Then 
+	Average = Sum / Length;
+Else
+	Average = 0;

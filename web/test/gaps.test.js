@@ -25,6 +25,39 @@ const assertUniformGrid = (rows) => {
   }
 };
 
+test("whitespaceRuns: 가격 없는 연속 시각만 구간으로 묶는다", () => {
+  const rows = [
+    { time: 0, open: 1 },
+    { time: 60 },
+    { time: 120 },
+    { time: 180, open: 1 },
+    { time: 240, value: 2 },
+    { time: 300 },
+    { time: 360, close: 1 },
+  ];
+  assert.deepEqual(Gaps.whitespaceRuns(rows), [
+    { start: 60, end: 120 },
+    { start: 300, end: 300 },
+  ]);
+});
+
+test("whitespaceRuns: 봉만 있거나 비어 있으면 구간이 없다", () => {
+  assert.deepEqual(Gaps.whitespaceRuns([]), []);
+  assert.deepEqual(Gaps.whitespaceRuns(undefined), []);
+  assert.deepEqual(Gaps.whitespaceRuns([{ time: 0, open: 1 }, { time: 60, close: 2 }]), []);
+});
+
+test("whitespaceRuns: 시리즈 앞뒤의 공백도 구간이다", () => {
+  assert.deepEqual(Gaps.whitespaceRuns([
+    { time: 0 },
+    { time: 60, open: 0 },
+    { time: 120 },
+  ]), [
+    { start: 0, end: 0 },
+    { start: 120, end: 120 },
+  ]);
+});
+
 test("withWhitespace: 봉 사이 공백이 분 단위 포인트로 펼쳐져 들어간다 (1칸=1분)", () => {
   const bars = [0, 60, 300, 360].map(bar);
   const mixed = Gaps.withWhitespace(bars);

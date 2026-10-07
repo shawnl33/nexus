@@ -1,0 +1,16 @@
+Var : MMT(0),MMTval(0),Cum(0),ROC(0),SMMT(0);
+
+MMT = C - Ema(C[1],10);
+
+If MMT > 0 Then
+	MMTval = 1;
+Else If MMT < 0 Then
+	MMTval = -1;
+Else
+	MMTval = 0;
+
+Cum = accum(MMTval);
+ROC = (Cum/Cum[5])*100;
+SMMT = ema(ROC,5);
+
+Plot1(SMMT, "Smoothed Momentum");

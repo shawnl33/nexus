@@ -147,6 +147,13 @@ static bool pipe_init(tr_engine_t *e, tr_pipeline_t *p, const tr_engine_config_t
         tr_fxsniper_config_t scfg;
         tr_fxsniper_default_config(&scfg, tick_scale(p));
         tr_fxsniper_init(&p->sniper, &scfg);
+        if (!tr_fxos_init(&p->os_scope, tick_scale(p))) {
+            return false;
+        }
+        if (!tr_fxcu_init(&p->curve_os, tick_scale(p))) {
+            return false;
+        }
+        tr_snco_init(&p->snco);
         /* 호가 모듈과 같은 관심 10 / 강세 35. 흐름 기간 20은 호출 원본이 없어 엔진 기본값. */
         tr_osf_combo_init(&p->osf, 10.0, 35.0, 0, 20);
     }
@@ -278,6 +285,8 @@ bool tr_engine_pipe_remove(tr_engine_t *e, uint64_t instrument_id) {
         if (e->pipe0.is_ovs) {
             tr_fxmirae_relink(&e->pipe0.fx);
             tr_fxv3_run_relink(&e->pipe0.fx3);
+            tr_fxos_relink(&e->pipe0.os_scope);
+            tr_fxcu_relink(&e->pipe0.curve_os);
         }
         if (e->pipe0.is_futures && !e->pipe0.is_ovs) {
             tr_ksscore_relink(&e->pipe0.ks);
@@ -422,6 +431,11 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
                            const tr_fxymae_out_t *ym, const tr_fxsniper_out_t *sn, int emit_pvc,
                            int ray_on, int ray_sign, const double *ray_px, const double *ray_up,
                            const double *ray_dn, const int8_t *ray_dir,
+                           const tr_fxos_out_t *os,
+                           int cu_n, const uint16_t *cu_id, const double *cu_v,
+                           const uint32_t *cu_rgb, const uint8_t *cu_w,
+                           int snco_n, const uint16_t *snco_id, const double *snco_v,
+                           const uint32_t *snco_rgb, const uint8_t *snco_w,
                            int ob_valid, double ob_score, const tr_bar_status_t *frozen) {
     const tr_lr3_t *r = &p->lr3;
     const tr_score1m_t *sc = &p->score;
@@ -636,7 +650,55 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
     } else if (ray_px != 0) {
         snprintf(raybuf, sizeof(raybuf), "\"rays\":[],");
     }
-    char payload[8192];
+    char osbuf[640];
+    osbuf[0] = '\0';
+    if (os != 0) {
+        int m = snprintf(osbuf, sizeof(osbuf),
+                         "\"os\":[%d,%u,%d,%d,%d,%d,%d,%d,%u,%d,%d,%u,%d,%.10g,%u,%d,%d,%u,%d,%d,%d,%u,%d,%d,%d,%u,%d],",
+                         os->judge, os->judge_rgb, os->fut, os->prof, os->di, os->adx,
+                         os->sq_on, os->sq_len, os->sq_rgb, os->sq_w,
+                         os->hold, os->hold_rgb, os->ratio_on, os->ratio, os->ratio_rgb,
+                         os->rel_on, os->rel_len, os->rel_rgb, os->rel_w,
+                         os->cf_on, os->cf_len, os->cf_rgb, os->cf_w,
+                         os->ent_on, os->ent_y, os->ent_rgb, os->ent_w);
+        if (m < 0 || (size_t)m >= sizeof(osbuf)) {
+            osbuf[0] = '\0';
+        }
+    }
+    char cubuf[2048];
+    cubuf[0] = '\0';
+    if (cu_n > 0 && cu_id != 0 && cu_v != 0 && cu_rgb != 0 && cu_w != 0) {
+        int m = snprintf(cubuf, sizeof(cubuf), "\"cu\":[");
+        int nuse = cu_n < TR_FXCU_PLOTS ? cu_n : TR_FXCU_PLOTS;
+        for (int i = 0; i < nuse && m > 0 && (size_t)m < sizeof(cubuf); i++) {
+            m += snprintf(cubuf + m, sizeof(cubuf) - (size_t)m, "%s[%u,%.10g,%u,%u]",
+                          i > 0 ? "," : "", (unsigned)cu_id[i], cu_v[i], cu_rgb[i], (unsigned)cu_w[i]);
+        }
+        if (m > 0 && (size_t)m < sizeof(cubuf)) {
+            m += snprintf(cubuf + m, sizeof(cubuf) - (size_t)m, "],");
+        }
+        if (m < 0 || (size_t)m >= sizeof(cubuf)) {
+            cubuf[0] = '\0';
+        }
+    }
+    char scbuf[1400];
+    scbuf[0] = '\0';
+    if (snco_n > 0 && snco_id != 0) {
+        int m = snprintf(scbuf, sizeof(scbuf), "\"snco\":[");
+        int nuse = snco_n < TR_SNCO_PLOTS ? snco_n : TR_SNCO_PLOTS;
+        for (int i = 0; i < nuse && m > 0 && (size_t)m < sizeof(scbuf); i++) {
+            m += snprintf(scbuf + m, sizeof(scbuf) - (size_t)m, "%s[%u,%.10g,%u,%u]",
+                          i > 0 ? "," : "", (unsigned)snco_id[i], snco_v[i], snco_rgb[i],
+                          (unsigned)snco_w[i]);
+        }
+        if (m > 0 && (size_t)m < sizeof(scbuf)) {
+            m += snprintf(scbuf + m, sizeof(scbuf) - (size_t)m, "],");
+        }
+        if (m < 0 || (size_t)m >= sizeof(scbuf)) {
+            scbuf[0] = '\0';
+        }
+    }
+    char payload[16384];
     int n = snprintf(payload, sizeof(payload),
         "{\"bar_open_time\":\"%lld\",\"closed\":%d,"
         "\"ohlc\":[%lld,%lld,%lld,%lld],"
@@ -649,7 +711,7 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
         "\"mem\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"pst\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g,\"tick\":%g,\"day\":%lld,"
-        "\"sma\":[%d,%.10g,%.10g,%.10g],%s%s%s%s%s%s%s%s%s\"shcode\":\"%s\"}",
+        "\"sma\":[%d,%.10g,%.10g,%.10g],%s%s%s%s%s%s%s%s%s%s%s%s\"shcode\":\"%s\"}",
         (long long)bar->open_time_us, closed_v,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         reg_valid_v ? 1 : 0, line_v, slope_v, r2_v,
@@ -670,7 +732,7 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
         pst_l[0], pst_l[1], pst_l[2],
         final_valid_v, final_dir_v, final_state_v, final_strength_v,
         reg_flat, tick_scale(p), (long long)day_v,
-        sma_ok, sma_v[0], sma_v[1], sma_v[2], fxbuf, fx3buf, pgbuf, rgbuf, mgbuf, ymbuf, snbuf, pvcbuf, raybuf, p->shcode);
+        sma_ok, sma_v[0], sma_v[1], sma_v[2], fxbuf, fx3buf, pgbuf, rgbuf, mgbuf, ymbuf, snbuf, pvcbuf, raybuf, osbuf, cubuf, scbuf, p->shcode);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -1129,6 +1191,17 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     tr_fxpgap_out_t mgout;
     tr_fxymae_out_t ymout;
     tr_fxsniper_out_t snout;
+    tr_fxos_out_t osout;
+    int cu_n = 0;
+    uint16_t cu_id[TR_FXCU_PLOTS];
+    double cu_v[TR_FXCU_PLOTS];
+    uint32_t cu_rgb[TR_FXCU_PLOTS];
+    uint8_t cu_w[TR_FXCU_PLOTS];
+    int snco_n = 0;
+    uint16_t snco_id[TR_SNCO_PLOTS];
+    double snco_v[TR_SNCO_PLOTS];
+    uint32_t snco_rgb[TR_SNCO_PLOTS];
+    uint8_t snco_w[TR_SNCO_PLOTS];
     int ray_on = 0;
     int ray_sign = 0;
     double ray_px[5], ray_up[5], ray_dn[5];
@@ -1142,6 +1215,15 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
     memset(&mgout, 0, sizeof(mgout));
     memset(&ymout, 0, sizeof(ymout));
     memset(&snout, 0, sizeof(snout));
+    memset(&osout, 0, sizeof(osout));
+    memset(cu_id, 0, sizeof(cu_id));
+    memset(cu_v, 0, sizeof(cu_v));
+    memset(cu_rgb, 0, sizeof(cu_rgb));
+    memset(cu_w, 0, sizeof(cu_w));
+    memset(snco_id, 0, sizeof(snco_id));
+    memset(snco_v, 0, sizeof(snco_v));
+    memset(snco_rgb, 0, sizeof(snco_rgb));
+    memset(snco_w, 0, sizeof(snco_w));
     if (p->is_ovs && e->cfg.timeframe_sec == 60 && !is_correction) {
         tr_fxmirae_input_t fin;
         memset(&fin, 0, sizeof(fin));
@@ -1283,6 +1365,70 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         snin.above = p->pgap3.above;
         tr_fxsniper_eval(&p->sniper, &snin);
         snout = p->sniper.out;
+        tr_fxos_input_t oin;
+        memset(&oin, 0, sizeof(oin));
+        civil_stamp(bar->open_time_us, p->session.utc_offset_min, &oin.date, &oin.time);
+        oin.bar_open = bar->open_time_us;
+        oin.high = (double)bar->high;
+        oin.low = (double)bar->low;
+        oin.close = (double)bar->close;
+        oin.volume = (double)bar->volume;
+        oin.is_new_bar = is_new_bar;
+        oin.fv = &p->fx.fv.out;
+        tr_fxos_eval(&p->os_scope, &oin);
+        osout = p->os_scope.out;
+        tr_fxcu_eval(&p->curve_os, &fin, &p->fx.syn5, &p->fx.syn15, &p->fx.syn30);
+        for (int k = 0; k < TR_FXCU_PLOTS && cu_n < TR_FXCU_PLOTS; k++) {
+            if (!p->curve_os.plots[k].on || p->curve_os.plots[k].width <= 0) {
+                continue;
+            }
+            cu_id[cu_n] = (uint16_t)(k + 1);
+            cu_v[cu_n] = p->curve_os.plots[k].value;
+            cu_rgb[cu_n] = p->curve_os.plots[k].rgb;
+            cu_w[cu_n] = (uint8_t)p->curve_os.plots[k].width;
+            cu_n++;
+        }
+        tr_snco_input_t scin;
+        memset(&scin, 0, sizeof(scin));
+        scin.date = fin.bar.date;
+        scin.time = fin.bar.time;
+        scin.bar_open = bar->open_time_us;
+        scin.is_new_bar = is_new_bar;
+        scin.high = (double)bar->high;
+        scin.low = (double)bar->low;
+        scin.close = (double)bar->close;
+        scin.volume = (double)bar->volume;
+        scin.price_scale = tick_scale(p);
+        scin.fv_ok = 1;
+        scin.reg_flat = p->fx.fv.out.reg_flat;
+        scin.market = p->fx.fv.out.market_center;
+        scin.target[0] = p->fx.fv.out.persist_target[0];
+        scin.target[1] = p->fx.fv.out.persist_target[1];
+        scin.target[2] = p->fx.fv.out.persist_target[2];
+        scin.reg_ok[0] = p->fx.syn5.out_reg_valid;
+        scin.reg_ok[1] = p->fx.syn15.out_reg_valid;
+        scin.reg_ok[2] = p->fx.syn30.out_reg_valid;
+        scin.reg_px[0] = p->fx.syn5.out_reg;
+        scin.reg_px[1] = p->fx.syn15.out_reg;
+        scin.reg_px[2] = p->fx.syn30.out_reg;
+        scin.mkt_ok[0] = p->fx.syn5.out_mkt_valid;
+        scin.mkt_ok[1] = p->fx.syn15.out_mkt_valid;
+        scin.mkt_ok[2] = p->fx.syn30.out_mkt_valid;
+        scin.mkt_px[0] = p->fx.syn5.out_mkt;
+        scin.mkt_px[1] = p->fx.syn15.out_mkt;
+        scin.mkt_px[2] = p->fx.syn30.out_mkt;
+        scin.mkt30 = 1;
+        tr_snco_eval(&p->snco, &scin);
+        for (int k = 0; k < TR_SNCO_PLOTS && snco_n < TR_SNCO_PLOTS; k++) {
+            if (!p->snco.plots[k].on || p->snco.plots[k].width <= 0) {
+                continue;
+            }
+            snco_id[snco_n] = (uint16_t)p->snco.plots[k].id;
+            snco_v[snco_n] = p->snco.plots[k].value;
+            snco_rgb[snco_n] = p->snco.plots[k].rgb;
+            snco_w[snco_n] = (uint8_t)p->snco.plots[k].width;
+            snco_n++;
+        }
         if (!reset && p->fx3.reg.reg_valid) {
             double base = p->fx3.reg.residual;
             if (p->fx3.pred.volatility * 0.25 > base) {
@@ -1420,6 +1566,51 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
                 snout.below = old.sn_below;
                 snout.above = old.sn_above;
                 snout.session_reset = old.sn_reset;
+                if (old.os_on) {
+                    osout.judge = old.os_judge;
+                    osout.judge_rgb = old.os_judge_rgb;
+                    osout.fut = old.os_fut;
+                    osout.prof = old.os_prof;
+                    osout.di = old.os_di;
+                    osout.adx = old.os_adx;
+                    osout.sq_on = old.os_sq_on;
+                    osout.sq_len = old.os_sq_len;
+                    osout.sq_w = old.os_sq_w;
+                    osout.sq_rgb = old.os_sq_rgb;
+                    osout.hold = old.os_hold;
+                    osout.hold_rgb = old.os_hold_rgb;
+                    osout.ratio_on = old.os_ratio_on;
+                    osout.ratio = old.os_ratio;
+                    osout.ratio_rgb = old.os_ratio_rgb;
+                    osout.rel_on = old.os_rel_on;
+                    osout.rel_len = old.os_rel_len;
+                    osout.rel_w = old.os_rel_w;
+                    osout.rel_rgb = old.os_rel_rgb;
+                    osout.cf_on = old.os_cf_on;
+                    osout.cf_len = old.os_cf_len;
+                    osout.cf_w = old.os_cf_w;
+                    osout.cf_rgb = old.os_cf_rgb;
+                    osout.ent_on = old.os_ent_on;
+                    osout.ent_y = old.os_ent_y;
+                    osout.ent_rgb = old.os_ent_rgb;
+                    osout.ent_w = old.os_ent_w;
+                }
+                cu_n = old.cu_n;
+                if (cu_n > TR_FXCU_PLOTS) {
+                    cu_n = TR_FXCU_PLOTS;
+                }
+                memcpy(cu_id, old.cu_id, sizeof(cu_id));
+                memcpy(cu_v, old.cu_v, sizeof(cu_v));
+                memcpy(cu_rgb, old.cu_rgb, sizeof(cu_rgb));
+                memcpy(cu_w, old.cu_w, sizeof(cu_w));
+                snco_n = old.snco_n;
+                if (snco_n > TR_SNCO_PLOTS) {
+                    snco_n = TR_SNCO_PLOTS;
+                }
+                memcpy(snco_id, old.snco_id, sizeof(snco_id));
+                memcpy(snco_v, old.snco_v, sizeof(snco_v));
+                memcpy(snco_rgb, old.snco_rgb, sizeof(snco_rgb));
+                memcpy(snco_w, old.snco_w, sizeof(snco_w));
                 ymout.show_price = old.pvc_price_on;
                 ymout.show_price_ratio = old.pvc_price;
                 ymout.show_vol = old.pvc_vol_on;
@@ -1583,6 +1774,44 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         memcpy(st.ray_up, ray_up, sizeof(st.ray_up));
         memcpy(st.ray_dn, ray_dn, sizeof(st.ray_dn));
         memcpy(st.ray_dir, ray_dir, sizeof(st.ray_dir));
+        st.os_on = p->is_ovs && e->cfg.timeframe_sec == 60;
+        st.os_judge = osout.judge;
+        st.os_judge_rgb = osout.judge_rgb;
+        st.os_fut = osout.fut;
+        st.os_prof = osout.prof;
+        st.os_di = osout.di;
+        st.os_adx = osout.adx;
+        st.os_sq_on = osout.sq_on;
+        st.os_sq_len = osout.sq_len;
+        st.os_sq_w = osout.sq_w;
+        st.os_sq_rgb = osout.sq_rgb;
+        st.os_hold = osout.hold;
+        st.os_hold_rgb = osout.hold_rgb;
+        st.os_ratio_on = osout.ratio_on;
+        st.os_ratio = osout.ratio;
+        st.os_ratio_rgb = osout.ratio_rgb;
+        st.os_rel_on = osout.rel_on;
+        st.os_rel_len = osout.rel_len;
+        st.os_rel_w = osout.rel_w;
+        st.os_rel_rgb = osout.rel_rgb;
+        st.os_cf_on = osout.cf_on;
+        st.os_cf_len = osout.cf_len;
+        st.os_cf_w = osout.cf_w;
+        st.os_cf_rgb = osout.cf_rgb;
+        st.os_ent_on = osout.ent_on;
+        st.os_ent_y = osout.ent_y;
+        st.os_ent_rgb = osout.ent_rgb;
+        st.os_ent_w = osout.ent_w;
+        st.cu_n = cu_n;
+        memcpy(st.cu_id, cu_id, sizeof(st.cu_id));
+        memcpy(st.cu_v, cu_v, sizeof(st.cu_v));
+        memcpy(st.cu_rgb, cu_rgb, sizeof(st.cu_rgb));
+        memcpy(st.cu_w, cu_w, sizeof(st.cu_w));
+        st.snco_n = snco_n;
+        memcpy(st.snco_id, snco_id, sizeof(st.snco_id));
+        memcpy(st.snco_v, snco_v, sizeof(st.snco_v));
+        memcpy(st.snco_rgb, snco_rgb, sizeof(st.snco_rgb));
+        memcpy(st.snco_w, snco_w, sizeof(st.snco_w));
         /* 정정은 지금 계산으로 과거 슬롯을 덮지 않는다. 적어 둔 지표를 그대로 둔다. */
         if (have_frozen) {
             st = frozen;
@@ -1639,6 +1868,11 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
                    ovs_scope ? ray_up : 0,
                    ovs_scope ? ray_dn : 0,
                    ovs_scope ? ray_dir : 0,
+                   ovs_scope ? &osout : 0,
+                   ovs_scope ? cu_n : 0, ovs_scope ? cu_id : 0, ovs_scope ? cu_v : 0,
+                   ovs_scope ? cu_rgb : 0, ovs_scope ? cu_w : 0,
+                   ovs_scope ? snco_n : 0, ovs_scope ? snco_id : 0, ovs_scope ? snco_v : 0,
+                   ovs_scope ? snco_rgb : 0, ovs_scope ? snco_w : 0,
                    bar_ob_valid, bar_ob_score, have_frozen ? &frozen : 0);
 
     /* 스트림 위치 마커는 현재 봉 이벤트에서만 전진한다. 과거 봉 정정(늦은 틱)이

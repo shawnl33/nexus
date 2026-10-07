@@ -50,9 +50,10 @@ const HorizLines = (() => {
                     prev = null;
                     continue;
                   }
-                  const adjacent = run && prev && (p.time - prev.time) <= step * 1.5 && p.value === run.value;
+                  const tone = p.color || "";
+                  const adjacent = run && prev && (p.time - prev.time) <= step * 1.5 && p.value === run.value && tone === run.color;
                   if (!adjacent) {
-                    run = { t0: p.time, t1: p.time, value: p.value };
+                    run = { t0: p.time, t1: p.time, value: p.value, color: tone };
                     runs.push(run);
                   } else {
                     run.t1 = p.time;
@@ -65,8 +66,6 @@ const HorizLines = (() => {
                   const hr = scope.horizontalPixelRatio;
                   const vr = scope.verticalPixelRatio;
                   const xOf = (t) => chart.timeScale().timeToCoordinate(t);
-                  ctx.beginPath();
-                  ctx.strokeStyle = style.color;
                   ctx.lineWidth = Math.max(1, style.width) * hr;
                   for (const seg of runs) {
                     const x0m = xOf(seg.t0);
@@ -84,10 +83,12 @@ const HorizLines = (() => {
                       if (x1m == null) continue;
                       x1 = x1m * hr;
                     }
+                    ctx.beginPath();
+                    ctx.strokeStyle = seg.color || style.color;
                     ctx.moveTo(x0, py);
                     ctx.lineTo(x1, py);
+                    ctx.stroke();
                   }
-                  ctx.stroke();
                 });
               },
             };
@@ -219,7 +220,7 @@ const HorizLines = (() => {
   }
 
   const PLUS_ARM = 3;
-  function plus(color) {
+  function plus(color, sized) {
     let series = null;
     let chart = null;
     let points = [];
@@ -244,18 +245,20 @@ const HorizLines = (() => {
                   const ctx = scope.context;
                   const hr = scope.horizontalPixelRatio;
                   const vr = scope.verticalPixelRatio;
-                  const arm = PLUS_ARM * hr;
                   const xOf = (t) => chart.timeScale().timeToCoordinate(t);
                   for (const p of points) {
                     if (!p || !Number.isFinite(p.value)) continue;
+                    const w = sized ? Number(p.width) : 2;
+                    if (!(w > 0)) continue;
                     const mx = xOf(p.time);
                     const my = series.priceToCoordinate(p.value);
                     if (mx == null || my == null) continue;
                     const x = mx * hr;
                     const y = my * vr;
+                    const arm = (sized ? 2 + w : PLUS_ARM) * hr;
                     ctx.beginPath();
                     ctx.strokeStyle = p.color || color;
-                    ctx.lineWidth = 2 * hr;
+                    ctx.lineWidth = (sized ? w : 2) * hr;
                     ctx.moveTo(x - arm, y);
                     ctx.lineTo(x + arm, y);
                     ctx.moveTo(x, y - arm);
@@ -271,8 +274,56 @@ const HorizLines = (() => {
     };
   }
 
-  // 봉마다 채운 원. 지름은 굵기. 점 사이는 잇지 않는다.
-  function dots() {
+  // 봉마다 속 빈 테두리 원. 지름은 굵기. 점 사이는 잇지 않는다.
+  function rings(scale) {
+    let series = null;
+    let chart = null;
+    let points = [];
+    return {
+      setPoints(next) { points = next || []; },
+      attached(param) {
+        series = param.series;
+        chart = param.chart;
+      },
+      detached() {
+        series = null;
+        chart = null;
+      },
+      updateAllViews() {},
+      paneViews() {
+        return [{
+          renderer() {
+            return {
+              draw(target) {
+                if (!series || !chart) return;
+                target.useBitmapCoordinateSpace((scope) => {
+                  const ctx = scope.context;
+                  const hr = scope.horizontalPixelRatio;
+                  const vr = scope.verticalPixelRatio;
+                  const xOf = (t) => chart.timeScale().timeToCoordinate(t);
+                  ctx.lineWidth = Math.max(1, hr);
+                  for (const p of points) {
+                    if (!p || !Number.isFinite(p.value)) continue;
+                    const mx = xOf(p.time);
+                    const my = series.priceToCoordinate(p.value);
+                    if (mx == null || my == null) continue;
+                    const radius = Math.max(3, (p.width || 1) * (scale > 0 ? scale : 1)) * 0.5 * hr;
+                    ctx.beginPath();
+                    ctx.strokeStyle = p.color || "#d7dde8";
+                    ctx.arc(mx * hr, my * vr, radius, 0, Math.PI * 2);
+                    ctx.stroke();
+                  }
+                });
+              },
+            };
+          },
+        }];
+      },
+    };
+  }
+
+  // 봉마다 채운 다이아몬드. 지름은 굵기. 점 사이는 잇지 않는다.
+  function diamonds(scale) {
     let series = null;
     let chart = null;
     let points = [];
@@ -303,7 +354,60 @@ const HorizLines = (() => {
                     const mx = xOf(p.time);
                     const my = series.priceToCoordinate(p.value);
                     if (mx == null || my == null) continue;
-                    const radius = Math.max(1, p.width || 1) * 0.5 * hr;
+                    const r = Math.max(3, (p.width || 1) * (scale > 0 ? scale : 1)) * 0.5 * hr;
+                    const x = mx * hr;
+                    const y = my * vr;
+                    ctx.beginPath();
+                    ctx.fillStyle = p.color || "#d7dde8";
+                    ctx.moveTo(x, y - r);
+                    ctx.lineTo(x + r, y);
+                    ctx.lineTo(x, y + r);
+                    ctx.lineTo(x - r, y);
+                    ctx.closePath();
+                    ctx.fill();
+                  }
+                });
+              },
+            };
+          },
+        }];
+      },
+    };
+  }
+
+  // 봉마다 채운 원. 지름은 굵기. 점 사이는 잇지 않는다.
+  function dots(scale) {
+    let series = null;
+    let chart = null;
+    let points = [];
+    return {
+      setPoints(next) { points = next || []; },
+      attached(param) {
+        series = param.series;
+        chart = param.chart;
+      },
+      detached() {
+        series = null;
+        chart = null;
+      },
+      updateAllViews() {},
+      paneViews() {
+        return [{
+          renderer() {
+            return {
+              draw(target) {
+                if (!series || !chart) return;
+                target.useBitmapCoordinateSpace((scope) => {
+                  const ctx = scope.context;
+                  const hr = scope.horizontalPixelRatio;
+                  const vr = scope.verticalPixelRatio;
+                  const xOf = (t) => chart.timeScale().timeToCoordinate(t);
+                  for (const p of points) {
+                    if (!p || !Number.isFinite(p.value)) continue;
+                    const mx = xOf(p.time);
+                    const my = series.priceToCoordinate(p.value);
+                    if (mx == null || my == null) continue;
+                    const radius = Math.max(2, (p.width || 1) * (scale > 0 ? scale : 1)) * 0.5 * hr;
                     ctx.beginPath();
                     ctx.fillStyle = p.color || "#d7dde8";
                     ctx.arc(mx * hr, my * vr, radius, 0, Math.PI * 2);
@@ -384,7 +488,148 @@ const HorizLines = (() => {
     };
   }
 
-  return { primitive, segments, flat, plus, dots, arrows };
+  // Def. 같은 값은 가로. 크게 바뀌면 새 봉에서 세로로 꺾고, 조금씩 바뀌면 사선.
+  // 봉이 비어도 지우지 않고 잇는다. step 이면 틱 단위로 바뀌는 회귀선처럼 변화는 항상 세로다.
+  function defLine(step) {
+    let series = null;
+    let chart = null;
+    let points = [];
+    return {
+      setPoints(next) { points = next || []; },
+      attached(param) {
+        series = param.series;
+        chart = param.chart;
+      },
+      detached() {
+        series = null;
+        chart = null;
+      },
+      updateAllViews() {},
+      paneViews() {
+        return [{
+          renderer() {
+            return {
+              draw(target) {
+                if (!series || !chart || points.length < 2) return;
+                let bar = 60;
+                for (let i = 1; i < points.length; i++) {
+                  const d = points[i].time - points[i - 1].time;
+                  if (d > 0 && d < bar) bar = d;
+                }
+                const segs = [];
+                for (let i = 1; i < points.length; i++) {
+                  const a = points[i - 1];
+                  const b = points[i];
+                  if (!Number.isFinite(a.value) || !Number.isFinite(b.value)) continue;
+                  const color = b.color;
+                  const width = b.width;
+                  if (a.value === b.value) {
+                    segs.push({ t0: a.time, v0: a.value, t1: b.time, v1: b.value, color, width });
+                    continue;
+                  }
+                  const large = step || Math.abs(b.value - a.value) > 4;
+                  if (large) {
+                    segs.push({ t0: b.time, v0: a.value, t1: b.time, v1: b.value, color, width });
+                  } else {
+                    segs.push({ t0: a.time, v0: a.value, t1: b.time, v1: b.value, color, width });
+                  }
+                }
+                target.useBitmapCoordinateSpace((scope) => {
+                  const ctx = scope.context;
+                  const hr = scope.horizontalPixelRatio;
+                  const vr = scope.verticalPixelRatio;
+                  const xOf = (t) => chart.timeScale().timeToCoordinate(t);
+                  for (const seg of segs) {
+                    const x0 = xOf(seg.t0);
+                    const x1 = xOf(seg.t1);
+                    const y0 = series.priceToCoordinate(seg.v0);
+                    const y1 = series.priceToCoordinate(seg.v1);
+                    if (x0 == null || x1 == null || y0 == null || y1 == null) continue;
+                    ctx.beginPath();
+                    ctx.strokeStyle = seg.color;
+                    ctx.lineCap = "butt";
+                    ctx.lineJoin = "miter";
+                    ctx.lineWidth = Math.max(1, seg.width) * vr;
+                    ctx.moveTo(x0 * hr, y0 * vr);
+                    ctx.lineTo(x1 * hr, y1 * vr);
+                    ctx.stroke();
+                  }
+                });
+              },
+            };
+          },
+        }];
+      },
+    };
+  }
+
+  // 같은 가격만 가로로 잇는다. 값이 바뀌면 세로로 내리지 않고 그 구간은 끝난다.
+  // 색이 바뀌어도 가격이 같으면 가로선은 유지하고, 그 구간만 새 색을 쓴다.
+  function levels() {
+    let series = null;
+    let chart = null;
+    let points = [];
+    return {
+      setPoints(next) { points = next || []; },
+      attached(param) {
+        series = param.series;
+        chart = param.chart;
+      },
+      detached() {
+        series = null;
+        chart = null;
+      },
+      updateAllViews() {},
+      paneViews() {
+        return [{
+          renderer() {
+            return {
+              draw(target) {
+                if (!series || !chart || points.length < 2) return;
+                let step = 60;
+                for (let i = 1; i < points.length; i++) {
+                  const d = points[i].time - points[i - 1].time;
+                  if (d > 0 && d < step) step = d;
+                }
+                const segs = [];
+                for (let i = 0; i < points.length; i++) {
+                  const a = points[i];
+                  const b = points[i + 1];
+                  if (!a || !Number.isFinite(a.value)) continue;
+                  if (b && Number.isFinite(b.value) && a.value === b.value) {
+                    segs.push({ t0: a.time, t1: b.time, v: a.value, color: a.color, width: a.width });
+                  } else {
+                    segs.push({ t0: a.time, t1: a.time + step, v: a.value, color: a.color, width: a.width, stub: true });
+                  }
+                }
+                target.useBitmapCoordinateSpace((scope) => {
+                  const ctx = scope.context;
+                  const hr = scope.horizontalPixelRatio;
+                  const vr = scope.verticalPixelRatio;
+                  const xOf = (t) => chart.timeScale().timeToCoordinate(t);
+                  for (const seg of segs) {
+                    const x0 = xOf(seg.t0);
+                    const x1 = xOf(seg.t1);
+                    const y = series.priceToCoordinate(seg.v);
+                    if (x0 == null || x1 == null || y == null) continue;
+                    ctx.beginPath();
+                    ctx.strokeStyle = seg.color;
+                    ctx.lineCap = "butt";
+                    ctx.lineWidth = Math.max(1, seg.width) * vr;
+                    ctx.moveTo(x0 * hr, y * vr);
+                    ctx.lineTo(x1 * hr, y * vr);
+                    ctx.stroke();
+                  }
+                });
+              },
+            };
+          },
+        }];
+      },
+    };
+  }
+
+  return { primitive, segments, flat, plus, dots, rings, diamonds, arrows, defLine, levels };
 })();
 
 if (typeof globalThis !== "undefined") globalThis.HorizLines = HorizLines;

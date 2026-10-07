@@ -43,6 +43,7 @@ typedef struct {
     int32_t min_hold_bars;  /* 최소전환유지봉수 */
     double high, low;       /* H/L builtin 대응 */
     bool is_new_bar;        /* 새 봉 첫 평가 (복원 스냅샷 갱신 트리거) */
+    int swing_link;         /* 스윙연결 (WSF_FXSwingV2). 1이면 새 구간을 직전 반대 꼭짓점에서 시작. 0=V1 */
 } tr_fxsw_input_t;
 
 /* 확정된 스윙 구간 한 쪽의 메모리 (지난상승/지난하락 공통 레이아웃) */

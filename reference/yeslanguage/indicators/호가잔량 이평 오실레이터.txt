@@ -1,0 +1,17 @@
+Input : Period(5);
+Var : value(0);
+
+value = ma(bids,period)-ma(asks,period);
+
+If value > value[1] Then
+	{
+	Plot1(value, "매수총잔량 우위");
+	Plot2(0, "매도총잔량 우위");
+	}
+Else{
+	Plot1(0, "매수총잔량 우위");
+	Plot2(value, "매도총잔량 우위");
+	}
+
+PlotBaseLine1(0,"기준선");
+

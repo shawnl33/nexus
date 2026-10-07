@@ -1,0 +1,19 @@
+Var : Sync(0);
+
+If C < C[1] and V < V[1] Then
+{
+	plot1(-V,"-BPSy");
+	plot2(0,"+BPSy");
+}
+Else If C > C[1] and V > V[1] Then
+{
+	plot1(0,"-BPSy");
+	plot2(V,"+BPSy");
+}
+Else
+{
+	plot1(0,"-BPSy");
+	plot2(0,"+BPSy");
+}
+
+PlotBaseLine1(0,"기준선");

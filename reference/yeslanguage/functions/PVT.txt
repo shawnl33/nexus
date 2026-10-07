@@ -1,0 +1,10 @@
+/*	Description : (P)rice (V)olume (T)rend
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+If Close[1] * Volume <> 0 Then
+	PVT = ((Close - Close[1]) / Close[1] * Volume) + PVT[1];
+Else
+	PVT = 0;

@@ -1,0 +1,7 @@
+Input : Period(10);
+var : PriceROC(0);
+
+PriceROC = PROC(Period);
+
+Plot1(PriceROC, "PROC");
+PlotBaseLine1(0, "기준선 0");

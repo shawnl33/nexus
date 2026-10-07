@@ -1,0 +1,11 @@
+plot1(c);
+Var1 = TL_New( sDate[10], sTime[10], c[10], sDate, sTime, c );
+ 
+if( index == 290 ) then
+{
+    //TL_New( sDate[5], sTime[5], Close[5], sDate, sTime, Close );
+    //Var1 = TL_New( sDate[10], sTime[10], c[10], sDate, sTime, c );
+    Var1 = Text_New( sDate, sTime, c, "테스트입니다!!" );
+}
+
+

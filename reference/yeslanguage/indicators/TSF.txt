@@ -1,0 +1,7 @@
+Input : Period(14);
+var : TSF(0);
+
+TSF = LRL(C,Period)+LRS(C,Period);
+
+Plot1(TSF,"TSF") ;
+

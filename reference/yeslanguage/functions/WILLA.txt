@@ -1,0 +1,21 @@
+/*	Description : (Will)ams' (A)ccumulatino/Distribution
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Var 	: value(0);
+
+value = 0;
+
+if C < C[1] then
+{
+    value = C - TrueHigh;
+}
+else
+{
+    if C > C[1] then
+    	value = C - TrueLow;
+}
+    
+WILLA = Accum(value);

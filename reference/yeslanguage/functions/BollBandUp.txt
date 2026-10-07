@@ -1,0 +1,10 @@
+/*	Description : (Boll)inger (Band) (Up)
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input : Period(Numeric), D(Numeric);
+
+BollBandUp = ma(C, Period) + (D * std(C, Period));
+

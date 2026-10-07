@@ -1,0 +1,10 @@
+Input : Period(14),SigPeriod(9);
+var : AvgTrueRange(0),ATRsig(0);
+
+AvgTrueRange = ATR(Period);
+ATRsig = ema(ATR(Period),SigPeriod);
+
+Plot1(AvgTrueRange, "Average True Range");
+Plot2(ATRsig, "ATR signal");
+
+

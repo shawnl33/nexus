@@ -1,0 +1,9 @@
+Input : Period(12), sigPeriod(9);
+var : TRIXv(0),TRIXsig(0);
+
+TRIXv = TRIX(Period);
+TRIXsig = ema(TRIX(Period),sigPeriod);
+
+Plot1(TRIXv,"TRIX");
+Plot2(TRIXsig,"TRIX시그널");
+PlotBaseLine1(0,"기준선");

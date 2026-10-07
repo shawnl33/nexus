@@ -1,0 +1,27 @@
+/*	Description : (V)olume (R)atio
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+Input 	: Period(Numeric);
+Var 	: value1(0), value2(0), value3(0);
+Var 	: AccumN_value3(0);
+
+value1 = 0;
+value2 = 0;
+value3 = 0;
+
+if C > C[1] then
+	value1 = V;
+
+if C < C[1] then
+	value2 = V;
+
+if C == C[1] then
+	value3 = V;
+
+AccumN_value3 = AccumN(value3, Period) / 2;
+
+VR = (AccumN(value1, Period) + AccumN_value3) / 
+     (AccumN(value2, Period) + AccumN_value3) * 100;
+

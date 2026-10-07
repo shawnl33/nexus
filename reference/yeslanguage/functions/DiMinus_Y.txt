@@ -1,0 +1,17 @@
+/*	Description : (D)irectional Moving Average (I)ndex (Minus)
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(Numeric);
+Var 	: value(0), diff_Low(0);
+
+diff_Low 	= L[1] - L;
+
+If diff_Low > 0 && H-H[1] < diff_Low Then  
+	value = diff_Low;
+Else 
+	value = 0; 
+
+DIMinus_Y = ma(value, Period) / ma(max(H - L, abs(C[1] - H), abs(C[1] - L)), Period) * 100;

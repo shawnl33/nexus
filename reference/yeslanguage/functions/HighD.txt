@@ -1,0 +1,30 @@
+/*	Description : DayHigh
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Inputs		: DaysAgo(Numeric);
+Variables	: Day1Done(0);
+Array		: HighArray[50](-1);
+
+If DataCompress <= 2 Then
+{
+	If Date > Date[1]  Then Begin
+		Day1Done = Day1Done + 1;
+		For Var1 = 49 DownTo 1 Begin
+			HighArray[Var1] = HighArray[Var1 - 1];
+		End;
+		HighArray[0] = High;
+	End;
+
+	If Day1Done > 0 AND High > HighArray[0] Then 
+		HighArray[0] = High;
+
+	If DaysAgo < 50 && HighArray[DaysAgo] != -1 Then 
+		HighD = HighArray[DaysAgo];
+}
+Else
+{
+    HighD = High[DaysAgo];
+}

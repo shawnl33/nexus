@@ -1,0 +1,10 @@
+/*	Description : Stochastics D
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(NumericSimple), Period1(NumericSimple), Period2(NumericSimple);
+
+StochasticsD = ema(SlowK(Period, Period1), Period2);
+

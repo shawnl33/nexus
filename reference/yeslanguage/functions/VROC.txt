@@ -1,0 +1,9 @@
+/*	Description : (V)olume (R)ate (O)f (C)hange
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+Input 	: Period(Numeric);
+ 
+VROC = (V-V[Period]) / V[Period] * 100;
+

@@ -1,0 +1,6 @@
+inputs	: Percent( NumericSimple );
+
+if AbsValue( O - C ) <= ( H - L ) * Percent * .01 then
+	C_Doji = 1;
+else
+	C_Doji = 0;

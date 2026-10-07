@@ -8,7 +8,8 @@
 
 #include "core/functions/fx_swing_v1.h"
 
-static void feed(tr_fxsw_t *s, bool reset, double dir, double h, double l, bool new_bar) {
+static void feed_link(tr_fxsw_t *s, bool reset, double dir, double h, double l, bool new_bar,
+                      int swing_link) {
     tr_fxsw_input_t in;
     memset(&in, 0, sizeof(in));
     in.session_reset = reset;
@@ -17,7 +18,12 @@ static void feed(tr_fxsw_t *s, bool reset, double dir, double h, double l, bool 
     in.high = h;
     in.low = l;
     in.is_new_bar = new_bar;
+    in.swing_link = swing_link;
     tr_fxsw_eval(s, &in);
+}
+
+static void feed(tr_fxsw_t *s, bool reset, double dir, double h, double l, bool new_bar) {
+    feed_link(s, reset, dir, h, l, new_bar, 0);
 }
 
 /* 시나리오 A: 상승 대기→확정, 구간 연장, 하락 전환 시 지난상승 메모리 확정 */
@@ -214,6 +220,34 @@ static void test_session_reset(void) {
     TR_CHECK(s.st.wait_dir == 1); /* 양수전환 → 대기 시작 */
 }
 
+/* 스윙연결=1: 새 하락 고점은 Max(대기최고, 직전 상승최고), 새 상승 저점은 Min(대기최저, 직전 하락최저).
+ * 0이면 대기 구간의 고저만 새 구간의 시작이다 (원본 WSF_FXSwingV2 247~249, 300~302줄). */
+static void test_swing_link_joins_prior_extreme(void) {
+    tr_fxsw_t linked, plain;
+    tr_fxsw_init(&linked);
+    tr_fxsw_init(&plain);
+
+    const int link_on[2] = {1, 0};
+    tr_fxsw_t *ss[2] = {&linked, &plain};
+    for (int k = 0; k < 2; k++) {
+        feed_link(ss[k], true, 1.0, 110.0, 100.0, true, link_on[k]);
+        feed_link(ss[k], false, 1.0, 110.0, 100.0, true, link_on[k]);
+        feed_link(ss[k], false, 1.0, 112.0, 105.0, true, link_on[k]); /* 상승 (112,100) */
+        feed_link(ss[k], false, 1.0, 115.0, 108.0, true, link_on[k]); /* 연장 고점 115 */
+        feed_link(ss[k], false, -1.0, 113.0, 102.0, true, link_on[k]);
+        feed_link(ss[k], false, -1.0, 111.0, 95.0, true, link_on[k]); /* 하락 확정, 대기최고 113 */
+    }
+    TR_CHECK(linked.st.dn_high == 115.0); /* Max(113, 상승최고 115) */
+    TR_CHECK(plain.st.dn_high == 113.0);
+    TR_CHECK(linked.st.dn_low == 95.0 && plain.st.dn_low == 95.0);
+
+    feed_link(&linked, false, -1.0, 114.0, 90.0, true, 1); /* 하락 저점 90 */
+    feed_link(&linked, false, 1.0, 100.0, 96.0, true, 1);
+    feed_link(&linked, false, 1.0, 108.0, 97.0, true, 1); /* 상승 확정, 대기최저 96 */
+    TR_CHECK(linked.st.up_low == 90.0); /* Min(96, 하락최저 90) */
+    TR_CHECK(linked.st.up_high == 108.0);
+}
+
 int main(void) {
     test_up_confirm_and_extension();
     test_deep_retrace_broken_ext();
@@ -223,5 +257,6 @@ int main(void) {
     test_wait_cancel_merge();
     test_same_bar_restore();
     test_session_reset();
+    test_swing_link_joins_prior_extreme();
     TR_TEST_SUMMARY();
 }

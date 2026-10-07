@@ -1,0 +1,16 @@
+Inputs: TurnLen(9), StdLen(26), PrdLen(52);  
+Variables: 기준선(0), 전환선(0), 후행스팬(0), 선행스팬1(0), 선행스팬2(0);
+
+전환선 = (Highest(High, TurnLen) + Lowest(Low, TurnLen)) / 2; 
+기준선 = (Highest(High, StdLen) + Lowest(Low, StdLen)) / 2;
+후행스팬 = Close ;
+선행스팬1 = (전환선 + 기준선) / 2 ;
+선행스팬2 = (Highest(High, PrdLen) + Lowest(Low, PrdLen)) / 2;
+
+Plot1(전환선, "전환선");
+Plot2(기준선, "기준선");
+Plot3(후행스팬, "후행스팬");
+Plot4(선행스팬1,"선행스팬1");
+Plot5(선행스팬2, "선행스팬2");
+
+

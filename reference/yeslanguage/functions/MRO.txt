@@ -1,0 +1,17 @@
+Inputs: Expression(TrueFalseSeries), Length(NumericSimple), Occur(NumericSimple);
+Variables: TrueCount(0), Counter(0);
+
+Counter = 0;
+TrueCount = 0;
+
+While Counter < Length AND TrueCount < Occur Begin
+	If Expression[Counter] Then{ 
+		TrueCount = TrueCount + 1;
+	}
+	Counter = Counter + 1;
+End;
+If TrueCount >= Occur AND TrueCount > 0 Then
+	MRO = counter-1;
+Else 
+	MRO = -1;
+

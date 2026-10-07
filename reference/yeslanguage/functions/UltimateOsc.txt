@@ -1,0 +1,28 @@
+/*	Description : Ultimate Oscillator
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input	: Avg1(Numeric), Avg2(Numeric), Avg3(Numeric);
+Var		: SumDiff1(0), SumDiff2(0), SumDiff3(0), SumTR1(0), SumTR2(0), SumTR3(0), V7(0), V8(0), Diff1(0), Diff2(0), Diff3(0);
+Var		: Diff(0);
+
+SumTR1 	= ACCUMN(TrueRange(), Avg1);
+SumTR2 	= ACCUMN(TrueRange(), Avg2);
+SumTR3 	= ACCUMN(TrueRange(), Avg3);
+Diff	= Close - TrueLow();
+
+If Min(SumTR1, SumTR2, SumTR3) == 0 Then 
+	UltimateOsc = 0 ;
+Else	
+	If SumTR1 <> 0 AND SumTR2 <> 0 AND SumTR3 <> 0 Then Begin
+		SumDiff1 = ACCUMN(Diff, Avg1);
+		SumDiff2 = ACCUMN(Diff, Avg2);
+		SumDiff3 = ACCUMN(Diff, Avg3);
+		Diff1 = (SumDiff1 / SumTR1) * 4;
+		Diff2 = (SumDiff2 / SumTR2) * 2;
+		Diff3 = (SumDiff3 / SumTR3);
+		UltimateOsc = (Diff1 + Diff2 + Diff3) / 7;
+	End;
+

@@ -1,0 +1,8 @@
+Input : af(0.02), maxAF(0.2);
+
+var1 = CSar(af,maxAF);
+
+if var1 > C Then
+	Plot1(var1, "CSAR",Blue);
+Else
+	Plot1(var1, "CSAR",Red);

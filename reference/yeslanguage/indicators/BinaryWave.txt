@@ -1,0 +1,8 @@
+Input : maperiod(20), RocPeriod(12), stoPeriod1(5), stoPeriod2(3);
+var : BinaryWave(0);
+
+BinaryWave = BW(maperiod, RocPeriod, stoPeriod1, stoPeriod2);
+
+Plot1(BinaryWave,"BW");
+PlotBaseLine1(0, "기준선0");
+

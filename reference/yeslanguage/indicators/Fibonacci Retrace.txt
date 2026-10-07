@@ -1,0 +1,14 @@
+Inputs:  XAvgLen(15), HiLoLen(50), Retrace(0.382);
+Vars: XAvg(0),HiHi(0),LoLo(0),Retracement(0),HRetrace(0),LRetrace(0);
+
+XAvg = Ema(C, XAvgLen);
+HiHi = Highest(High, HiLoLen);
+LoLo = Lowest(Low, HiLoLen);
+
+Retracement = (HiHi - LoLo) * Retrace;
+HRetrace = HiHi - Retracement;
+Lretrace = LoLo + Retracement;
+
+Plot1(XAvg, "XAverage");
+Plot2(HRetrace, "HRetrace");
+Plot3(Lretrace, "LRetrace");

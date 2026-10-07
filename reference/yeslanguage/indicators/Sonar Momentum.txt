@@ -1,0 +1,9 @@
+Input : Period(9), maPeriod(9);
+var : SonarValue(0),SonarSig(0);
+
+SonarValue = SONAR(Period);
+SonarSig = ema(SONAR(Period),maPeriod);
+
+Plot1(SonarValue, "SONAR");
+Plot2(SonarSig, "SONAR시그널");
+PlotBaseLine1(0, "기준선");

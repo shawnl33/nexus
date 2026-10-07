@@ -1,0 +1,11 @@
+Input : Period(5);
+var : AsksMA(0),BidsMA(0);
+
+BidsMa = ma(bids,Period);
+AsksMA = ma(asks,Period);
+
+Plot1(BidsMA, "매수잔량이평");
+Plot2(AsksMA, "매도잔량이평");
+
+
+

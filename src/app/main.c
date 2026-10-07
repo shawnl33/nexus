@@ -775,6 +775,36 @@ static const char SNAP_IND_MANIFEST_A[] =
     "{\"id\":\"hypo\",\"name\":\"가설 신호\",\"defaultOn\":true}]},";
 
 static const char SNAP_IND_MANIFEST_B[] =
+    "{\"id\":\"fx_curve_os\",\"name\":\"미래곡선 해외\",\"layers\":["
+    "{\"id\":\"score\",\"name\":\"단계화\",\"defaultOn\":true},"
+    "{\"id\":\"reg\",\"name\":\"회귀선·마켓\",\"defaultOn\":true},"
+    "{\"id\":\"target\",\"name\":\"지속 목표\",\"defaultOn\":true},"
+    "{\"id\":\"swing\",\"name\":\"지난 구간\",\"defaultOn\":true},"
+    "{\"id\":\"synth\",\"name\":\"합성 5/15/30\",\"defaultOn\":true},"
+    "{\"id\":\"entry\",\"name\":\"진입후보\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_snco\",\"name\":\"스나이퍼 CO\",\"layers\":["
+    "{\"id\":\"three\",\"name\":\"삼선 비율\",\"defaultOn\":true},"
+    "{\"id\":\"reg\",\"name\":\"회귀 비율\",\"defaultOn\":true},"
+    "{\"id\":\"market\",\"name\":\"마켓 비율\",\"defaultOn\":true},"
+    "{\"id\":\"price\",\"name\":\"가격 비율\",\"defaultOn\":true},"
+    "{\"id\":\"vol\",\"name\":\"거래량 비율\",\"defaultOn\":true},"
+    "{\"id\":\"signal\",\"name\":\"압축 신호점\",\"defaultOn\":true},"
+    "{\"id\":\"emphasis\",\"name\":\"비율 강조\",\"defaultOn\":true},"
+    "{\"id\":\"range\",\"name\":\"범위·이탈\",\"defaultOn\":true},"
+    "{\"id\":\"scope\",\"name\":\"스코프 유지\",\"defaultOn\":true},"
+    "{\"id\":\"both\",\"name\":\"동시압축\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_judge_v3\",\"name\":\"1분통합판정\",\"layers\":["
+    "{\"id\":\"state\",\"name\":\"당일통합상태\",\"defaultOn\":true},"
+    "{\"id\":\"fut\",\"name\":\"미래방향\",\"defaultOn\":true},"
+    "{\"id\":\"prof\",\"name\":\"5선매물대\",\"defaultOn\":true},"
+    "{\"id\":\"di\",\"name\":\"DI방향\",\"defaultOn\":true},"
+    "{\"id\":\"adx\",\"name\":\"ADX상태\",\"defaultOn\":true},"
+    "{\"id\":\"entry\",\"name\":\"진입후보\",\"defaultOn\":true},"
+    "{\"id\":\"release\",\"name\":\"압축해제\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_pack_v4\",\"name\":\"매물대압축\",\"layers\":["
+    "{\"id\":\"hold\",\"name\":\"압축지속\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"폭비율\",\"defaultOn\":true},"
+    "{\"id\":\"mark\",\"name\":\"해제·확정\",\"defaultOn\":true}]},"
     "{\"id\":\"fx_sniper\",\"name\":\"스나이퍼스코프\",\"layers\":["
     "{\"id\":\"three\",\"name\":\"삼선 비율\",\"defaultOn\":true},"
     "{\"id\":\"reg\",\"name\":\"회귀 비율\",\"defaultOn\":true},"
@@ -1756,6 +1786,62 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
                             first ? "" : ",", st.sn_score, st.sn_ex, st.sn_ratio, st.sn_stage,
                             st.sn_compound, st.sn_tgt, st.sn_px, st.sn_rgb, st.sn_px_exit,
                             st.sn_below, st.sn_above, st.sn_reset);
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"os\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 420 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s[%d,%u,%d,%d,%d,%d,%d,%d,%u,%d,%d,%u,%d,%.10g,%u,%d,%d,%u,%d,%d,%d,%u,%d,%d,%d,%u,%d]",
+                            first ? "" : ",", st.os_judge, st.os_judge_rgb, st.os_fut, st.os_prof,
+                            st.os_di, st.os_adx, st.os_sq_on, st.os_sq_len, st.os_sq_rgb, st.os_sq_w,
+                            st.os_hold, st.os_hold_rgb, st.os_ratio_on, st.os_ratio, st.os_ratio_rgb,
+                            st.os_rel_on, st.os_rel_len, st.os_rel_rgb, st.os_rel_w,
+                            st.os_cf_on, st.os_cf_len, st.os_cf_rgb, st.os_cf_w,
+                            st.os_ent_on, st.os_ent_y, st.os_ent_rgb, st.os_ent_w);
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"cu\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 1800 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[", first ? "" : ",");
+            SNAP_CLAMP(buf, off);
+            for (int i = 0; i < st.cu_n && i < TR_FXCU_PLOTS; i++) {
+                off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%u,%.10g,%u,%u]",
+                                i > 0 ? "," : "", (unsigned)st.cu_id[i], st.cu_v[i], st.cu_rgb[i],
+                                (unsigned)st.cu_w[i]);
+                SNAP_CLAMP(buf, off);
+            }
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "]");
+            SNAP_CLAMP(buf, off);
+            first = false;
+        }
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"snco\":[");
+        SNAP_CLAMP(buf, off);
+        first = true;
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 1200 - SNAP_TAIL_FIXED - gaps_len;) {
+            tr_bar_status_t st;
+            memset(&st, 0, sizeof(st));
+            tr_engine_pipe_status_at(eng, pipe_id, k, &st);
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[", first ? "" : ",");
+            SNAP_CLAMP(buf, off);
+            for (int i = 0; i < st.snco_n && i < TR_SNCO_PLOTS; i++) {
+                off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%u,%.10g,%u,%u]",
+                                i > 0 ? "," : "", (unsigned)st.snco_id[i], st.snco_v[i], st.snco_rgb[i],
+                                (unsigned)st.snco_w[i]);
+                SNAP_CLAMP(buf, off);
+            }
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "]");
             SNAP_CLAMP(buf, off);
             first = false;
         }

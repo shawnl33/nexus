@@ -1,0 +1,23 @@
+/*	Description : (M)oney (F)low (I)ndex
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+ 
+Input 	: Period(Numeric);
+Var  	: value1(0), value2(0), value3(0), value4(0);
+
+value1 = H + L + C;
+value4 = V * value1 / 3;
+
+if value1 > value1[1] then
+	value2 = value4;
+else
+	value2 = 0;
+
+if value1 < value1[1] then
+	value3 = value4;
+else
+	value3 = 0;
+
+MFI = 100 - 100 / (1 + (AccumN(value2, Period) / AccumN(value3, Period)));

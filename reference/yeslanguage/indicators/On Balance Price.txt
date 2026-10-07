@@ -1,0 +1,11 @@
+Var : OBP(0) ;
+
+If Close > Close[1] Then 
+	OBP = 1;
+else if Close < Close[1] Then
+	OBP = -1;
+else
+	OBP = 0;
+
+Plot1(accum(OBP), "On Balance Price");
+PlotBaseLine1(0, "기준선0");

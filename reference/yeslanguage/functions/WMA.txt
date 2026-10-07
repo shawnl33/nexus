@@ -1,0 +1,20 @@
+/*	Description : (W)eighted (M)oving (A)verage
+ *
+ *				Provided By	: YesStock Inc. (c) Copyright 2006
+ *				E-Mail 		: webmaster@yesstock.com
+ */
+Input	: Price(NumericSeries), Length(NumericSimple);
+Var		: Sum(0), Counter(0), CSum(0);
+
+Sum 	= 0;
+CSum 	= 0;
+
+For counter = 0 To Length - 1 Begin
+	Sum = Sum + Price[counter] * (Length - counter);
+	CSum = CSum + Length - counter;
+End;
+
+If CSum > 0 Then 
+	WMA = Sum / CSum;
+Else
+	WMA = 0;
