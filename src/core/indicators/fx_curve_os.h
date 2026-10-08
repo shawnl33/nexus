@@ -10,7 +10,7 @@
 #include "core/indicators/fx_entry_cand.h"
 #include "core/indicators/fx_mirae_v1.h"
 
-#define TR_FXCU_PLOTS 26
+#define TR_FXCU_PLOTS 28
 
 typedef struct {
     double dn_lo, up_lo, dn_hi, up_hi;

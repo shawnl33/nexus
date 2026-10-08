@@ -141,6 +141,11 @@ void tr_fxcu_eval(tr_fxcu_t *s, const tr_fxmirae_input_t *in, const tr_fxsyn_t *
     set_plot(&s->plots[15], ldn, o->ldn_382, RGB_GREEN, 2);
     set_plot(&s->plots[16], ldn, o->ldn_500, RGB_GREEN, 2);
     set_plot(&s->plots[17], ldn, o->ldn_618, RGB_GREEN, 2);
+    /* Plot27·28. 상승 0.382가 하락 최고 위, 하락 0.618이 상승 최저 아래. */
+    int struct_up = lup && ldn && o->lup_382 > o->ldn_high;
+    int struct_dn = o->lup_low > 0.0 && ldn && o->ldn_618 < o->lup_low;
+    set_plot(&s->plots[26], struct_up, o->lup_382, RGB_(220, 0, 220), 3);
+    set_plot(&s->plots[27], struct_dn, o->ldn_618, RGB_(0, 170, 170), 3);
     const tr_fxsyn_t *syns[3] = {syn5, syn15, syn30};
     const uint32_t syn_rgb[3] = {RGB_(240, 130, 30), RGB_(140, 70, 190), RGB_(20, 130, 180)};
     for (int i = 0; i < 3; i++) {
