@@ -47,7 +47,7 @@ static uint32_t judge_rgb(int state) {
     if (state == -50) {
         return RGB_(140, 165, 255);
     }
-    return RGB_(150, 150, 150);
+    return RGB_(108, 108, 108);
 }
 
 static int stage_of(int hold) {
@@ -209,7 +209,7 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
     int dir = dec.unified > 0 ? 1 : (dec.unified < 0 ? -1 : 0);
     uint32_t jrgb = judge_rgb(dec.unified);
     if (dir != 0 && (fut != dir || dec.di != dir || s->session.out.state5 * dir < 0)) {
-        jrgb = RGB_(210, 210, 210);
+        jrgb = RGB_(150, 150, 150);
     }
 
     int pos = 0;

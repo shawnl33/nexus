@@ -25,6 +25,12 @@ typedef struct {
     size_t len;
 } ls_buf_t;
 
+/* 프로세스에 하나. 프로필을 바꿀 때 REST 베이스와 실시간 URL을 같이 바꾼다.
+ * rest_base 는 끝 슬래시 없이 둔다. 기본값은 LS 실전 서버다. */
+void ls_endpoints_set(const char *rest_base, const char *ws_url);
+const char *ls_rest_base(void);
+const char *ls_ws_url(void);
+
 typedef struct {
     const char *url;         /* 전체 URL */
     const char *token;       /* Bearer 토큰 (NULL 가능) */

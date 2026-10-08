@@ -63,14 +63,21 @@ bool ls_chart_retryable(int rc) {
 #define LS_CHART_MAX_ATTEMPTS 3
 #define LS_CHART_RETRY_WAIT_US 2000000
 
-static const char *path_for(ls_chart_kind_t kind) {
+static void path_for(ls_chart_kind_t kind, char *out, size_t n) {
+    const char *path = 0;
     switch (kind) {
     case LS_CHART_STOCK_MIN:
-    case LS_CHART_STOCK_DAY: return "https://openapi.ls-sec.co.kr:8080/stock/chart";
+    case LS_CHART_STOCK_DAY: path = "/stock/chart"; break;
     case LS_CHART_FUT_MIN:
-    case LS_CHART_FUT_DAY: return "https://openapi.ls-sec.co.kr:8080/futureoption/chart";
+    case LS_CHART_FUT_DAY: path = "/futureoption/chart"; break;
     }
-    return 0;
+    if (path == 0 || n == 0) {
+        if (n > 0) {
+            out[0] = '\0';
+        }
+        return;
+    }
+    snprintf(out, n, "%s%s", ls_rest_base(), path);
 }
 
 static const char *tr_for(ls_chart_kind_t kind) {
@@ -257,8 +264,10 @@ int ls_chart_fetch_minute(ls_auth_t *auth, ls_chart_kind_t kind, const char *shc
         cts_date != 0 && cts_date[0] > ' ' ? cts_date : " ",
         cts_time != 0 && cts_time[0] > ' ' ? cts_time : " ");
 
+    char url[192];
+    path_for(kind, url, sizeof(url));
     ls_http_req_t req = {0};
-    req.url = path_for(kind);
+    req.url = url;
     req.tr_cd = tr_for(kind);
     bool cts_set = (cts_date != 0 && cts_date[0] > ' ') || (cts_time != 0 && cts_time[0] > ' ');
     req.tr_cont = cts_set ? "Y" : "N";
@@ -429,8 +438,10 @@ int ls_chart_fetch_fut_night(ls_auth_t *auth, const char *focode, int32_t cnt,
     snprintf(body, sizeof(body),
              "{\"t8461InBlock\":{\"focode\":\"%s\",\"cgubun\":\"B\",\"bgubun\":\"1\",\"cnt\":%d}}",
              focode, (int)cnt);
+    char url[192];
+    snprintf(url, sizeof(url), "%s/futureoption/chart", ls_rest_base());
     ls_http_req_t req = {0};
-    req.url = "https://openapi.ls-sec.co.kr:8080/futureoption/chart";
+    req.url = url;
     req.tr_cd = "t8461";
     req.tr_cont = "N";
     req.body_json = body;
@@ -583,8 +594,10 @@ int ls_chart_fetch_daily(ls_auth_t *auth, ls_chart_kind_t kind, const char *shco
                  shcode, (int)qrycnt, ed);
     }
 
+    char url[192];
+    path_for(kind, url, sizeof(url));
     ls_http_req_t req = {0};
-    req.url = path_for(kind);
+    req.url = url;
     req.tr_cd = tr_for(kind);
     req.tr_cont = "N";
     req.body_json = body;
@@ -742,8 +755,10 @@ int ls_chart_fetch_ovs_minute(ls_auth_t *auth, const char *shcode,
              "{\"o3103InBlock\":{\"shcode\":\"%s\",\"ncnt\":%d,\"readcnt\":%d,"
              "\"cts_date\":\"\",\"cts_time\":\"\"}}",
              shcode, (int)ncnt, (int)readcnt);
+    char url[192];
+    snprintf(url, sizeof(url), "%s/overseas-futureoption/chart", ls_rest_base());
     ls_http_req_t req = {0};
-    req.url = "https://openapi.ls-sec.co.kr:8080/overseas-futureoption/chart";
+    req.url = url;
     req.tr_cd = "o3103";
     req.tr_cont = "N";
     req.body_json = body;

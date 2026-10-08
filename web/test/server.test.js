@@ -78,6 +78,14 @@ before(async () => {
         }
       } else if (type === "chart.cap") {
         payload = { bars: reqData.bars };
+      } else if (type === "broker.select") {
+        if (reqData.id === "ls-paper") {
+          payload = { id: reqData.id, label: "LS 모의", env: "paper" };
+        } else {
+          status = "rejected";
+          errorCode = "unknown_profile";
+          payload = {};
+        }
       } else if (type === "market.unwatch") {
         payload = { shcode: reqData.shcode, watches: 0 };
       } else {
@@ -111,6 +119,49 @@ after(async () => {
   stopBridge();
   router.close();
   publisher.close();
+});
+
+test("POST /api/broker/profile proxies broker.select", async () => {
+  let res = await fetch(`${base}/api/broker/profile`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "ls-paper" }),
+  });
+  assert.equal(res.status, 403);
+
+  res = await fetch(`${base}/api/broker/profile`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: "{",
+  });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, "invalid_json");
+
+  res = await fetch(`${base}/api/broker/profile`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ id: "LS 실전" }),
+  });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, "invalid_profile");
+
+  res = await fetch(`${base}/api/broker/profile`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ id: "ls-paper" }),
+  });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.payload.id, "ls-paper");
+  assert.equal(data.payload.env, "paper");
+
+  res = await fetch(`${base}/api/broker/profile`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ id: "nh-live" }),
+  });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error_code, "unknown_profile");
 });
 
 test("GET /api/status forwards engine reply", async () => {
@@ -217,7 +268,7 @@ test("POST /api/symbols/watch proxies market.watch with token", async () => {
   assert.equal(res.status, 403);
 
   // shcode 형식 검증: 짧음/김/비문자
-  for (const shcode of ["abc", "a".repeat(13), 12345]) {
+  for (const shcode of ["abc", "a".repeat(33), "bad/code", 12345]) {
     res = await fetch(`${base}/api/symbols/watch`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },

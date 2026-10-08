@@ -43,6 +43,17 @@ static void sleep_ms(int ms) {
 #include "yyjson.h"
 
 #include <signal.h>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
+
+#include "runtime/broker_profile.h"
+#include "adapters/nh/nh_auth.h"
+#include "adapters/nh/nh_chart.h"
+#include "adapters/nh/nh_rt.h"
+#include "adapters/nh/nh_master.h"
 
 /* status 페이로드에 싣는 자기 pid — traderctl engine restart가 소멸을 확인하는 기준이다 */
 static long self_pid(void) {
@@ -182,7 +193,7 @@ static const tr_session_policy_t SESS_FUT = {540, 525, 300, TR_SESSION_WEEKDAYS}
  * 되므로 장기 보관하지 않는다 — shcode/instrument_id만 보관하고 매번 pipe_find로 조회한다.
  * 저장소 풀 슬롯은 엔진 파이프라인의 bb_storage 포인터로 역추적한다 (별도 장부 없음). */
 typedef struct {
-    char shcode[16];
+    char shcode[40];
     char tick_cd[4]; /* 실제 구독 중인 채널 (해지 시 그대로 사용) */
     char ob_cd[4];
     int kind;          /* LS_MARKET_* 값 — 주식/국내선물/해외선물 판별 (resolve_instrument) */
@@ -323,10 +334,89 @@ static int backfill_ovs_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeli
  * 호가 지표는 과거 호가가 없어 라이브부터 워밍업된다)
  * kind는 LS_MARKET_* 값. rt_only_out은 해외선물이 RT-only로 표시됐을 때 true로 세팅된다.
  * 성공 시 주입한 봉 수, 실패 시 -1. */
+static const tr_broker_profile_t *g_broker = 0;
+static nh_auth_t g_nh;
+static nh_rt_t *g_nh_rt = 0;
+
+static bool broker_is_nh(void);
+
+static void nh_watch_realtime(const char *code, uint64_t id) {
+    if (!broker_is_nh() || nh_exch_for_symbol(code) == 0) {
+        return;
+    }
+    if (g_nh_rt == 0) {
+        char err[128] = {0};
+        g_nh_rt = nh_rt_open(&g_nh, err, sizeof(err));
+        if (g_nh_rt == 0) {
+            fprintf(stderr, "NH realtime: %s\n", err[0] != 0 ? err : "open failed");
+            return;
+        }
+    }
+    nh_rt_subscribe(g_nh_rt, code, id);
+}
+static nh_master_t *g_nh_master = 0;
+
+static bool broker_is_nh(void) {
+    return g_broker != 0 && strcmp(g_broker->broker, "nh") == 0;
+}
+
+static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t *pipe,
+                                const char *shcode, int kind, bool *rt_only_out);
+static int watch_pool_of(const tr_pipeline_t *p);
+
+/* NH로 바꿀 때 파이프에 남아 있는 LS 봉을 지운 뒤, NH가 주는 종목만 다시 채운다. */
+static int nh_replace_pipe_bars(tr_engine_t *eng, tr_pipeline_t *pipe, const char *shcode, int kind) {
+    if (pipe == 0) {
+        return 0;
+    }
+    if (tr_engine_pipe_resize(eng, pipe, g_bar_cap)) {
+        int slot = watch_pool_of(pipe);
+        if (slot >= 0) {
+            tr_engine_pipe_attach_status_ring(eng, pipe->instrument_id, g_status_pool[slot], g_bar_cap);
+            tr_engine_pipe_attach_market(eng, pipe->instrument_id, g_mkt_pool[slot],
+                                         sizeof(g_mkt_pool[0]) / sizeof(g_mkt_pool[0][0]));
+        }
+    }
+    bool rt_only = false;
+    return backfill_minute_bars(0, eng, pipe, shcode, kind, &rt_only);
+}
+
+static int backfill_nh_minutes(tr_engine_t *eng, tr_pipeline_t *pipe, const char *shcode) {
+    const char *exch = nh_exch_for_symbol(shcode);
+    if (exch == 0) {
+        fprintf(stderr, "NH backfill skip %s\n", shcode != 0 ? shcode : "");
+        return 0;
+    }
+    char err[128] = {0};
+    char nxt[80] = {0};
+    size_t n = 0;
+    int qty = (int)g_bar_cap;
+    if (qty < 1) {
+        qty = 1;
+    }
+    if (qty > 999) {
+        qty = 999;
+    }
+    if (nh_chart_fetch_minutes(&g_nh, shcode, exch, qty, "", pipe->instrument_id, g_hist, HIST_CAP, &n,
+                               nxt, sizeof(nxt), err, sizeof(err)) != 0) {
+        fprintf(stderr, "NH backfill %s: %s\n", shcode, err);
+        return 0;
+    }
+    const tr_candle_t *src = g_hist;
+    if (n > g_bar_cap) {
+        src = g_hist + (n - g_bar_cap);
+        n = g_bar_cap;
+    }
+    return inject_with_cache(eng, pipe, src, n);
+}
+
 static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t *pipe,
                                 const char *shcode, int kind, bool *rt_only_out) {
     if (rt_only_out != 0) {
         *rt_only_out = false;
+    }
+    if (broker_is_nh()) {
+        return backfill_nh_minutes(eng, pipe, shcode);
     }
     if (kind == LS_MARKET_OVS_FUT) {
         return backfill_ovs_minute_bars(auth, eng, pipe, shcode, kind, rt_only_out);
@@ -552,6 +642,9 @@ static time_t g_master_retry_after = 0;
 /* 기동 때 마스터 조회가 실패하면 검색(market.instruments)이 세션 내내 거절된다.
  * 명령 시점에 한 번 더 받고, 연속 실패는 30초 간격으로만 재시도한다. */
 static bool ensure_master(live_ctx_t *lc) {
+    if (broker_is_nh()) {
+        return false;
+    }
     if (lc->master != 0) {
         return true;
     }
@@ -657,6 +750,19 @@ static int resolve_instrument(tr_ls_master_t *master, const char *shcode,
         return LS_MARKET_OVS_FUT;
     }
     return strlen(shcode) > 6 ? LS_MARKET_KP200_FUT : LS_MARKET_KOSPI; /* 폐기 예정 추정 */
+}
+
+/* SPXW는 해외옵션 세션과 0.05 틱을 쓴다. */
+static void apply_nh_symbol(const char *code, int *kind, double *tick) {
+    if (!broker_is_nh() || nh_exch_for_symbol(code) == 0) {
+        return;
+    }
+    if (kind != 0) {
+        *kind = LS_MARKET_OVS_FUT;
+    }
+    if (tick != 0) {
+        *tick = nh_tick_raw(code);
+    }
 }
 
 /* 엔진의 is_futures 규칙(호가 부호·자동 틱)은 국내·해외 선물이 같다 */
@@ -1233,6 +1339,278 @@ static int hit_ovs_cmp(const void *a, const void *b) {
     return strcmp(ia->shcode, ib->shcode);
 }
 
+static bool profile_key_present(const char *name, void *ctx) {
+    (void)ctx;
+    return ls_auth_env_present(name);
+}
+
+static void read_broker_profile_id(char *out, size_t n) {
+    if (n == 0) {
+        return;
+    }
+    out[0] = '\0';
+    FILE *f = fopen("web/.runtime/broker-profile", "r");
+    if (f == 0) {
+        return;
+    }
+    if (fgets(out, (int)n, f) != 0) {
+        size_t len = strlen(out);
+        while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r' || out[len - 1] == ' ')) {
+            out[--len] = '\0';
+        }
+    }
+    fclose(f);
+}
+
+static void save_broker_profile_id(const char *id) {
+#ifdef _WIN32
+    _mkdir("web");
+    _mkdir("web/.runtime");
+#else
+    mkdir("web", 0755);
+    mkdir("web/.runtime", 0700);
+#endif
+    FILE *f = fopen("web/.runtime/broker-profile", "w");
+    if (f == 0) {
+        fprintf(stderr, "broker profile not saved\n");
+        return;
+    }
+    fprintf(f, "%s\n", id);
+    fclose(f);
+}
+
+/* 0이면 적용됨. 그 외에는 명령 error_code로 쓸 리터럴. */
+static const char *switch_broker_profile(const char *id) {
+    const tr_broker_profile_t *next = tr_broker_profile_find(id);
+    if (!tr_broker_profile_usable(next, profile_key_present, 0)) {
+        return "unknown_profile";
+    }
+    if (g_broker != 0 && strcmp(g_broker->id, next->id) == 0) {
+        return 0;
+    }
+    if (strcmp(next->broker, "nh") == 0) {
+        if (!nh_auth_init(&g_nh, next->rest_base, next->app_key_env, next->secret_env) ||
+            !nh_auth_refresh(&g_nh)) {
+            fprintf(stderr, "NH auth failed: %s\n", g_nh.last_error);
+            return "auth_failed";
+        }
+        live_ctx_t *lc = &g_live_ctx;
+        if (lc->rt != 0) {
+            for (int i = 0; i < lc->watch_count; i++) {
+                tr_ls_rt_unsubscribe(lc->rt, lc->watches[i].tick_cd, lc->watches[i].shcode);
+                tr_ls_rt_unsubscribe(lc->rt, lc->watches[i].ob_cd, lc->watches[i].shcode);
+            }
+        }
+        g_broker = next;
+        for (int i = 0; i < lc->watch_count; i++) {
+            watch_entry_t *w = &lc->watches[i];
+            tr_pipeline_t *pipe = tr_engine_pipe_find(lc->engine, w->instrument_id);
+            if (pipe == 0) {
+                continue;
+            }
+            int nb = nh_replace_pipe_bars(lc->engine, pipe, w->shcode, w->kind);
+            w->rt_only = false;
+            fprintf(stderr, "NH backfill %s: %d\n", w->shcode, nb);
+            nh_watch_realtime(w->shcode, w->instrument_id);
+        }
+        save_broker_profile_id(next->id);
+        printf("broker: %s\n", next->label);
+        fflush(stdout);
+        return 0;
+    }
+    const tr_broker_profile_t *prev = g_broker;
+    if (g_nh_rt != 0) {
+        nh_rt_close(g_nh_rt);
+        g_nh_rt = 0;
+    }
+    ls_endpoints_set(next->rest_base, next->ws_url);
+    ls_auth_bind(g_live_ctx.auth, next->app_key_env, next->secret_env);
+    if (!ls_auth_refresh(g_live_ctx.auth)) {
+        fprintf(stderr, "broker auth failed: %s\n", g_live_ctx.auth->last_error);
+        if (prev != 0) {
+            ls_endpoints_set(prev->rest_base, prev->ws_url);
+            ls_auth_bind(g_live_ctx.auth, prev->app_key_env, prev->secret_env);
+            if (!ls_auth_refresh(g_live_ctx.auth)) {
+                fprintf(stderr, "broker auth restore failed: %s\n", g_live_ctx.auth->last_error);
+            }
+        }
+        return "auth_failed";
+    }
+    live_ctx_t *lc = &g_live_ctx;
+    for (int i = 0; i < lc->watch_count && lc->rt != 0; i++) {
+        tr_ls_rt_unsubscribe(lc->rt, lc->watches[i].tick_cd, lc->watches[i].shcode);
+        tr_ls_rt_unsubscribe(lc->rt, lc->watches[i].ob_cd, lc->watches[i].shcode);
+    }
+    if (lc->rt == 0) {
+        ls_rt_config_t rcfg;
+        char rerr[128] = {0};
+        memset(&rcfg, 0, sizeof(rcfg));
+        rcfg.url = ls_ws_url();
+        rcfg.auth = lc->auth;
+        rcfg.queue_capacity = 512;
+        rcfg.reconnect_min_ms = 1000;
+        rcfg.reconnect_max_ms = 15000;
+        lc->rt = tr_ls_rt_open(&rcfg, rerr, sizeof(rerr));
+        if (lc->rt == 0) {
+            fprintf(stderr, "LS realtime open failed: %s\n", rerr);
+            return "auth_failed";
+        }
+    } else {
+        tr_ls_rt_use_url(lc->rt, next->ws_url);
+    }
+    if (lc->master != 0) {
+        ls_master_free(lc->master);
+        lc->master = 0;
+        g_master_retry_after = 0;
+    }
+    ensure_master(lc);
+    for (int i = 0; i < lc->watch_count; i++) {
+        watch_entry_t *w = &lc->watches[i];
+        tr_pipeline_t *pipe = tr_engine_pipe_find(lc->engine, w->instrument_id);
+        if (pipe != 0) {
+            if (tr_engine_pipe_resize(lc->engine, pipe, g_bar_cap)) {
+                int slot = watch_pool_of(pipe);
+                tr_engine_pipe_attach_status_ring(lc->engine, w->instrument_id, g_status_pool[slot],
+                                                  g_bar_cap);
+                tr_engine_pipe_attach_market(lc->engine, w->instrument_id, g_mkt_pool[slot],
+                                             MKT_POOL_CAP);
+            }
+            bool rt_only = false;
+            int nb = backfill_minute_bars(lc->auth, lc->engine, pipe, w->shcode, w->kind, &rt_only);
+            w->rt_only = rt_only;
+            fprintf(stderr, "broker backfill %s: %d\n", w->shcode, nb);
+        }
+        if (lc->rt != 0) {
+            tr_ls_rt_subscribe(lc->rt, w->tick_cd, w->shcode, w->instrument_id);
+            tr_ls_rt_subscribe(lc->rt, w->ob_cd, w->shcode, w->instrument_id);
+        }
+    }
+    g_broker = next;
+    save_broker_profile_id(next->id);
+    printf("broker: %s\n", next->label);
+    fflush(stdout);
+    return 0;
+}
+
+static void nh_market_instruments(tr_ipc_command_t *cmd, const char *p) {
+    static char buf[256 * 1024];
+    static nh_inst_hit_t hits[1024];
+    static char expiries[400][48];
+    if (g_nh_master == 0) {
+#ifdef _WIN32
+        _mkdir("web");
+        _mkdir("web/.runtime");
+#else
+        mkdir("web", 0755);
+        mkdir("web/.runtime", 0700);
+#endif
+        char err[128] = {0};
+        g_nh_master = nh_master_open_cached("web/.runtime", err, sizeof(err));
+        if (g_nh_master == 0) {
+            fprintf(stderr, "NH master: %s\n", err[0] != 0 ? err : "unavailable");
+            cmd->status = "rejected";
+            cmd->error_code = "registry_unavailable";
+            cmd->payload_json = 0;
+            return;
+        }
+        printf("NH instruments: %zu\n", nh_master_count(g_nh_master));
+        fflush(stdout);
+    }
+    char qbuf[80];
+    char expiry[48];
+    qbuf[0] = 0;
+    expiry[0] = 0;
+    long limit = 20;
+    int kind = -1;
+    yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
+    if (doc != 0) {
+        yyjson_val *data = yyjson_obj_get(yyjson_doc_get_root(doc), "data");
+        yyjson_val *qv = data != 0 ? yyjson_obj_get(data, "q") : 0;
+        yyjson_val *lv = data != 0 ? yyjson_obj_get(data, "limit") : 0;
+        yyjson_val *kv = data != 0 ? yyjson_obj_get(data, "kind") : 0;
+        yyjson_val *ev = data != 0 ? yyjson_obj_get(data, "expiry") : 0;
+        if (yyjson_is_str(qv)) {
+            snprintf(qbuf, sizeof(qbuf), "%s", yyjson_get_str(qv));
+        }
+        if (yyjson_is_num(lv)) {
+            limit = (long)yyjson_get_num(lv);
+        }
+        if (yyjson_is_num(kv)) {
+            kind = (int)yyjson_get_num(kv);
+        }
+        if (yyjson_is_str(ev)) {
+            snprintf(expiry, sizeof(expiry), "%s", yyjson_get_str(ev));
+        }
+        yyjson_doc_free(doc);
+    }
+    if (kind < -1 || kind > 4) {
+        kind = -1;
+    }
+    long max_limit = kind == 3 && expiry[0] != 0 ? 1024 : 200;
+    if (limit < 1) {
+        limit = 20;
+    }
+    if (limit > max_limit) {
+        limit = max_limit;
+    }
+    size_t nexp = 0;
+    size_t n = 0;
+    if (kind == 3 && expiry[0] == 0 && qbuf[0] == 0) {
+        nexp = nh_master_expiries(g_nh_master, &expiries[0][0], 48, 400);
+    } else {
+        n = nh_master_search(g_nh_master, qbuf, kind, expiry, hits, (size_t)limit);
+    }
+    /* 옵션 체인은 한 만기에 1000개 가까이 된다. 이름을 넣으면 IPC 64KB를 넘기고
+     * 대시보드가 목록 실패로 본다. 체인 응답은 코드·콜풋·행사가만 보낸다. */
+    int compact = kind == 3 && expiry[0] != 0;
+    int off = snprintf(buf, sizeof(buf), "{\"total\":%zu,\"returned\":%zu,\"items\":[",
+                       nh_master_count(g_nh_master), n);
+    SNAP_CLAMP(buf, off);
+    size_t written = 0;
+    for (size_t i = 0; i < n && off < 60 * 1024; i++) {
+        if (compact) {
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s{\"shcode\":\"%s\",\"cp\":\"%c\",\"strike\":%.10g}",
+                            written > 0 ? "," : "", hits[i].shcode,
+                            hits[i].cp != 0 ? hits[i].cp : '?', hits[i].strike);
+        } else {
+            char name_esc[160];
+            size_t ne = 0;
+            for (const char *s = hits[i].name; *s != 0 && ne + 2 < sizeof(name_esc); s++) {
+                if (*s == '"' || *s == '\\') {
+                    name_esc[ne++] = '\\';
+                }
+                name_esc[ne++] = *s;
+            }
+            name_esc[ne] = 0;
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%s{\"shcode\":\"%s\",\"name\":\"%s\",\"fut\":%d", written > 0 ? "," : "",
+                            hits[i].shcode, name_esc, hits[i].fut);
+            SNAP_CLAMP(buf, off);
+            if (hits[i].cp == 'C' || hits[i].cp == 'P') {
+                off += snprintf(buf + off, sizeof(buf) - (size_t)off, ",\"cp\":\"%c\",\"strike\":%.10g",
+                                hits[i].cp, hits[i].strike);
+                SNAP_CLAMP(buf, off);
+            }
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "}");
+        }
+        SNAP_CLAMP(buf, off);
+        written++;
+    }
+    (void)written;
+    off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"expiries\":[");
+    SNAP_CLAMP(buf, off);
+    for (size_t i = 0; i < nexp && off < (int)sizeof(buf) - 80; i++) {
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s\"%s\"", i > 0 ? "," : "",
+                        expiries[i]);
+        SNAP_CLAMP(buf, off);
+    }
+    snprintf(buf + off, sizeof(buf) - (size_t)off, "]}");
+    cmd->status = "applied";
+    cmd->error_code = "none";
+    cmd->payload_json = buf;
+}
+
 static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     (void)ctx;
     static char payload[512];
@@ -1311,9 +1689,14 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
 
         /* 전체 대체: 기존 워치를 모두 해지하고 파이프라인 0 하나만 남긴다
          * (전략 거래 대상과 무관한 화면 상태 변경) */
-        for (int i = 0; i < lc->watch_count; i++) {
+        for (int i = 0; i < lc->watch_count && lc->rt != 0; i++) {
             tr_ls_rt_unsubscribe(lc->rt, lc->watches[i].tick_cd, lc->watches[i].shcode);
             tr_ls_rt_unsubscribe(lc->rt, lc->watches[i].ob_cd, lc->watches[i].shcode);
+        }
+        if (broker_is_nh() && g_nh_rt != 0) {
+            for (int i = 0; i < lc->watch_count; i++) {
+                nh_rt_unsubscribe(g_nh_rt, lc->watches[i].shcode);
+            }
         }
         while (lc->engine->pipe_count > 1) {
             tr_engine_pipe_remove(lc->engine, lc->engine->pipes[1]->instrument_id);
@@ -1324,10 +1707,13 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         double new_tick = 0.0;
         ensure_master(lc);
         int new_kind = resolve_instrument(lc->master, new_code, &new_name, &new_tick);
+        apply_nh_symbol(new_code, &new_kind, &new_tick);
         const char *new_tick_cd, *new_ob;
         rt_channels_for(new_kind, &new_tick_cd, &new_ob);
-        tr_ls_rt_subscribe(lc->rt, new_tick_cd, new_code, new_id);
-        tr_ls_rt_subscribe(lc->rt, new_ob, new_code, new_id);
+        if (lc->rt != 0 && !broker_is_nh()) {
+            tr_ls_rt_subscribe(lc->rt, new_tick_cd, new_code, new_id);
+            tr_ls_rt_subscribe(lc->rt, new_ob, new_code, new_id);
+        }
 
         tr_session_policy_t new_sess = session_for(new_kind);
         tr_engine_select_symbol(lc->engine, new_id, kind_is_futures(new_kind), new_code,
@@ -1355,6 +1741,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         int nb = backfill_minute_bars(lc->auth, lc->engine, lc->engine->pipes[0], new_code,
                                       new_kind, &rt_only);
         w->rt_only = rt_only;
+        nh_watch_realtime(new_code, new_id);
 
         snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":%d}",
                  new_code, new_name != 0 ? new_name : "", lc->engine->pipes[0]->generation,
@@ -1391,6 +1778,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             double new_tick = 0.0;
             ensure_master(lc);
             int new_kind = resolve_instrument(lc->master, code, &new_name, &new_tick);
+            apply_nh_symbol(code, &new_kind, &new_tick);
             const char *new_tick_cd, *new_ob;
             rt_channels_for(new_kind, &new_tick_cd, &new_ob);
             tr_session_policy_t new_sess = session_for(new_kind);
@@ -1409,8 +1797,10 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             int slot = watch_pool_of(lc->engine->pipes[0]);
             tr_engine_attach_status_ring(lc->engine, g_status_pool[slot], g_bar_cap);
             tr_engine_attach_market(lc->engine, g_mkt_pool[slot], MKT_POOL_CAP);
-            tr_ls_rt_subscribe(lc->rt, new_tick_cd, code, new_id);
-            tr_ls_rt_subscribe(lc->rt, new_ob, code, new_id);
+            if (lc->rt != 0 && !broker_is_nh()) {
+                tr_ls_rt_subscribe(lc->rt, new_tick_cd, code, new_id);
+                tr_ls_rt_subscribe(lc->rt, new_ob, code, new_id);
+            }
             watch_entry_t *w = &lc->watches[lc->watch_count++];
             snprintf(w->shcode, sizeof(w->shcode), "%s", code);
             snprintf(w->tick_cd, sizeof(w->tick_cd), "%s", new_tick_cd);
@@ -1422,6 +1812,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             int nb = backfill_minute_bars(lc->auth, lc->engine, lc->engine->pipes[0], code,
                                           new_kind, &blank_rt_only);
             w->rt_only = blank_rt_only;
+            nh_watch_realtime(code, new_id);
             snprintf(payload, sizeof(payload),
                      "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":%d}",
                      code, new_name != 0 ? new_name : "", lc->engine->pipes[0]->generation,
@@ -1437,6 +1828,18 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         if (pipe != 0) {
             const char *name = 0;
             resolve_instrument(lc->master, code, &name, 0);
+            if (broker_is_nh()) {
+                int nb = nh_replace_pipe_bars(lc->engine, pipe, code, 0);
+                nh_watch_realtime(code, id);
+                snprintf(payload, sizeof(payload),
+                         "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":%d}",
+                         code, name != 0 ? name : "", pipe->generation, nb > 0 ? nb : 0);
+                cmd->status = "applied";
+                cmd->error_code = "none";
+                cmd->payload_json = payload;
+                yyjson_doc_free(doc);
+                return;
+            }
             snprintf(payload, sizeof(payload),
                      "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":0}",
                      code, name != 0 ? name : "", pipe->generation);
@@ -1458,6 +1861,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         const char *name = 0;
         double tick = 0.0;
         int kind = resolve_instrument(lc->master, code, &name, &tick);
+        apply_nh_symbol(code, &kind, &tick);
         tr_session_policy_t sess = session_for(kind);
         pipe = tr_engine_pipe_add(lc->engine, id, kind_is_futures(kind), code, &sess,
                                   (kind == LS_MARKET_OVS_FUT || kind == LS_MARKET_KP200_OPT) ? tick : 0.0,
@@ -1474,8 +1878,10 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         tr_engine_pipe_attach_market(lc->engine, id, g_mkt_pool[slot], MKT_POOL_CAP);
         const char *tick_cd, *ob_cd;
         rt_channels_for(kind, &tick_cd, &ob_cd);
-        tr_ls_rt_subscribe(lc->rt, tick_cd, code, id);
-        tr_ls_rt_subscribe(lc->rt, ob_cd, code, id);
+        if (lc->rt != 0 && !broker_is_nh()) {
+            tr_ls_rt_subscribe(lc->rt, tick_cd, code, id);
+            tr_ls_rt_subscribe(lc->rt, ob_cd, code, id);
+        }
         watch_entry_t *w = &lc->watches[lc->watch_count++];
         snprintf(w->shcode, sizeof(w->shcode), "%s", code);
         snprintf(w->tick_cd, sizeof(w->tick_cd), "%s", tick_cd);
@@ -1487,6 +1893,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         bool rt_only = false;
         int nb = backfill_minute_bars(lc->auth, lc->engine, pipe, code, kind, &rt_only);
         w->rt_only = rt_only;
+        nh_watch_realtime(code, id);
 
         snprintf(payload, sizeof(payload), "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":%d}",
                  code, name != 0 ? name : "", pipe->generation, nb > 0 ? nb : 0);
@@ -1542,8 +1949,13 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             yyjson_doc_free(doc);
             return;
         }
-        tr_ls_rt_unsubscribe(lc->rt, w.tick_cd, w.shcode);
-        tr_ls_rt_unsubscribe(lc->rt, w.ob_cd, w.shcode);
+        if (lc->rt != 0) {
+            tr_ls_rt_unsubscribe(lc->rt, w.tick_cd, w.shcode);
+            tr_ls_rt_unsubscribe(lc->rt, w.ob_cd, w.shcode);
+        }
+        if (broker_is_nh()) {
+            nh_rt_unsubscribe(g_nh_rt, w.shcode);
+        }
         for (int j = wi; j + 1 < lc->watch_count; j++) {
             lc->watches[j] = lc->watches[j + 1];
         }
@@ -1569,7 +1981,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         static char buf[256 * 1024];
         tr_engine_t *eng = g_live_ctx.engine;
         long back_index = 0;
-        char want[16] = {0};
+        char want[40] = {0};
         yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
         if (doc != 0) {
             yyjson_val *data = yyjson_obj_get(yyjson_doc_get_root(doc), "data");
@@ -1882,6 +2294,10 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
     }
 
     if (strstr(p, "\"type\":\"market.instruments\"") != 0) {
+        if (broker_is_nh()) {
+            nh_market_instruments(cmd, p);
+            return;
+        }
         /* 검색: data.q, data.limit(기본 50, 종류 없으면 최대 100).
          * data.kind(0주식 1국내선물 2해외선물 3지수옵션)가 있으면 그 종류만.
          * 옵션은 data.expiry가 비면 만기 키만, 있으면 그 만기의 콜·풋. */
@@ -2013,45 +2429,115 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         return;
     }
 
+    if (strstr(p, "\"type\":\"broker.select\"") != 0) {
+        yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
+        yyjson_val *idv = doc != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0;
+        idv = idv != 0 ? yyjson_obj_get(idv, "id") : 0;
+        if (!yyjson_is_str(idv) || yyjson_get_str(idv)[0] == '\0') {
+            if (doc != 0) {
+                yyjson_doc_free(doc);
+            }
+            cmd->status = "rejected";
+            cmd->error_code = "invalid_profile";
+            cmd->payload_json = 0;
+            return;
+        }
+        const char *fail = switch_broker_profile(yyjson_get_str(idv));
+        if (fail != 0) {
+            cmd->status = "rejected";
+            cmd->error_code = fail;
+            cmd->payload_json = 0;
+            yyjson_doc_free(doc);
+            return;
+        }
+        snprintf(payload, sizeof(payload), "{\"id\":\"%s\",\"label\":\"%s\",\"env\":\"%s\"}",
+                 g_broker->id, g_broker->label, g_broker->env);
+        cmd->status = "applied";
+        cmd->error_code = "none";
+        cmd->payload_json = payload;
+        yyjson_doc_free(doc);
+        return;
+    }
+
     {
-        int off = snprintf(payload, sizeof(payload), "{\"mode\":\"live\",\"running\":%d,\"pid\":%ld,\"shcode\":\"%s\",\"watches\":[",
+        static char status_buf[2048];
+        int off = snprintf(status_buf, sizeof(status_buf),
+                           "{\"mode\":\"live\",\"running\":%d,\"pid\":%ld,\"shcode\":\"%s\",\"watches\":[",
                            (int)g_running, self_pid(),
                            g_live_ctx.engine != 0 ? g_live_ctx.engine->pipes[0]->shcode : "");
-        SNAP_CLAMP(payload, off);
-        for (int i = 0; i < g_live_ctx.watch_count && off < (int)sizeof(payload) - 20; i++) {
-            off += snprintf(payload + off, sizeof(payload) - (size_t)off, "%s\"%s\"",
+        SNAP_CLAMP(status_buf, off);
+        for (int i = 0; i < g_live_ctx.watch_count && off < (int)sizeof(status_buf) - 80; i++) {
+            off += snprintf(status_buf + off, sizeof(status_buf) - (size_t)off, "%s\"%s\"",
                             i > 0 ? "," : "", g_live_ctx.watches[i].shcode);
-            SNAP_CLAMP(payload, off);
+            SNAP_CLAMP(status_buf, off);
         }
-        snprintf(payload + off, sizeof(payload) - (size_t)off, "]}");
+        off += snprintf(status_buf + off, sizeof(status_buf) - (size_t)off,
+                        "],\"profile_id\":\"%s\",\"profile_label\":\"%s\",\"profile_env\":\"%s\",\"profiles\":[",
+                        g_broker != 0 ? g_broker->id : "",
+                        g_broker != 0 ? g_broker->label : "",
+                        g_broker != 0 ? g_broker->env : "");
+        SNAP_CLAMP(status_buf, off);
+        int listed = 0;
+        for (size_t i = 0; i < tr_broker_profile_count() && off < (int)sizeof(status_buf) - 80; i++) {
+            const tr_broker_profile_t *bp = tr_broker_profile_at(i);
+            if (!tr_broker_profile_usable(bp, profile_key_present, 0)) {
+                continue;
+            }
+            off += snprintf(status_buf + off, sizeof(status_buf) - (size_t)off,
+                            "%s{\"id\":\"%s\",\"label\":\"%s\",\"env\":\"%s\",\"broker\":\"%s\"}",
+                            listed > 0 ? "," : "", bp->id, bp->label, bp->env, bp->broker);
+            listed++;
+            SNAP_CLAMP(status_buf, off);
+        }
+        snprintf(status_buf + off, sizeof(status_buf) - (size_t)off, "]}");
+        cmd->payload_json = status_buf;
     }
     cmd->status = "applied";
     cmd->error_code = "none";
-    cmd->payload_json = payload;
 }
 
 static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const char *pub_ep,
                     const char *pidfile) {
-    /* 1) 인증 */
+    /* 1) 인증. 저장된 프로필이 있으면 그것, 없으면 NH 실전. */
+    char saved_profile[40];
+    read_broker_profile_id(saved_profile, sizeof(saved_profile));
+    g_broker = tr_broker_profile_choose(saved_profile[0] != '\0' ? saved_profile : 0,
+                                        profile_key_present, 0);
+    if (g_broker == 0) {
+        fprintf(stderr, "error: no broker profile with keys\n");
+        return 3;
+    }
+    printf("broker: %s\n", g_broker->label);
+    fflush(stdout);
     ls_auth_t auth;
     ls_auth_init(&auth, 0);
-    const char *token = 0;
-    if (!ls_auth_ensure(&auth, &token)) {
-        fprintf(stderr, "error: LS auth: %s\n", auth.last_error);
-        return 3;
+    if (broker_is_nh()) {
+        if (!nh_auth_init(&g_nh, g_broker->rest_base, g_broker->app_key_env, g_broker->secret_env) ||
+            !nh_auth_refresh(&g_nh)) {
+            fprintf(stderr, "error: NH auth: %s\n", g_nh.last_error);
+            return 3;
+        }
+    } else {
+        ls_endpoints_set(g_broker->rest_base, g_broker->ws_url);
+        ls_auth_bind(&auth, g_broker->app_key_env, g_broker->secret_env);
+        const char *token = 0;
+        if (!ls_auth_ensure(&auth, &token)) {
+            fprintf(stderr, "error: LS auth: %s\n", auth.last_error);
+            return 3;
+        }
     }
 
     /* 1-1) 종목 레지스트리 (t8436 + t8467 + t8433 + t8435 WK + o3101 + 해외선물 정적 표). 실패 시 추정으로 계속한다 */
     char merr[128] = {0};
     tr_ls_master_t *master = 0;
-    for (int attempt = 0; attempt < 3 && master == 0; attempt++) {
+    for (int attempt = 0; attempt < 3 && master == 0 && !broker_is_nh(); attempt++) {
         if (attempt > 0) {
             fprintf(stderr, "instrument master retry %d\n", attempt + 1);
             sleep_ms(1000);
         }
         master = ls_master_fetch(&auth, merr, sizeof(merr));
     }
-    if (master == 0) {
+    if (master == 0 && !broker_is_nh()) {
         fprintf(stderr, "instrument master unavailable: %s (fallback to heuristic)\n", merr);
     }
     if (shcode == 0) {
@@ -2063,6 +2549,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     int kind = LS_MARKET_KOSPI;
     if (have_symbol) {
         kind = resolve_instrument(master, shcode, &found_name, &tick_raw);
+        apply_nh_symbol(shcode, &kind, &tick_raw);
         if (kind == LS_MARKET_KOSPI && is_fut) {
             kind = LS_MARKET_KP200_FUT; /* CLI --live-fut 강제 (마스터 실패·추정 시에만 의미) */
         }
@@ -2163,12 +2650,16 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     /* 5) 실시간 구독 */
     ls_rt_config_t rcfg;
     memset(&rcfg, 0, sizeof(rcfg));
+    rcfg.url = ls_ws_url();
     rcfg.auth = &auth;
     rcfg.queue_capacity = 512;
     rcfg.reconnect_min_ms = 1000;
     rcfg.reconnect_max_ms = 15000;
-    tr_ls_rt_t *rt = tr_ls_rt_open(&rcfg, err, sizeof(err));
-    if (rt == 0) {
+    tr_ls_rt_t *rt = 0;
+    if (!broker_is_nh()) {
+        rt = tr_ls_rt_open(&rcfg, err, sizeof(err));
+    }
+    if (!broker_is_nh() && rt == 0) {
         fprintf(stderr, "error: realtime open failed: %s\n", err);
         tr_ipc_close(ipc);
 #ifdef TR_HAS_STORE
@@ -2179,7 +2670,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     /* 주식은 S3_/H1_, 선물은 주간 FC9/FH9·야간 DC0/DH0, 옵션은 OC0/OH0, 해외선물은 OVC/OVH */
     const char *tr_cd = "";
     const char *ob_tr_cd = "";
-    if (have_symbol) {
+    if (have_symbol && rt != 0) {
         rt_channels_for(kind, &tr_cd, &ob_tr_cd);
         if (!tr_ls_rt_subscribe(rt, tr_cd, shcode, ecfg.instrument_id) ||
             !tr_ls_rt_subscribe(rt, ob_tr_cd, shcode, ecfg.instrument_id)) {
@@ -2213,6 +2704,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     g_live_ctx.engine = &engine;
     g_live_ctx.master = master;
     g_live_ctx.auth = &auth;
+    if (have_symbol && broker_is_nh()) {
+        nh_watch_realtime(shcode, ecfg.instrument_id);
+    }
 
     if (have_symbol) {
         printf("live %s %s: streaming (stop with Ctrl+C or 'traderctl engine stop')\n",
@@ -2233,7 +2727,16 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
      * 영구 방치되는 사고(2026-10-01 삼성전자 반나절 빈 차트)를 막기 위해 60초마다
      * 빈 파이프를 다시 백필한다 */
     time_t last_backfill_retry = time(0);
+    time_t last_nh_poll = time(0);
+    int nh_poll_cursor = 0;
     while (!g_stop) {
+        rt = g_live_ctx.rt;
+        if (broker_is_nh() && rt != 0) {
+            tr_ls_rt_close(rt);
+            g_live_ctx.rt = 0;
+            rt = 0;
+        }
+        if (rt != 0 && !broker_is_nh()) {
         tr_ls_rt_service(rt, 20);
         ls_rt_event_t ev;
         while (tr_ls_rt_next(rt, &ev)) {
@@ -2266,6 +2769,39 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                                        (double)ev.bid_total, (double)ev.ask_total);
             }
         }
+        }
+        if (broker_is_nh()) {
+            if (g_nh_rt != 0) {
+                nh_rt_service(g_nh_rt, 20);
+                nh_rt_tick_t ntk;
+                while (nh_rt_next(g_nh_rt, &ntk)) {
+                    tr_event_envelope_t env;
+                    memset(&env, 0, sizeof(env));
+                    env.kind = TR_EVENT_TICK;
+                    env.event_time_us = ntk.event_time_us;
+                    env.received_time_us = (tr_time_us_t)time(0) * TR_US_PER_SEC;
+                    tr_tick_t tk;
+                    memset(&tk, 0, sizeof(tk));
+                    tk.instrument_id = ntk.instrument_id;
+                    tk.price = ntk.price_raw;
+                    tk.qty = ntk.qty;
+                    tk.source_exec_id = 0;
+                    tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+                    tr_bb_status_t st = tr_engine_on_tick(&engine, &env, &tk);
+                    tr_engine_on_timer(&engine, ntk.event_time_us);
+                    static int nh_tick_logs = 0;
+                    if (nh_tick_logs < 3 || st == TR_BB_REJECTED_OUT_OF_SESSION) {
+                        if (nh_tick_logs < 8) {
+                            fprintf(stderr, "NH tick %s px=%lld st=%d\n", ntk.sym,
+                                    (long long)ntk.price_raw, (int)st);
+                            nh_tick_logs++;
+                        }
+                    }
+                }
+            } else {
+                sleep_ms(20);
+            }
+        }
         if (need_catchup) {
             need_catchup = false;
             rt_catchup_missing_bars(&g_live_ctx, (tr_time_us_t)time(0) * TR_US_PER_SEC);
@@ -2279,6 +2815,53 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
          * RT-only(해외선물 백필 차단) 종목은 제외한다 — 재시도핏 빈 응답이라 로그만
          * 늘어난다. 권한이 풀리면 수동 unwatch/watch로 즉시 백필된다 */
         time_t now_sec = time(0);
+        /* 체결 소켓이 1002로 끊기면 분봉 조회로 현재가를 민다. 초당 최대 5종목. */
+        if (broker_is_nh() && g_live_ctx.watch_count > 0 && now_sec - last_nh_poll >= 1) {
+            int nwatch = g_live_ctx.watch_count;
+            int start = nh_poll_cursor % nwatch;
+            int walked = 0;
+            int tried = 0;
+            while (walked < nwatch && tried < 5) {
+                int i = (start + walked) % nwatch;
+                walked++;
+                watch_entry_t *w = &g_live_ctx.watches[i];
+                const char *exch = nh_exch_for_symbol(w->shcode);
+                tr_pipeline_t *pipe = tr_engine_pipe_find(&engine, w->instrument_id);
+                if (exch == 0 || pipe == 0) {
+                    continue;
+                }
+                tried++;
+                char nerr[128] = {0};
+                char nxt[80] = {0};
+                size_t n = 0;
+                if (nh_chart_fetch_minutes(&g_nh, w->shcode, exch, 2, "", w->instrument_id, g_page, 8,
+                                           &n, nxt, sizeof(nxt), nerr, sizeof(nerr)) == 0 &&
+                    n > 0) {
+                    tr_engine_pipe_merge_bars(&engine, w->instrument_id, g_page, n,
+                                              (tr_time_us_t)now_sec * TR_US_PER_SEC, g_merge_bars,
+                                              BB_STORE_MAX, g_merge_status, BB_STORE_MAX);
+                    /* 체결 소켓이 없을 때는 최근 분봉 종가로 화면을 갱신한다. */
+                    if (!nh_rt_ready(g_nh_rt)) {
+                        const tr_candle_t *last = &g_page[n - 1];
+                        tr_event_envelope_t env;
+                        memset(&env, 0, sizeof(env));
+                        env.kind = TR_EVENT_TICK;
+                        env.event_time_us = last->close_time_us > 0 ? last->close_time_us - 1
+                                                                    : (tr_time_us_t)now_sec * TR_US_PER_SEC;
+                        env.received_time_us = (tr_time_us_t)now_sec * TR_US_PER_SEC;
+                        tr_tick_t tk;
+                        memset(&tk, 0, sizeof(tk));
+                        tk.instrument_id = w->instrument_id;
+                        tk.price = last->close;
+                        tk.qty = 0;
+                        tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
+                        tr_engine_on_tick(&engine, &env, &tk);
+                    }
+                }
+            }
+            nh_poll_cursor = (start + walked) % nwatch;
+            last_nh_poll = time(0);
+        }
         if (now_sec - last_backfill_retry >= 60) {
             last_backfill_retry = now_sec;
             bool retried = false;
@@ -2308,8 +2891,8 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                 last_rt_event_us = (int64_t)time(0) * TR_US_PER_SEC;
             }
         }
-        tr_ipc_poll(ipc, 0, 4, live_command_handler, 0);
-        if (tr_ls_rt_state(rt) == LS_RT_FAILED) {
+        tr_ipc_poll(ipc, 0, rt != 0 ? 4 : 20, live_command_handler, 0);
+        if (rt != 0 && !broker_is_nh() && tr_ls_rt_state(rt) == LS_RT_FAILED) {
             fprintf(stderr, "error: realtime failed\n");
             rc = 1;
             break;
@@ -2319,7 +2902,13 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     printf("stopping: %llu status messages published\n",
            (unsigned long long)(engine.status_seq - 1));
 
-    tr_ls_rt_close(rt);
+    if (g_live_ctx.rt != 0) {
+        tr_ls_rt_close(g_live_ctx.rt);
+    }
+    if (g_nh_rt != 0) {
+        nh_rt_close(g_nh_rt);
+        g_nh_rt = 0;
+    }
     tr_ipc_close(ipc);
     ls_master_free(master);
 #ifdef TR_HAS_STORE

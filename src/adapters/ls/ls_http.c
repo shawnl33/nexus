@@ -2,10 +2,39 @@
 
 #include <curl/curl.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "yyjson.h"
+
+static char g_rest_base[160] = "https://openapi.ls-sec.co.kr:8080";
+static char g_ws_url[160] = "wss://openapi.ls-sec.co.kr:9443/websocket";
+
+static void copy_endpoint(char *dst, size_t n, const char *src) {
+    snprintf(dst, n, "%s", src);
+    size_t len = strlen(dst);
+    while (len > 0 && dst[len - 1] == '/') {
+        dst[--len] = '\0';
+    }
+}
+
+void ls_endpoints_set(const char *rest_base, const char *ws_url) {
+    if (rest_base != 0 && rest_base[0] != '\0') {
+        copy_endpoint(g_rest_base, sizeof(g_rest_base), rest_base);
+    }
+    if (ws_url != 0 && ws_url[0] != '\0') {
+        copy_endpoint(g_ws_url, sizeof(g_ws_url), ws_url);
+    }
+}
+
+const char *ls_rest_base(void) {
+    return g_rest_base;
+}
+
+const char *ls_ws_url(void) {
+    return g_ws_url;
+}
 
 static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
     ls_buf_t *buf = (ls_buf_t *)userdata;

@@ -216,7 +216,7 @@ async function readBody(req) {
 
 // 종목 코드 형식: select/watch/unwatch 본문과 chart 쿼리가 같은 규칙을 쓴다
 function isValidShcode(s) {
-  return typeof s === "string" && s.length >= 4 && s.length <= 12;
+  return typeof s === "string" && /^[A-Za-z0-9._-]{4,32}$/.test(s);
 }
 
 const server = createServer(async (req, res) => {
@@ -286,6 +286,29 @@ const server = createServer(async (req, res) => {
       }
       const type = path.endsWith("/unwatch") ? "market.unwatch" : "market.watch";
       const reply = await engineCommand(`dash-watch-${reqSeq}`, type, JSON.stringify({ shcode }));
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
+    if (req.method === "POST" && path === "/api/broker/profile") {
+      // 증권사 실전/모의 프로필. 시세·잔고·주문이 그 서버로 다시 붙는다.
+      if (!mutationAllowed(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      let id;
+      try {
+        id = JSON.parse(body).id;
+      } catch {
+        return json(res, 400, { error: "invalid_json" });
+      }
+      if (typeof id !== "string" || !/^[a-z0-9-]{1,32}$/.test(id)) {
+        return json(res, 400, { error: "invalid_profile" });
+      }
+      const reply = await engineCommand(
+        `dash-broker-${reqSeq}`,
+        "broker.select",
+        JSON.stringify({ id }),
+        300000,
+      );
       const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
       return json(res, code, reply);
     }
@@ -374,7 +397,7 @@ const server = createServer(async (req, res) => {
       let kind;
       if (kindRaw != null && kindRaw !== "") {
         kind = Number(kindRaw);
-        if (!Number.isInteger(kind) || kind < 0 || kind > 3) {
+        if (!Number.isInteger(kind) || kind < 0 || kind > 4) {
           return json(res, 400, { error: "invalid_kind" });
         }
       }

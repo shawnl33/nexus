@@ -35,12 +35,13 @@ static void civil_stamp(tr_time_us_t t, int32_t utc_offset_min, int64_t *date, i
 
 /* shcode를 JSON 안전 문자(영숫자)만 남겨 복사한다. 페이로드에 그대로 실리므로
  * 따옴표·역슬래시 같은 문자는 걸러낸다 (LS 종목코드는 영숫자). */
-static void sanitize_shcode(char dst[16], const char *src) {
+static void sanitize_shcode(char dst[40], const char *src) {
     size_t n = 0;
     if (src != 0) {
-        for (const char *s = src; *s != '\0' && n < 15; s++) {
+        for (const char *s = src; *s != '\0' && n < 39; s++) {
             char c = *s;
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                c == '_' || c == '-' || c == '.') {
                 dst[n++] = c;
             }
         }

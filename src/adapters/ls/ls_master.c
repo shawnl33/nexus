@@ -9,9 +9,9 @@
 #include "adapters/ls/ls_ovsfut.h"
 #include "yyjson.h"
 
-#define LS_STOCK_MASTER_URL "https://openapi.ls-sec.co.kr:8080/stock/etc"
-#define LS_FUT_MASTER_URL "https://openapi.ls-sec.co.kr:8080/futureoption/market-data"
-#define LS_OVS_MASTER_URL "https://openapi.ls-sec.co.kr:8080/overseas-futureoption/market-data"
+static void master_url(char *out, size_t n, const char *path) {
+    snprintf(out, n, "%s%s", ls_rest_base(), path);
+}
 #define LS_MASTER_STOCK_CAP 4608
 #define LS_MASTER_FUT_CAP 64
 #define LS_MASTER_OVS_CAP 512 /* o3101 행 수 + 정적 표 (2026-10-01 실측 75행) */
@@ -167,8 +167,10 @@ tr_ls_master_t *ls_master_fetch(ls_auth_t *auth, char *errbuf, size_t errlen) {
     if (items == 0) {
         return 0;
     }
+    char url[192];
     ls_buf_t body = {0, 0};
-    int rc = fetch_block(auth, LS_STOCK_MASTER_URL, "t8436",
+    master_url(url, sizeof(url), "/stock/etc");
+    int rc = fetch_block(auth, url, "t8436",
                          "{\"t8436InBlock\":{\"gubun\":\"0\"}}", &body, errbuf, errlen);
     if (rc != LS_HTTP_OK) {
         free(items);
@@ -184,7 +186,8 @@ tr_ls_master_t *ls_master_fetch(ls_auth_t *auth, char *errbuf, size_t errlen) {
     }
     size_t count = (size_t)n;
 
-    rc = fetch_block(auth, LS_FUT_MASTER_URL, "t8467",
+    master_url(url, sizeof(url), "/futureoption/market-data");
+    rc = fetch_block(auth, url, "t8467",
                      "{\"t8467InBlock\":{\"gubun\":\"\"}}", &body, errbuf, errlen);
     if (rc == LS_HTTP_OK) {
         n = ls_master_parse_fut(body.data, body.len, items + count, LS_MASTER_FUT_CAP);
@@ -201,7 +204,8 @@ tr_ls_master_t *ls_master_fetch(ls_auth_t *auth, char *errbuf, size_t errlen) {
     /* 지수옵션 t8433 (2026-10-04 실측 4610행, 코드 8자리, 이름 "C 2610   745.0").
      * 이 응답에는 위클리 문구가 없다. 실패해도 주식·선물 레지스트리는 유지한다. */
     int opt_n = 0;
-    rc = fetch_block(auth, LS_FUT_MASTER_URL, "t8433",
+    master_url(url, sizeof(url), "/futureoption/market-data");
+    rc = fetch_block(auth, url, "t8433",
                      "{\"t8433InBlock\":{\"dummy\":\"\"}}", &body, errbuf, errlen);
     if (rc == LS_HTTP_OK) {
         n = ls_master_parse_opt(body.data, body.len, items + count, LS_MASTER_OPT_CAP);
@@ -227,7 +231,8 @@ tr_ls_master_t *ls_master_fetch(ls_auth_t *auth, char *errbuf, size_t errlen) {
         if (opt_room > item_cap - count) {
             opt_room = item_cap - count;
         }
-        rc = fetch_block(auth, LS_FUT_MASTER_URL, "t8435",
+        master_url(url, sizeof(url), "/futureoption/market-data");
+        rc = fetch_block(auth, url, "t8435",
                          "{\"t8435InBlock\":{\"gubun\":\"WK\"}}", &body, errbuf, errlen);
         if (rc == LS_HTTP_OK) {
             n = ls_master_parse_opt(body.data, body.len, items + count, opt_room);
@@ -251,7 +256,8 @@ tr_ls_master_t *ls_master_fetch(ls_auth_t *auth, char *errbuf, size_t errlen) {
      * DotGb > 2(소수 3자리 이상) 종목은 ×100 raw 가격이 절단되므로 등록하지 않는다 —
      * 정적 표의 배제 원칙과 같다 (ls_ovsfut.h 헤더 참조). 기동 경로라 종목당 로그는
      * 찍지 않고 요약 1줄만 남긴다 */
-    rc = fetch_block(auth, LS_OVS_MASTER_URL, "o3101",
+    master_url(url, sizeof(url), "/overseas-futureoption/market-data");
+    rc = fetch_block(auth, url, "o3101",
                      "{\"o3101InBlock\":{\"gubun\":\"\"}}", &body, errbuf, errlen);
     if (rc == LS_HTTP_OK) {
         static ls_ovsfut_master_row_t rows[LS_MASTER_OVS_CAP];

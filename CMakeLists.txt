@@ -169,6 +169,32 @@ if(CURL_INCLUDE_DIR AND CURL_LIBRARY)
     target_include_directories(ls PUBLIC src ${CURL_INCLUDE_DIR})
     target_compile_options(ls PRIVATE ${TR_WARNINGS})
     set(TR_LS_FOUND TRUE)
+
+    add_library(nh STATIC
+        src/adapters/nh/nh_auth.c
+        src/adapters/nh/nh_http.c
+        src/adapters/nh/nh_chart.c
+        src/adapters/nh/nh_master.c
+    )
+    target_link_libraries(nh PUBLIC core yyjson ${CURL_LIBRARY} ls z)
+    target_include_directories(nh PUBLIC src ${CURL_INCLUDE_DIR})
+    target_compile_options(nh PRIVATE ${TR_WARNINGS})
+    if(WIN32)
+        target_compile_definitions(nh PUBLIC CURL_STATICLIB)
+        target_link_libraries(nh PUBLIC ws2_32 crypt32 secur32 bcrypt iphlpapi wldap32 winpthread)
+    endif()
+
+    add_executable(test_nh_master tests/test_nh_master.c)
+    target_link_libraries(test_nh_master PRIVATE nh)
+    target_include_directories(test_nh_master PRIVATE src)
+    target_compile_options(test_nh_master PRIVATE ${TR_WARNINGS})
+    add_test(NAME nh_master COMMAND test_nh_master)
+
+    add_executable(test_nh_chart tests/test_nh_chart.c)
+    target_link_libraries(test_nh_chart PRIVATE nh)
+    target_include_directories(test_nh_chart PRIVATE src)
+    target_compile_options(test_nh_chart PRIVATE ${TR_WARNINGS})
+    add_test(NAME nh_chart COMMAND test_nh_chart)
 else()
     message(STATUS "libcurl not found: ls 어댑터와 ls 테스트는 건성한다 (미검증 기록)")
 endif()
@@ -220,6 +246,14 @@ if(TR_LWS_READY)
     endif()
     target_compile_options(lsrt PRIVATE ${TR_WARNINGS})
     set(TR_LWS_FOUND TRUE)
+    if(TARGET nh)
+        target_sources(nh PRIVATE src/adapters/nh/nh_rt.c)
+        target_link_libraries(nh PUBLIC ${LWS_LIBRARY})
+        target_include_directories(nh PRIVATE ${LWS_INCLUDE_DIR})
+        if(NOT WIN32)
+            target_link_libraries(nh PUBLIC ssl crypto)
+        endif()
+    endif()
 else()
     if(NOT LWS_INCLUDE_DIR OR NOT LWS_LIBRARY)
         message(STATUS "libwebsockets not found: 실시간 어댑터와 ls_rt 테스트는 건성한다 (미검증 기록)")
@@ -285,6 +319,7 @@ if(TR_IPC_FOUND)
     add_library(runtime STATIC
         src/runtime/engine.c
         src/runtime/bar_cache.c
+        src/runtime/broker_profile.c
         src/adapters/history/csv_ticks.c
     )
     target_link_libraries(runtime PUBLIC core ipc history)
@@ -300,7 +335,7 @@ if(TR_IPC_FOUND)
         PRIVATE TRADING_ENGINE_VERSION="${PROJECT_VERSION}"
     )
     target_compile_options(trading-engine PRIVATE ${TR_WARNINGS})
-    target_link_libraries(trading-engine PRIVATE runtime)
+    target_link_libraries(trading-engine PRIVATE runtime nh)
     if(TR_MINGW_POSIX_THREADS)
         target_link_libraries(trading-engine PRIVATE
             "-Wl,--whole-archive,$<TARGET_FILE:mingw_posix_compat>,--no-whole-archive")
@@ -368,6 +403,11 @@ target_include_directories(test_bar_cache PRIVATE src)
 target_compile_options(test_bar_cache PRIVATE ${TR_WARNINGS})
 add_test(NAME bar_cache COMMAND test_bar_cache)
 
+add_executable(test_broker_profile tests/test_broker_profile.c src/runtime/broker_profile.c)
+target_include_directories(test_broker_profile PRIVATE src)
+target_compile_options(test_broker_profile PRIVATE ${TR_WARNINGS})
+add_test(NAME broker_profile COMMAND test_broker_profile)
+
 add_executable(test_replay tests/test_replay.c)
 target_link_libraries(test_replay PRIVATE history)
 target_compile_options(test_replay PRIVATE ${TR_WARNINGS})
@@ -394,7 +434,7 @@ if(TR_IPC_FOUND AND TR_LWS_FOUND)
     target_compile_definitions(appmain
         PRIVATE main=trading_engine_main TRADING_ENGINE_VERSION="${PROJECT_VERSION}")
     target_compile_options(appmain PRIVATE ${TR_WARNINGS})
-    target_link_libraries(appmain PUBLIC runtime lsrt)
+    target_link_libraries(appmain PUBLIC runtime lsrt nh)
     if(SQLite3_FOUND)
         target_link_libraries(appmain PUBLIC storage)
         target_compile_definitions(appmain PRIVATE TR_HAS_STORE=1)

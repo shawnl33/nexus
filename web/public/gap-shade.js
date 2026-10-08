@@ -1,10 +1,10 @@
-// 가격 없는 분 구간에 옅은 사선과, 보일 만큼 넓으면 "데이터 없음"을 그린다.
-// 가격은 잇지 않는다. 마지막 봉 오른쪽의 빈 차트 여백은 시리즈 항목이 아니므로 그리지 않는다.
-// Gaps.whitespaceRuns가 구간을 만들고, 이 파일은 lightweight-charts 프리미티브만 담당한다.
+// 체결이 없는 분은 데이터 없음이 아니다. 균일 분 그리드의 빈 칸은 그 분에 봉이 없다는
+// 뜻이라 사선과 "데이터 없음"을 그리지 않는다. 가격도 잇지 않는다.
+// 마지막 봉 오른쪽의 빈 차트 여백은 시리즈 항목이 아니므로 여기서 다루지 않는다.
 "use strict";
 
 const GapShade = (() => {
-  const LABEL = "데이터 없음";
+  const LABEL = "";
   const LABEL_MIN_PX = 40;
 
   // series.data()는 whitespace를 빼서 돌려준다. 논리 인덱스는 빈 칸을 유지하므로
@@ -80,8 +80,7 @@ const GapShade = (() => {
           if (right <= 0 || left >= viewW) continue;
           const L = Math.round(left * hr);
           const R = Math.round(right * hr);
-          if (!labels) {
-            shade(ctx, L, R, height, hr);
+          if (!labels || !LABEL) {
             continue;
           }
           const visL = Math.max(left, 0);
@@ -114,26 +113,6 @@ const GapShade = (() => {
         return [shadeView, labelView];
       },
     };
-  }
-
-  function shade(ctx, left, right, height, hr) {
-    const width = Math.max(1, right - left);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(left, 0, width, height);
-    ctx.clip();
-    ctx.fillStyle = "rgba(90, 112, 148, 0.28)";
-    ctx.fillRect(left, 0, width, height);
-    ctx.strokeStyle = "rgba(186, 198, 216, 0.55)";
-    ctx.lineWidth = Math.max(1, Math.round(hr));
-    const step = Math.max(6, Math.round(8 * hr));
-    for (let x = left - height; x < right; x += step) {
-      ctx.beginPath();
-      ctx.moveTo(x, height);
-      ctx.lineTo(x + height, 0);
-      ctx.stroke();
-    }
-    ctx.restore();
   }
 
   return { primitive, LABEL, LABEL_MIN_PX };

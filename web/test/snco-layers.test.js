@@ -70,8 +70,8 @@ test("CO_V3 표시는 Data2와 같이 선 없이 점·가로선·화살표다", 
   const h = S.createHandle(chart);
   const circles = chart.made.filter((s) => s.options.pointMarkersVisible === true);
   assert.equal(circles.length, 6);
+  assert.equal(circles.filter((s) => s.options.pointMarkersRadius === 5).length, 3);
   assert.equal(circles.filter((s) => s.options.pointMarkersRadius === 3).length, 3);
-  assert.equal(circles.filter((s) => s.options.pointMarkersRadius === 2).length, 3);
   for (const s of chart.made) assert.equal(s.options.lineVisible, false);
   const sam = chart.made.find((s) => s.options.color === "#d7dde8");
   assert.equal(sam.primitives.length, 1);

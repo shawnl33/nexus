@@ -41,7 +41,7 @@
 typedef struct {
     uint64_t engine_instance_id;
     uint64_t instrument_id;
-    char shcode[16];             /* 종목 코드 (상태 페이로드 식별용). 없으면 "" (리플레이) */
+    char shcode[40];             /* 종목 코드. NH 옵션(O_SPW…-C7785.0)이 들어간다 */
     tr_session_policy_t session;
     uint32_t timeframe_sec;      /* 기본 봉 주기(초) */
     tr_no_trade_policy_t no_trade;
@@ -191,7 +191,7 @@ typedef struct tr_engine tr_engine_t;
 typedef struct {
     tr_engine_t *engine;        /* 소유 엔진 (봉 이벤트 콜백에서 출력·공유 cfg 접근) */
     uint64_t instrument_id;
-    char shcode[16];            /* 종목 코드 (페이로드 "shcode" 키). JSON 안전 문자만 보관 */
+    char shcode[40];            /* 종목 코드. JSON에 안전한 문자만 보관 */
     bool is_futures;            /* 호가 부호 규칙·틱 양자화에 사용 */
     tr_session_policy_t session; /* 이 종목의 세션 정책 (봉 구축·trading day·⑤ 바 분 계산의 기준) */
     double tick_raw;            /* 1틱의 raw 크기. 0이면 자동(선물 5, 주식 100) — 해외선물만 명시 */
@@ -267,7 +267,7 @@ struct tr_engine {
         struct {
             tr_engine_t *engine;
             uint64_t instrument_id;
-            char shcode[16];
+            char shcode[40];
             bool is_futures;
             tr_session_policy_t session;
             double tick_raw;

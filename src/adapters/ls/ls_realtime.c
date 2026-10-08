@@ -55,6 +55,8 @@ struct tr_ls_rt {
      * 제한할 수 있어, service 호출마다 wake sul을 걸어 timeout을 보장한다. */
     lws_sorted_usec_list_t sul_wake;
     uint64_t dbg_rx_frames; /* LS_RT_DEBUG=1일 때 수신 프레임 카운트 */
+    char url_override[160];
+    bool force_fast_reconnect; /* 프로필 전환: 백오프 없이 새 URL로 다시 붙는다 */
 };
 
 static int64_t default_now_us(void) {
@@ -580,12 +582,21 @@ static int callback_ls_rt(struct lws *wsi, enum lws_callback_reasons reason,
     }
     case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
     case LWS_CALLBACK_CLIENT_CLOSED:
+        rt->wsi = 0;
+        if (rt->force_fast_reconnect) {
+            rt->force_fast_reconnect = false;
+            rt->state = LS_RT_RECONNECTING;
+            rt->established_at_us = 0;
+            rt->consec_short = 0;
+            rt->retry_ms = rt->cfg.reconnect_min_ms > 0 ? rt->cfg.reconnect_min_ms : 1000;
+            rt->next_retry_us = now_us(rt);
+            break;
+        }
         if (reason == LWS_CALLBACK_CLIENT_CONNECTION_ERROR) {
             char line[512];
             ls_rt_format_conn_error(in, len, line, sizeof(line));
             fputs(line, stderr);
         }
-        rt->wsi = 0;
         if (rt->state != LS_RT_FAILED) {
             rt->state = LS_RT_RECONNECTING;
             rt->reconnects++;
@@ -760,6 +771,26 @@ bool tr_ls_rt_subscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key, u
         send_next_sub(rt);
     }
     return true;
+}
+
+void tr_ls_rt_use_url(tr_ls_rt_t *rt, const char *url) {
+    if (rt == 0 || url == 0 || url[0] == '\0') {
+        return;
+    }
+    snprintf(rt->url_override, sizeof(rt->url_override), "%s", url);
+    rt->cfg.url = rt->url_override;
+    rt->retry_ms = rt->cfg.reconnect_min_ms > 0 ? rt->cfg.reconnect_min_ms : 1000;
+    rt->next_retry_us = 0;
+    rt->consec_short = 0;
+    rt->established_at_us = 0;
+    if (rt->wsi != 0) {
+        rt->force_fast_reconnect = true;
+        rt->state = LS_RT_RECONNECTING;
+        lws_wsi_close(rt->wsi, LWS_TO_KILL_ASYNC);
+        return;
+    }
+    rt->force_fast_reconnect = false;
+    rt->state = LS_RT_RECONNECTING;
 }
 
 bool tr_ls_rt_unsubscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key) {

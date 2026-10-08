@@ -76,6 +76,10 @@ bool tr_ls_rt_subscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key, u
 /* 구독 해지 (tr_type "4" = 실시간 시세 해제, 공식 명세). 재연결 시에도 복원되지 않는다. */
 bool tr_ls_rt_unsubscribe(tr_ls_rt_t *rt, const char *tr_cd, const char *tr_key);
 
+/* 실시간 주소를 바꾸고 현재 소켓을 끊는다. 다음 service에서 새 주소로 바로 다시 붙는다.
+ * 등록된 구독은 남으며, 새 세션이 열리면 다시 전송된다. */
+void tr_ls_rt_use_url(tr_ls_rt_t *rt, const char *url);
+
 /* 이벤트 루프 구동. timeout_ms 동안 대기할 수 있다. */
 int tr_ls_rt_service(tr_ls_rt_t *rt, int timeout_ms);
 

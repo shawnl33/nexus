@@ -88,11 +88,16 @@
   .pane .tools .chip { background: #1c2330; }
   .pane .tools .chip.on { background: #14282c; }
   .pane .tools .chip:hover { background: #2a2e39; }
-  #ws-state { margin-left: auto; }
+  #broker-slot { margin-left: auto; display: inline-flex; gap: 8px; align-items: center; }
+  #broker-slot[hidden] { display: none; }
+  #broker-slot[hidden] + #ws-state { margin-left: auto; }
+  #broker-profile { padding: 2px 6px; }
+  #broker-env.env-paper { background: #6b4e16; color: #f6e2b3; }
+  #broker-env.env-live { background: #6b2430; color: #ffd5d8; }
   #hint, label.hint { font-size: 12px; color: #7d8590; }
   #bar-cap { width: 7ch; padding: 2px 6px; }
   .sym-picker { position: relative; display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-  .sym-picker input { padding: 1px 6px; font-size: 12px; width: 11ch; text-transform: uppercase; }
+  .sym-picker input { padding: 1px 6px; font-size: 12px; width: 24ch; text-transform: uppercase; }
   .sym-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
   .sym-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid #434651; border-radius: 999px; padding: 0 6px; font-size: 11px; line-height: 18px; }
   .sym-chip-text { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; }
@@ -116,6 +121,7 @@
   .sym-browse[hidden] { display: none; }
   .sym-browse-card { width: min(760px, calc(100vw - 32px)); max-height: min(78vh, 720px); display: flex; flex-direction: column; background: #1c2330; border: 1px solid #434651; border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,.45); }
   .sym-browse-head { display: flex; gap: 6px; align-items: center; padding: 10px 12px; border-bottom: 1px solid #2a2e39; }
+  .sym-browse-tag { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: #f6e2b3; background: #6b4e16; border-radius: 4px; padding: 1px 6px; }
   .sym-tab { background: transparent; }
   .sym-tab.on { border-color: #26a69a; color: #26a69a; font-weight: 700; }
   .sym-browse-x { margin-left: auto; }
@@ -168,6 +174,11 @@
   </span>
   <label class="hint" for="bar-cap">상한</label>
   <input id="bar-cap" type="number" min="16" max="8192" step="1" value="2560" title="차트가 다루는 1분봉 개수. 값을 바꾸면 과거 봉을 이 개수까지 다시 받습니다">
+  <span id="broker-slot" hidden>
+    <label class="hint" for="broker-profile">접속</label>
+    <select id="broker-profile" title="증권사 실전·모의 접속. 바꾸면 시세와 잔고, 주문이 그 서버로 다시 연결됩니다"></select>
+    <span id="broker-env" class="badge"></span>
+  </span>
   <span id="ws-state" class="badge err">연결 끊김</span>
   <span id="hint">화면틀:</span>
   <input id="ws-name" value="default" size="10">
@@ -183,9 +194,9 @@
 <script src="fx-layers.js"></script>
 <script src="fx3-layers.js"></script>
 <script src="pgap-layers.js"></script>
-<script src="os-layers.js?v=pack3"></script>
+<script src="os-layers.js?v=gray"></script>
 <script src="cu-layers.js?v=barcolor2"></script>
-<script src="snco-layers.js?v=axis3"></script>
+<script src="snco-layers.js?v=circles"></script>
 <script src="ymae-layers.js"></script>
 <script src="sniper-layers.js"></script>
 <script src="pvc-layers.js"></script>
@@ -195,7 +206,7 @@
 <script src="pair-markers.js"></script>
 <script src="feed.js"></script>
 <script src="gaps.js"></script>
-<script src="gap-shade.js"></script>
+<script src="gap-shade.js?v=notrade"></script>
 <script src="workspace.js"></script>
 <script src="indicator-tree.js"></script>
 <script src="yl-tree.js"></script>
@@ -203,7 +214,8 @@
 <script src="watch-guard.js"></script>
 <script src="symbol-pick.js"></script>
 <script src="symbol-browse.js"></script>
+<script src="symbol-browse-nh.js?v=cme"></script>
 <script src="overlay-ratio.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=nhbrowse"></script>
 </body>
 </html>

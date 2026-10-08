@@ -210,8 +210,8 @@ const OsLayers = (() => {
     { id: "p50", color: "#ff8c8c" },
     { id: "n100", color: "#0000ff" },
     { id: "n50", color: "#8ca5ff" },
-    { id: "miss", color: "#d2d2d2" },
-    { id: "z", color: "#969696" },
+    { id: "miss", color: "#969696" },
+    { id: "z", color: "#6c6c6c" },
   ];
   function ratioColorId(rgb) {
     const n = Number(rgb) >>> 0;

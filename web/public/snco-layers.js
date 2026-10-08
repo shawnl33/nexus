@@ -95,12 +95,12 @@ const SncoLayers = (() => {
     { key: "both", layer: "both", color: "#ff8c00" },
   ];
   const DOTS = [
-    { key: "signal", y: "signalY", layer: "signal", match: "up", color: "#0000ff", radius: 3 },
-    { key: "signal", y: "signalY", layer: "signal", match: "down", color: "#ff0000", radius: 3 },
-    { key: "signal", y: "signalY", layer: "signal", match: "both", color: "#008000", radius: 3 },
-    { key: "emphasis", y: "emphasisY", layer: "emphasis", match: "yellow", color: "#ffff00", radius: 2 },
-    { key: "emphasis", y: "emphasisY", layer: "emphasis", match: "cyan", color: "#00ffff", radius: 2 },
-    { key: "emphasis", y: "emphasisY", layer: "emphasis", match: "white", color: "#ffffff", radius: 2 },
+    { key: "signal", y: "signalY", layer: "signal", match: "up", color: "#0000ff", radius: 5 },
+    { key: "signal", y: "signalY", layer: "signal", match: "down", color: "#ff0000", radius: 5 },
+    { key: "signal", y: "signalY", layer: "signal", match: "both", color: "#008000", radius: 5 },
+    { key: "emphasis", y: "emphasisY", layer: "emphasis", match: "yellow", color: "#ffff00", radius: 3 },
+    { key: "emphasis", y: "emphasisY", layer: "emphasis", match: "cyan", color: "#00ffff", radius: 3 },
+    { key: "emphasis", y: "emphasisY", layer: "emphasis", match: "white", color: "#ffffff", radius: 3 },
   ];
 
   function createHandle(chart) {
@@ -129,7 +129,7 @@ const SncoLayers = (() => {
     }));
     for (const ln of lines) {
       const pen = ln.key === "sam"
-        ? globalThis.HorizLines.dots(0.5)
+        ? globalThis.HorizLines.dots(1)
         : globalThis.HorizLines.primitive(ln.color, ln.width);
       ln.series.attachPrimitive(pen);
       ln.pen = pen;

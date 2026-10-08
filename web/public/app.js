@@ -16,6 +16,8 @@ const WS_URL = `ws://${location.host}/ws`;
 // 캐시는 종목(shcode)별로 격리된다. status의 payload.shcode로 캐시를 골라 갱신한다.
 const feed = Feed.create();
 let engineWatches = []; // /api/status가 알려준 관측 종목 목록 (구 엔진은 shcode 1개 폴백)
+let brokerProfileId = ""; // 엔진이 붙어 있는 접속 프로필
+let brokerSwitching = false;
 
 // 거래소 시간은 항상 KST(UTC+9, 서머타임 없음) — 라이브러리 기본 UTC 표시를 KST로 맞춘다
 const KST_OFFSET_SEC = 9 * 3600;
@@ -457,14 +459,13 @@ function pricePoint(row, draw) {
   return row;
 }
 
-// 미래곡선 해외가 켜진 칸은 봉마다 단계 색으로 강도를 칠한다.
+// 미래곡선 해외가 켜진 칸의 봉 색은 1분통합판정과 같은 통합색이다.
 function curveStageTint(pane, time) {
   if (!pane?.active?.has("fx_curve_os")) return "";
-  const list = paneCache(pane)?.barInd?.get(time)?.cu;
-  if (!Array.isArray(list)) return "";
-  const row = list.find((r) => r.id === 1) || list.find((r) => r.id === 2) || list.find((r) => r.id === 3);
-  if (!row || !Number.isFinite(Number(row.rgb))) return "";
-  return "#" + (Number(row.rgb) >>> 0).toString(16).padStart(6, "0");
+  const ind = paneCache(pane)?.barInd?.get(time);
+  const rgb = ind?.os?.judgeRgb;
+  if (!Number.isFinite(Number(rgb))) return "";
+  return "#" + (Number(rgb) >>> 0).toString(16).padStart(6, "0");
 }
 
 function candlePoint(pane, row, draw) {
@@ -1049,11 +1050,17 @@ function buildFramePicker(frame) {
   return picker;
 }
 
-let symbolBrowse = null;
+let symbolBrowseLs = null;
+let symbolBrowseNh = null;
 function openSymbolBrowse(frame) {
   hideFrameResults(frame);
-  if (!symbolBrowse) symbolBrowse = SymbolBrowse.mount(document.body);
-  symbolBrowse.open((code, name) => applyFrameCode(frame, code, name));
+  const nh = typeof brokerProfileId === "string" && brokerProfileId.startsWith("nh");
+  const other = nh ? symbolBrowseLs : symbolBrowseNh;
+  if (other && other.isOpen()) other.close();
+  const browse = nh
+    ? (symbolBrowseNh || (symbolBrowseNh = SymbolBrowseNh.mount(document.body)))
+    : (symbolBrowseLs || (symbolBrowseLs = SymbolBrowse.mount(document.body)));
+  browse.open((code, name) => applyFrameCode(frame, code, name));
 }
 
 function releaseFrameSearch(frame) {
@@ -3157,6 +3164,90 @@ function setIndicatorManifest(list) {
   for (const pane of panes) buildPaneTools(pane);
 }
 
+// 키가 있는 접속 프로필만 헤더에 보여 준다. 엔진이 목록을 안 주면 칸을 숨긴다.
+function paintBrokerProfiles(p) {
+  const slot = document.getElementById("broker-slot");
+  const select = document.getElementById("broker-profile");
+  const badge = document.getElementById("broker-env");
+  if (!slot || !select || !badge) return;
+  const list = Array.isArray(p.profiles)
+    ? p.profiles.filter((x) => x && typeof x.id === "string" && typeof x.label === "string")
+    : [];
+  if (list.length === 0) {
+    slot.hidden = true;
+    return;
+  }
+  slot.hidden = false;
+  const sig = list.map((x) => `${x.id}:${x.label}`).join("|");
+  if (select.dataset.sig !== sig) {
+    select.replaceChildren();
+    for (const item of list) {
+      const opt = document.createElement("option");
+      opt.value = item.id;
+      opt.textContent = item.label;
+      select.appendChild(opt);
+    }
+    select.dataset.sig = sig;
+  }
+  if (!brokerSwitching && typeof p.profile_id === "string" && p.profile_id !== "") {
+    select.value = p.profile_id;
+    brokerProfileId = p.profile_id;
+  }
+  const env = p.profile_env === "paper" || p.profile_env === "live" ? p.profile_env : "";
+  badge.hidden = env === "";
+  badge.textContent = env === "paper" ? "모의" : env === "live" ? "실전" : "";
+  badge.className = "badge" + (env === "paper" ? " env-paper" : env === "live" ? " env-live" : "");
+}
+
+// 확인 뒤에만 엔진 접속을 바꾼다. 취소하면 선택을 되돌린다.
+async function onBrokerProfileChange() {
+  const select = document.getElementById("broker-profile");
+  const next = select.value;
+  if (next === brokerProfileId) return;
+  const label = select.selectedOptions[0] ? select.selectedOptions[0].textContent : next;
+  if (!confirm(`접속을 ${label} 프로필로 바꿉니다. 차트의 시세와 잔고, 주문이 이 서버로 다시 연결됩니다.`)) {
+    select.value = brokerProfileId;
+    return;
+  }
+  brokerSwitching = true;
+  const token = await apiToken();
+  if (!token) {
+    brokerSwitching = false;
+    select.value = brokerProfileId;
+    alert("토큰이 필요합니다.");
+    return;
+  }
+  let res;
+  try {
+    res = await fetch("/api/broker/profile", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-trader-token": token },
+      body: JSON.stringify({ id: next }),
+    });
+  } catch {
+    brokerSwitching = false;
+    select.value = brokerProfileId;
+    alert("접속 변경 요청이 실패했습니다.");
+    return;
+  }
+  const data = await res.json().catch(() => ({}));
+  brokerSwitching = false;
+  if (!res.ok) {
+    if (res.status === 403) resetToken();
+    select.value = brokerProfileId;
+    const why = data.error_code || data.error || res.status;
+    alert(`접속 변경 실패: ${why}`);
+    return;
+  }
+  brokerProfileId = next;
+  paintBrokerProfiles({
+    profiles: [...select.options].map((opt) => ({ id: opt.value, label: opt.textContent })),
+    profile_id: next,
+    profile_env: data.payload && data.payload.env,
+  });
+  await onStreamReset();
+}
+
 // 엔진의 관측 종목 목록을 갱신한다 (구 엔진은 watches 없이 shcode 1개만 온다)
 async function refreshEngineWatches() {
   try {
@@ -3165,6 +3256,7 @@ async function refreshEngineWatches() {
     const p = (await res.json()).payload ?? {};
     // 모드 배지 — index.html의 정적 문자열("replay")은 초기값일 뿐, 실제 모드는 여기서 덮는다
     if (typeof p.mode === "string" && p.mode !== "") el.mode.textContent = p.mode;
+    paintBrokerProfiles(p);
     if (Array.isArray(p.watches)) {
       engineWatches = p.watches.filter((s) => typeof s === "string" && s !== "");
     } else if (typeof p.shcode === "string" && p.shcode !== "") {
@@ -3661,6 +3753,9 @@ document.getElementById("row-add").onclick = addFrameRow;
 document.getElementById("col-add").onclick = addFrameCol;
 document.getElementById("bar-cap").addEventListener("change", (ev) => {
   commitBarCap(ev.target.value);
+});
+document.getElementById("broker-profile").addEventListener("change", () => {
+  onBrokerProfileChange();
 });
 document.getElementById("ws-save").onclick = saveWorkspace;
 document.getElementById("ws-load").onclick = loadWorkspace;

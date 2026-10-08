@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 await import("../public/symbol-browse.js");
+await import("../public/symbol-browse-nh.js");
 const B = globalThis.SymbolBrowse;
+const N = globalThis.SymbolBrowseNh;
 
 test("parseOptName: 월물과 위클리 이름을 콜풋·만기·행사가로 나눈다", () => {
   assert.deepEqual(B.parseOptName("C 2610   745.0"), { cp: "C", expiry: "2610", strike: 745 });
@@ -48,4 +50,16 @@ test("chainRows: 같은 행사가의 콜과 풋을 한 줄로 모은다", () => 
   assert.equal(rows[1].put.shcode, "P745");
   const named = B.chainRows([{ shcode: "C", name: "C 2610   1,127.5", cp: "C", strike: 1128 }]);
   assert.equal(named[0].strike, 1127.5);
+});
+
+test("NH 만기 키는 품목과 날짜로 나눈다", () => {
+  assert.deepEqual(N.splitExpiry("O_SPW 20261008"), { product: "O_SPW", date: "20261008" });
+  assert.equal(N.dateLabel("20261008"), "2026-10-08");
+  const rows = N.chainRows([
+    { shcode: "O_SPW-C7785.0", cp: "C", strike: 7785 },
+    { shcode: "O_SPW-P7785.0", cp: "P", strike: 7785 },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].call.shcode, "O_SPW-C7785.0");
+  assert.equal(rows[0].put.shcode, "O_SPW-P7785.0");
 });

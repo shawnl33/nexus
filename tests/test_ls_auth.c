@@ -38,8 +38,19 @@ static void test_missing_file(void) {
     TR_CHECK(ls_auth_load_dotenv("definitely-not-here.env") == 0);
 }
 
+static void test_paper_key_name(void) {
+    write_fixture("LS_PAPER_APP_KEY=paper-key\nLS_PAPER_SECRET_KEY=paper-secret\n");
+    TR_CHECK(ls_auth_load_dotenv(FIXTURE) == 2);
+    if (getenv("LS_PAPER_APP_KEY") == 0 && getenv("LS_PAPER_SECRET_KEY") == 0) {
+        TR_CHECK(ls_auth_env_present("LS_PAPER_APP_KEY"));
+        TR_CHECK(ls_auth_env_present("LS_PAPER_SECRET_KEY"));
+    }
+    remove(FIXTURE);
+}
+
 int main(void) {
     test_parse_variants();
     test_missing_file();
+    test_paper_key_name();
     TR_TEST_SUMMARY();
 }
