@@ -545,8 +545,23 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
 
     s->out.flat_pos = flat_out.pos;
     s->out.flat_slope = flat_out.slope;
-    s->out.flat_pos_rgb = flat_out.pos > 0 ? RGB_(255, 0, 0) : (flat_out.pos < 0 ? RGB_(0, 0, 255) : RGB_(150, 150, 150));
-    s->out.flat_slope_rgb = flat_out.slope > 0 ? RGB_(180, 0, 0) : (flat_out.slope < 0 ? RGB_(0, 0, 180) : RGB_(150, 150, 150));
+    s->out.flat_on = flat_out.valid ? 1 : 0;
+    s->out.flat_pos_rgb = flat_out.pos > 0 ? RGB_(255, 150, 150)
+                          : (flat_out.pos < 0 ? RGB_(150, 170, 255) : RGB_(180, 180, 180));
+    s->out.flat_slope_rgb = flat_out.slope > 0 ? RGB_(200, 0, 0)
+                            : (flat_out.slope < 0 ? RGB_(0, 0, 200) : RGB_(120, 120, 120));
+    if (reset) {
+        s->flat_max_range = 0;
+    }
+    if (flat_out.valid && flat_out.range_ticks > s->flat_max_range) {
+        s->flat_max_range = flat_out.range_ticks;
+    }
+    s->out.flat_amp = (flat_out.valid && s->flat_max_range > 0.0)
+                      ? flat_out.range_ticks / s->flat_max_range * 100.0 : 0;
+    s->out.flat_up_pos = flat_out.prev_up_pos;
+    s->out.flat_dn_pos = -flat_out.prev_dn_pos;
+    s->out.flat_up_slope = flat_out.prev_up_slope;
+    s->out.flat_dn_slope = -flat_out.prev_dn_slope;
 
     int adj_show = aout.valid && aout.sig_dir != 0 &&
                    (s->cfg.adj_unified != 1 || dec.unified * aout.sig_dir >= 50) &&
@@ -641,6 +656,7 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
     }
 
     int lead = 0;
+    int cross = 0;
     if (flat_out.valid && !reset) {
         if (flat_out.slope < 0 && s->prev_slope >= 0) {
             s->lead_dn_cross = 0;
@@ -649,10 +665,10 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
             s->lead_up_cross = 0;
         }
         if (flat_out.slope < -s->cfg.slope_min && !s->lead_dn_cross && flat_out.pos < 0 && s->prev_pos >= 0) {
-            lead = -1;
+            cross = -1;
         }
         if (flat_out.slope > s->cfg.slope_min && !s->lead_up_cross && flat_out.pos > 0 && s->prev_pos <= 0) {
-            lead = 1;
+            cross = 1;
         }
         if (flat_out.slope < 0 && flat_out.pos < 0) {
             s->lead_dn_cross = 1;
@@ -661,6 +677,10 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
             s->lead_up_cross = 1;
         }
     }
+    if (cross != 0) {
+        s->out.flat_mark = cross;
+    }
+    lead = cross;
     int gray = jrgb == RGB_(150, 150, 150);
     if (s->cfg.lead_u100 && lead < 0 &&
         (dec.unified > -100 || fut != -1 || dec.di != -1 || s->session.out.state5 > 0 || gray)) {
@@ -674,7 +694,6 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
         s->out.lead_on = 1;
         s->out.lead_y = lead > 0 ? -170 : 170;
         s->out.lead_rgb = lead > 0 ? RGB_(0, 180, 0) : RGB_(0, 0, 0);
-        s->out.flat_mark = lead;
     }
 
     {
@@ -1044,13 +1063,14 @@ int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o) {
         m += n;
     }
     {
-        int n = snprintf(buf + m, cap - (size_t)m, ",%d,%.10g,%u,%d,%d,%.10g,%u,%d,%.10g,%u,%d,%d,%.10g,%u,%u,%d,%.10g,%u,%d,%d,%d,%d,%d,%.10g,%d,%.10g",
+        int n = snprintf(buf + m, cap - (size_t)m, ",%d,%.10g,%u,%d,%d,%.10g,%u,%d,%.10g,%u,%d,%d,%.10g,%u,%u,%d,%.10g,%u,%d,%d,%d,%d,%d,%.10g,%d,%.10g,%d,%d,%d,%d,%d,%.10g",
                          o->ec_on, o->ec_px, o->ec_rgb, o->ec_w, o->ec_line_on, o->ec_line, o->ec_line_rgb,
                          o->rs_on, o->rs_px, o->rs_rgb, o->rs_w,
                          o->bk_on, o->bk_px, o->bk_rgb, o->os_paint,
                          o->pnl_long_on, o->pnl_long, o->pnl_long_rgb, o->sig_kind,
                          o->sig_qty, o->exit_qty,
-                         o->pnl_side, o->pnl_short_on, o->pnl_short, o->pnl_exit_on, o->pnl_exit);
+                         o->pnl_side, o->pnl_short_on, o->pnl_short, o->pnl_exit_on, o->pnl_exit,
+                         o->flat_on, o->flat_up_pos, o->flat_dn_pos, o->flat_up_slope, o->flat_dn_slope, o->flat_amp);
         if (n < 0 || (size_t)m + (size_t)n >= cap) {
             return -1;
         }

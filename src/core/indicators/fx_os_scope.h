@@ -79,6 +79,9 @@ typedef struct {
     int flat_pos, flat_slope;
     uint32_t flat_pos_rgb, flat_slope_rgb;
     int flat_mark;
+    int flat_on;
+    int flat_up_pos, flat_dn_pos, flat_up_slope, flat_dn_slope;
+    double flat_amp;
     double wave_time, wave_price, wave_opp;
     int wave_state;
     uint32_t wave_state_rgb;
@@ -185,6 +188,7 @@ typedef struct {
     double buy_used_px, sell_used_px;
     int lead_dn_cross, lead_up_cross;
     int prev_pos, prev_slope;
+    double flat_max_range;
     int adj_done, prev_adj_trend;
     unsigned char up_state[60];
     int up_i;

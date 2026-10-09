@@ -47,6 +47,12 @@ const OsLayers = (() => {
       flatPosRgb: row.length >= 59 ? (Number(row[39]) || 0) : 0,
       flatSlopeRgb: row.length >= 59 ? (Number(row[40]) || 0) : 0,
       flatMark: row.length >= 59 ? Number(row[41]) || 0 : 0,
+      flatOn: row.length >= 148 && Number(row[142]) === 1,
+      flatUpPos: row.length >= 148 ? num(row[143]) : null,
+      flatDnPos: row.length >= 148 ? num(row[144]) : null,
+      flatUpSlope: row.length >= 148 ? num(row[145]) : null,
+      flatDnSlope: row.length >= 148 ? num(row[146]) : null,
+      flatAmp: row.length >= 148 ? num(row[147]) : null,
       waveTime: row.length >= 59 ? num(row[42]) : null,
       wavePrice: row.length >= 59 ? num(row[43]) : null,
       waveOpp: row.length >= 59 ? num(row[44]) : null,
@@ -454,17 +460,46 @@ const OsLayers = (() => {
     };
   }
 
+  function flatSeries(chart, scale, color, pen) {
+    const s = series(chart, scale, color, 1);
+    s.applyOptions({ lineVisible: false });
+    s.attachPrimitive(pen);
+    return { s, pen };
+  }
+
   function flatHandle(chart) {
     const scale = "fxflat";
-    const pos = histogram(chart, scale, "#ff0000");
-    const slope = series(chart, scale, "#b40000", 2);
-    const mark = dotLine(chart, scale);
+    const pos = flatSeries(chart, scale, "#ff9696", globalThis.HorizLines.dots(1));
+    const slope = flatSeries(chart, scale, "#c80000", dashes(1));
+    const upPos = flatSeries(chart, scale, "#ffc8c8", holds());
+    const dnPos = flatSeries(chart, scale, "#c8d2ff", holds());
+    const upSlope = flatSeries(chart, scale, "#e67878", holds());
+    const dnSlope = flatSeries(chart, scale, "#788ce6", holds());
+    const amp = flatSeries(chart, scale, "#969696", dashes(1));
+    const mark = flatSeries(chart, scale, "#ff0000", globalThis.HorizLines.dots(1));
+    const on = (r) => r && (r.flatOn || r.flatPos || r.flatSlope);
+    const prev = (r, v) => (on(r) && v ? v : null);
     const lines = [
-      { layer: "pos", series: pos, on: () => true, value: (r) => r.flatPos, color: (r) => css(r.flatPosRgb) },
-      { layer: "slope", series: slope, on: () => true, value: (r) => r.flatSlope, color: (r) => css(r.flatSlopeRgb) },
+      { layer: "pos", series: pos.s, pen: pos.pen, on: () => true,
+        value: (r) => (on(r) ? r.flatPos : null), color: (r) => css(r.flatPosRgb || 0xb4b4b4), width: () => 6 },
+      { layer: "slope", series: slope.s, pen: slope.pen, on: () => true,
+        value: (r) => (on(r) ? r.flatSlope : null), color: (r) => css(r.flatSlopeRgb || 0x787878), width: () => 2 },
+      { layer: "prev", series: upPos.s, pen: upPos.pen, on: () => true,
+        value: (r) => prev(r, r.flatUpPos), color: () => "#ffc8c8", width: () => 1 },
+      { layer: "prev", series: dnPos.s, pen: dnPos.pen, on: () => true,
+        value: (r) => prev(r, r.flatDnPos), color: () => "#c8d2ff", width: () => 1 },
+      { layer: "prev", series: upSlope.s, pen: upSlope.pen, on: () => true,
+        value: (r) => prev(r, r.flatUpSlope), color: () => "#e67878", width: () => 1 },
+      { layer: "prev", series: dnSlope.s, pen: dnSlope.pen, on: () => true,
+        value: (r) => prev(r, r.flatDnSlope), color: () => "#788ce6", width: () => 1 },
+      { layer: "amp", series: amp.s, pen: amp.pen, on: () => true,
+        value: (r) => (on(r) ? r.flatAmp : null), color: () => "#969696", width: () => 1 },
       { layer: "mark", series: mark.s, pen: mark.pen, on: () => true,
-        value: (r) => (r.flatMark ? r.flatMark * 3 : null), color: (r) => (r.flatMark > 0 ? "#ff0000" : "#0000ff") },
+        value: (r) => (r.flatMark ? r.flatMark * 3 : null), width: () => 10,
+        color: (r) => (r.flatMark > 0 ? "#ff0000" : "#0000ff") },
     ];
+    const fitted = fitHeight(lines.map((ln) => ln.series));
+    for (const ln of lines) ln.series.applyOptions({ autoscaleInfoProvider: fitted });
     return paneHandle(chart, scale, lines, { top: 0.72, bottom: 0 });
   }
 
@@ -679,6 +714,106 @@ const OsLayers = (() => {
       paint0(c);
     };
     return handle;
+  }
+
+  function barStep(points) {
+    let step = 60;
+    for (let i = 1; i < points.length; i++) {
+      const d = points[i].time - points[i - 1].time;
+      if (d > 0 && d < step) step = d;
+    }
+    return step;
+  }
+
+  function hlines(build) {
+    let series = null;
+    let chart = null;
+    let points = [];
+    return {
+      setPoints(next) { points = next || []; },
+      attached(param) { series = param.series; chart = param.chart; },
+      detached() { series = null; chart = null; },
+      updateAllViews() {},
+      paneViews() {
+        return [{
+          renderer() {
+            return {
+              draw(target) {
+                if (!series || !chart || !points.length) return;
+                const segs = build(points, barStep(points));
+                target.useBitmapCoordinateSpace((scope) => {
+                  const ctx = scope.context;
+                  const hr = scope.horizontalPixelRatio;
+                  const vr = scope.verticalPixelRatio;
+                  const xOf = (t) => chart.timeScale().timeToCoordinate(t);
+                  let px = 12;
+                  for (const seg of segs) {
+                    const x0 = xOf(seg.t0);
+                    let x1 = xOf(seg.t1);
+                    const y = series.priceToCoordinate(seg.v);
+                    if (x0 == null || y == null) continue;
+                    if (x1 != null && x1 !== x0) px = Math.abs(x1 - x0);
+                    if (seg.frac) {
+                      const span = x1 != null && x1 !== x0 ? (x1 - x0) : px;
+                      x1 = x0 + span * seg.frac;
+                    }
+                    if (x1 == null) continue;
+                    ctx.beginPath();
+                    ctx.strokeStyle = seg.color || "#d7dde8";
+                    ctx.lineCap = "butt";
+                    ctx.lineWidth = Math.max(1, seg.width || 1) * vr;
+                    ctx.moveTo(x0 * hr, y * vr);
+                    ctx.lineTo(x1 * hr, y * vr);
+                    ctx.stroke();
+                  }
+                });
+              },
+            };
+          },
+        }];
+      },
+    };
+  }
+
+  // 봉마다 짧은 가로. 이웃과 잇지 않는다.
+  function dashes(frac) {
+    return hlines((points, step) => {
+      const segs = [];
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        if (!a || !Number.isFinite(a.value)) continue;
+        const near = b && (b.time - a.time) > 0 && (b.time - a.time) <= step * 1.5;
+        segs.push({
+          t0: a.time,
+          t1: near ? b.time : a.time + step,
+          frac,
+          v: a.value,
+          color: a.color,
+          width: a.width,
+        });
+      }
+      return segs;
+    });
+  }
+
+  // 같은 값이 이웃 봉에서 이어질 때만 긴 가로. 빈 구간과 값 변화는 끊는다.
+  function holds() {
+    return hlines((points, step) => {
+      const segs = [];
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        if (!a || !Number.isFinite(a.value)) continue;
+        const near = b && Number.isFinite(b.value) && (b.time - a.time) <= step * 1.5;
+        if (near && a.value === b.value) {
+          segs.push({ t0: a.time, t1: b.time, v: a.value, color: a.color, width: a.width });
+        } else {
+          segs.push({ t0: a.time, t1: a.time + step, v: a.value, color: a.color, width: a.width });
+        }
+      }
+      return segs;
+    });
   }
 
   // 봉마다 가로 조각. 같은 값이 이어지면 잇고, 값이 바뀌거나 봉이 떨어지면 끊는다.

@@ -921,6 +921,8 @@ static const char SNAP_IND_MANIFEST_B[] =
     "{\"id\":\"fx_flat_v4\",\"name\":\"평탄카운트\",\"layers\":["
     "{\"id\":\"pos\",\"name\":\"위치카운트\",\"defaultOn\":true},"
     "{\"id\":\"slope\",\"name\":\"기울기카운트\",\"defaultOn\":true},"
+    "{\"id\":\"prev\",\"name\":\"직전구간\",\"defaultOn\":true},"
+    "{\"id\":\"amp\",\"name\":\"위치구간진폭\",\"defaultOn\":true},"
     "{\"id\":\"mark\",\"name\":\"첫이탈\",\"defaultOn\":true}]},"
     "{\"id\":\"fx_adj_v6\",\"name\":\"조정분석\",\"layers\":["
     "{\"id\":\"state\",\"name\":\"상태\",\"defaultOn\":true},"
