@@ -7,6 +7,7 @@
 #include "core/model/civil_time.h"
 
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar);
+static void civil_stamp(tr_time_us_t t, int32_t utc_offset_min, int64_t *date, int64_t *tod);
 
 /* 원본 PriceScale 대응: raw 가격 단위의 1틱 — tick_raw 명시(해외선물) > 자동(선물 0.05pt×100=5,
  * 주식 1원×100=100). raw는 주식·선물 모두 실제 × 100 스케일 (ls_chart.c parse_price_scaled) */
@@ -19,6 +20,55 @@ static double tick_scale(const tr_pipeline_t *p) {
 
 double tr_engine_pipe_tick_scale(const tr_pipeline_t *p) {
     return p != 0 ? tick_scale(p) : 100.0;
+}
+
+void tr_engine_replay_os(tr_pipeline_t *p) {
+    tr_fxsig_cfg_t cfg;
+    size_t n;
+    size_t back;
+    if (p == 0 || !p->is_ovs) {
+        return;
+    }
+    cfg = p->os_scope.cfg;
+    tr_fxec_cfg_t entry_cfg = p->os_scope.entry.cfg;
+    if (!tr_fxos_init(&p->os_scope, tick_scale(p))) {
+        return;
+    }
+    tr_fxos_set_cfg(&p->os_scope, &cfg);
+    tr_fxec_use_cfg(&p->os_scope.entry, &entry_cfg);
+    tr_fxadx_init(&p->os_scope.adx, entry_cfg.adx_period > 1 ? entry_cfg.adx_period : 14);
+    n = tr_ring_count(&p->bb.bars);
+    for (back = n; back-- > 0;) {
+        tr_candle_t bar;
+        tr_fxos_input_t oin;
+        size_t ns;
+        size_t sb;
+        if (!tr_ring_at(&p->bb.bars, back, &bar)) {
+            continue;
+        }
+        memset(&oin, 0, sizeof(oin));
+        civil_stamp(bar.open_time_us, p->session.utc_offset_min, &oin.date, &oin.time);
+        oin.bar_open = bar.open_time_us;
+        oin.high = (double)bar.high;
+        oin.low = (double)bar.low;
+        oin.close = (double)bar.close;
+        oin.volume = (double)bar.volume;
+        oin.is_new_bar = 1;
+        oin.fv = &p->fx.fv.out;
+        tr_fxos_eval(&p->os_scope, &oin);
+        if (!p->status_ring_on) {
+            continue;
+        }
+        ns = tr_ring_count(&p->status_ring);
+        for (sb = 0; sb < ns; sb++) {
+            tr_bar_status_t *st = tr_ring_get_mut(&p->status_ring, sb);
+            if (st != 0 && st->open_time_us == bar.open_time_us) {
+                st->os_full = p->os_scope.out;
+                st->os_on = 1;
+                break;
+            }
+        }
+    }
 }
 
 /* 봉 시작 시각 → 예스랭귀지 sDate(yyyymmdd) / sTime(hhmmss). 세션 오프셋의 현지 시각. */
@@ -651,17 +701,19 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
     } else if (ray_px != 0) {
         snprintf(raybuf, sizeof(raybuf), "\"rays\":[],");
     }
-    char osbuf[640];
+    char osbuf[8192];
     osbuf[0] = '\0';
     if (os != 0) {
-        int m = snprintf(osbuf, sizeof(osbuf),
-                         "\"os\":[%d,%u,%d,%d,%d,%d,%d,%d,%u,%d,%d,%u,%d,%.10g,%u,%d,%d,%u,%d,%d,%d,%u,%d,%d,%d,%u,%d],",
-                         os->judge, os->judge_rgb, os->fut, os->prof, os->di, os->adx,
-                         os->sq_on, os->sq_len, os->sq_rgb, os->sq_w,
-                         os->hold, os->hold_rgb, os->ratio_on, os->ratio, os->ratio_rgb,
-                         os->rel_on, os->rel_len, os->rel_rgb, os->rel_w,
-                         os->cf_on, os->cf_len, os->cf_rgb, os->cf_w,
-                         os->ent_on, os->ent_y, os->ent_rgb, os->ent_w);
+        int m = snprintf(osbuf, sizeof(osbuf), "\"os\":[");
+        if (m > 0 && (size_t)m < sizeof(osbuf)) {
+            int n = tr_fxos_format(osbuf + m, sizeof(osbuf) - (size_t)m, os);
+            if (n > 0 && (size_t)m + (size_t)n < sizeof(osbuf)) {
+                m += n;
+                m += snprintf(osbuf + m, sizeof(osbuf) - (size_t)m, "],");
+            } else {
+                m = -1;
+            }
+        }
         if (m < 0 || (size_t)m >= sizeof(osbuf)) {
             osbuf[0] = '\0';
         }
@@ -699,7 +751,7 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
             scbuf[0] = '\0';
         }
     }
-    char payload[16384];
+    char payload[32768];
     int n = snprintf(payload, sizeof(payload),
         "{\"bar_open_time\":\"%lld\",\"closed\":%d,"
         "\"ohlc\":[%lld,%lld,%lld,%lld],"
@@ -1376,6 +1428,13 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         oin.volume = (double)bar->volume;
         oin.is_new_bar = is_new_bar;
         oin.fv = &p->fx.fv.out;
+        oin.session_first = session_first;
+        oin.htf_dir = p->htf.direction;
+        oin.reg_valid = p->lr3.reg_valid ? 1 : 0;
+        oin.reg_line = p->lr3.line;
+        oin.reg_r2 = p->lr3.r2;
+        oin.ob_valid = p->obd2.validity == TR_VALIDITY_VALID ? 1 : 0;
+        oin.ob_score = oin.ob_valid ? p->obd2.score : 0;
         tr_fxos_eval(&p->os_scope, &oin);
         osout = p->os_scope.out;
         tr_fxcu_eval(&p->curve_os, &fin, &p->fx.syn5, &p->fx.syn15, &p->fx.syn30);
@@ -1803,6 +1862,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         st.os_ent_y = osout.ent_y;
         st.os_ent_rgb = osout.ent_rgb;
         st.os_ent_w = osout.ent_w;
+        st.os_full = osout;
         st.cu_n = cu_n;
         memcpy(st.cu_id, cu_id, sizeof(st.cu_id));
         memcpy(st.cu_v, cu_v, sizeof(st.cu_v));

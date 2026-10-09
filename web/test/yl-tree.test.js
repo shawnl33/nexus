@@ -45,6 +45,9 @@ test("build: 보이는 이름은 확장자가 없고 시그널은 시스템으�
   assert.equal(short.port.side, -1);
   assert.equal(short.port.leg, "w_link_short");
   assert.deepEqual(T.inputsFor("pair-short").find((row) => row[0] === "총투자금"), ["총투자금", 10000000]);
+  assert.deepEqual(T.inputsFor("fx_sig_v6").find((row) => row[0] === "예측변수"), ["예측변수", 10]);
+  assert.deepEqual(T.inputsFor("fx_sig_v6").find((row) => row[0] === "선행통합100"), ["선행통합100", 1]);
+  assert.equal(T.inputsFor("fx_sig_v6").find((row) => row[0] === "최초진입수량"), undefined);
 });
 
 test("build: 연결되지 않은 원본은 이름만 남고 미래곡선 V2는 V1과 같은 항목이다", () => {
@@ -61,6 +64,22 @@ test("build: 연결되지 않은 원본은 이름만 남고 미래곡선 V2는 V
 test("build: 잘못된 입력은 빈 트리다", () => {
   assert.deepEqual(T.build(undefined), []);
   assert.deepEqual(T.build({ dirs: null }), []);
+});
+
+test("sharedValue: 같은 이름은 시그널 값을 쓰고 없으면 지표 값이다", () => {
+  assert.equal(T.sharedValue({ 최초진입수량: 3 }, { 최초진입수량: 9 }, "최초진입수량", 2), 3);
+  assert.equal(T.sharedValue({}, { 최초진입수량: 9 }, "최초진입수량", 2), 9);
+  assert.equal(T.sharedValue({}, {}, "최초진입수량", 2), 2);
+  assert.deepEqual(T.inputsFor("fx_pnl").find((row) => row[0] === "최초진입수량"), ["최초진입수량", 2]);
+  assert.deepEqual(T.inputsFor("fx_pnl").find((row) => row[0] === "일부청산수량"), ["일부청산수량", 1]);
+});
+
+test("selectable: signals 는 화면틀의 첫 차트에서만 고른다", () => {
+  assert.equal(T.selectable("signals", 0), true);
+  assert.equal(T.selectable("signals", 1), false);
+  assert.equal(T.selectable("signals", 2), false);
+  assert.equal(T.selectable("signals", -1), false);
+  assert.equal(T.selectable("indicators", 1), true);
 });
 
 test("hasEntries: 빈 디렉터리 목록은 목록으로 받지 않는다", () => {

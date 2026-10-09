@@ -59,6 +59,10 @@ void tr_fxec_default_cfg(tr_fxec_cfg_t *cfg) {
     cfg->t_ratio = 70;
     cfg->t_width = 70;
     cfg->t_pos_on = 1;
+    cfg->brk_on = 1;
+    cfg->brk_unified = 50;
+    cfg->brk_pos_on = 1;
+    cfg->brk_heat = 120;
     cfg->mark_ticks = 4;
     cfg->value_mult = 1.5;
     cfg->min_bars = 5;
@@ -149,6 +153,8 @@ void tr_fxec_decide(tr_fxec_mem_t *m, const tr_fxec_mem_t *old, const tr_fxec_cf
         m->recent_release_len = 0;
         m->buy_age = 9999; m->sell_age = 9999;
         m->strong_buy_age = 9999; m->strong_sell_age = 9999;
+        m->strong_buy_age2 = 9999; m->strong_sell_age2 = 9999;
+        m->used_up = 0; m->used_dn = 0;
         m->weak_dir = 0; m->weak_age = 0; m->weak_grade = 0;
     } else if (b->cur_bar > 1) {
         m->last_age = old->last_age + 1;
@@ -156,6 +162,10 @@ void tr_fxec_decide(tr_fxec_mem_t *m, const tr_fxec_mem_t *old, const tr_fxec_cf
         m->sell_age = old->sell_age + 1;
         m->strong_buy_age = old->strong_buy_age + 1;
         m->strong_sell_age = old->strong_sell_age + 1;
+        m->strong_buy_age2 = old->strong_buy_age2 + 1;
+        m->strong_sell_age2 = old->strong_sell_age2 + 1;
+        m->used_up = old->used_up;
+        m->used_dn = old->used_dn;
     }
     if (!b->reset && (b->sq_release || b->sq_confirm_dir != 0) && b->sq_release_len > 0) {
         m->recent_release_len = b->sq_release_len;
@@ -314,6 +324,29 @@ void tr_fxec_decide(tr_fxec_mem_t *m, const tr_fxec_mem_t *old, const tr_fxec_cf
     }
     if (t_dir != 0) { dir = t_dir; grade = 7; }
 
+    /* 등급 8. S·R 이 뒤에서 덮어쓴다. 경과2 초기값은 9999 라 첫 강신호 전에는 과열 제한이 열리지 않는다. */
+    int g8_dir = 0;
+    double g8_px = 0;
+    if (cfg->brk_on && b->cur_bar > 2 && !b->reset) {
+        int up_struct = old->up_hi > 0 && old->dn_hi > 0 && old->up_lo > 0 && old->dn_lo > 0 &&
+                        old->up_382 > old->dn_hi;
+        int dn_struct = old->up_hi > 0 && old->dn_hi > 0 && old->up_lo > 0 && old->dn_lo > 0 &&
+                        old->dn_618 < old->up_lo;
+        if (up_struct && b->close > old->up_hi && old->close1 <= old->up_hi &&
+            unified >= cfg->brk_unified && (cfg->brk_pos_on != 1 || p_pos == 1) &&
+            old->up_hi != m->used_up && (cfg->brk_heat <= 0 || m->strong_buy_age2 >= cfg->brk_heat)) {
+            g8_dir = 1;
+            g8_px = old->up_hi;
+        }
+        if (dn_struct && b->close < old->dn_lo && old->close1 >= old->dn_lo &&
+            unified <= -cfg->brk_unified && (cfg->brk_pos_on != 1 || p_pos == -1) &&
+            old->dn_lo != m->used_dn && (cfg->brk_heat <= 0 || m->strong_sell_age2 >= cfg->brk_heat)) {
+            g8_dir = -1;
+            g8_px = old->dn_lo;
+        }
+    }
+    if (g8_dir != 0) { dir = g8_dir; grade = 8; }
+
     int diag = -1, r_dir = 0, r_eval = 0;
     if (!b->reset && b->cur_bar > 2) {
         if (unified == -100 && old->uni[0] != -100) r_eval = -1;
@@ -417,8 +450,16 @@ void tr_fxec_decide(tr_fxec_mem_t *m, const tr_fxec_mem_t *old, const tr_fxec_cf
         m->last_dir = dir; m->last_age = 0;
         if (dir == 1) m->buy_age = 0;
         if (dir == -1) m->sell_age = 0;
-        if (grade >= 3 && dir == 1) m->strong_buy_age = 0;
-        if (grade >= 3 && dir == -1) m->strong_sell_age = 0;
+        if (grade >= 3 && dir == 1) {
+            m->strong_buy_age2 = m->strong_buy_age;
+            m->strong_buy_age = 0;
+        }
+        if (grade >= 3 && dir == -1) {
+            m->strong_sell_age2 = m->strong_sell_age;
+            m->strong_sell_age = 0;
+        }
+        if (grade == 8 && dir == 1) m->used_up = g8_px;
+        if (grade == 8 && dir == -1) m->used_dn = g8_px;
         if (grade == 4) { m->struct_dir = 0; m->struct_age = 0; }
     }
     if (diag == 0 && grade != 6) diag = 7;
@@ -430,6 +471,10 @@ void tr_fxec_decide(tr_fxec_mem_t *m, const tr_fxec_mem_t *old, const tr_fxec_cf
     m->ahi1 = old->ahi; m->ahi = all_hi;
     m->alo1 = old->alo; m->alo = all_lo;
     m->dn_lo1 = old->dn_lo; m->dn_lo = b->dn_lo;
+    m->dn_hi1 = old->dn_hi; m->dn_hi = b->dn_hi;
+    m->up_lo1 = old->up_lo; m->up_lo = b->up_lo;
+    m->up_3821 = old->up_382; m->up_382 = b->up_382;
+    m->dn_6181 = old->dn_618; m->dn_618 = b->dn_618;
     m->up_hi1 = old->up_hi; m->up_hi = b->up_hi;
     m->blue1 = old->blue; m->blue = blue;
     m->red1 = old->red; m->red = red;
@@ -466,6 +511,7 @@ bool tr_fxec_init(tr_fxec_t *s, double price_scale) {
     tr_fxec_default_cfg(&s->cfg);
     s->st.rel_age = 999;
     s->st.buy_age = s->st.sell_age = s->st.strong_buy_age = s->st.strong_sell_age = 9999;
+    s->st.strong_buy_age2 = s->st.strong_sell_age2 = 9999;
     s->prev = s->st;
     if (!tr_fxc_init(&s->curve)) return false;
     if (!tr_fxadx_init(&s->adx, s->cfg.adx_period)) return false;
@@ -477,6 +523,17 @@ bool tr_fxec_init(tr_fxec_t *s, double price_scale) {
 
 bool tr_fxec_relink(tr_fxec_t *s) {
     return s != 0 && tr_fxc_relink(&s->curve);
+}
+
+void tr_fxec_use_cfg(tr_fxec_t *s, const tr_fxec_cfg_t *cfg) {
+    if (s == 0 || cfg == 0) {
+        return;
+    }
+    s->cfg = *cfg;
+    if (s->cfg.adx_period < 2) {
+        s->cfg.adx_period = 2;
+    }
+    tr_fxadx_init(&s->adx, s->cfg.adx_period);
 }
 
 static void sq_in(tr_fxsq_input_t *q, const tr_fxec_t *s, const tr_fxec_input_t *in, int reset, double ticks, int rearm) {
@@ -496,6 +553,7 @@ static void sq_in(tr_fxsq_input_t *q, const tr_fxec_t *s, const tr_fxec_input_t 
     q->narrow_pct = s->cfg.narrow_pct;
     q->stage1_bars = s->cfg.stage1_bars;
     q->confirm_bars = s->cfg.confirm_sq_bars;
+    q->confirm_closed = s->cfg.confirm_closed;
     q->break_ticks = ticks;
     q->rearm_bars = rearm;
 }
@@ -600,8 +658,10 @@ void tr_fxec_eval(tr_fxec_t *s, const tr_fxec_input_t *in) {
         bar.v1_ok = 1;
         bar.up_hi = fv->lup_high;
         bar.up_lo = fv->lup_low;
+        bar.up_382 = fv->lup_382;
         bar.dn_hi = fv->ldn_high;
         bar.dn_lo = fv->ldn_low;
+        bar.dn_618 = fv->ldn_618;
         bar.tgt[0] = fv->persist_target[0];
         bar.tgt[1] = fv->persist_target[1];
         bar.tgt[2] = fv->persist_target[2];

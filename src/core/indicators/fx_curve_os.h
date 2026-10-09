@@ -10,7 +10,7 @@
 #include "core/indicators/fx_entry_cand.h"
 #include "core/indicators/fx_mirae_v1.h"
 
-#define TR_FXCU_PLOTS 28
+#define TR_FXCU_PLOTS 32
 
 typedef struct {
     double dn_lo, up_lo, dn_hi, up_hi;
@@ -23,6 +23,12 @@ typedef struct {
     tr_fxec_t entry;
     tr_fxcu_mem_t st;
     tr_fxcu_mem_t prev;
+    int brk_has_cur;
+    int brk_has_prev;
+    int brk_buy, brk_sell;
+    int brk_prev_buy, brk_prev_sell;
+    double brk_dn_hi, brk_up_lo, brk_close;
+    double brk_prev_dn_hi, brk_prev_up_lo, brk_prev_close;
     bool has_bar;
     tr_time_us_t last_open;
     tr_fxmirae_plot_t plots[TR_FXCU_PLOTS];

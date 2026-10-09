@@ -10,7 +10,7 @@ const IndicatorTree = (() => {
   // 어떤 카테고리에도 속하지 않는 지표는 마지막 카테고리("기타")에 모인다 —
   // CATEGORIES의 마지막 항목이 항상 미분류 기본 그룹이어야 한다.
   const CATEGORIES = [
-    { id: "mirae", name: "미래곡선", members: ["mirae_v16", "fx_mirae_v1", "fx_mirae_v3", "fx_curve_os", "fx_judge_v3", "fx_pack_v4"] },
+    { id: "mirae", name: "미래곡선", members: ["mirae_v16", "fx_mirae_v1", "fx_mirae_v3", "fx_curve_os", "fx_judge", "fx_pack_v4"] },
     { id: "pgap", name: "지속목표차", members: ["fx_pgap3", "fx_pgap5", "fx_rgap", "fx_mgap", "fx_ugap"] },
     { id: "ymae", name: "양매수", members: ["fx_ymae", "fx_sniper", "fx_snco", "fx_pvc", "fx_data2"] },
     { id: "ma", name: "이동평균", members: ["sma"] },

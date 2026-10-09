@@ -1,0 +1,332 @@
+
+#################################################################################################################################################################
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+Input:매수손절(50), 목표수익률(50);
+Var : 손절가(0), 최초진입수량(2), 일부청산수량(1);      
+Var : 진입경과(0),      진입수량(0),  진입손익(0),
+      진입최고가(0),    진입최저가(0),
+	  청산회수(0),      청산경과(0),
+      진입최고가Cnt(0), 진입최저가Cnt(0), 
+	  ///////////////////////////////////////
+	  진입회수_매수(0), 진입회수_매도(0),
+      수익회수(0), 손실회수(0),
+	  //////////////////////////////////////
+	  진입수익_매수(0),  진입손실_매수(0), 진입손익_매수(0), 
+	  진입수익_매도(0),  진입손실_매도(0), 진입손익_매도(0), 청산손익(0), 
+	  최종청산손익_매수(0), 최종청산손익_매도(0),
+	  최종청산_경과(0);
+If bdate != Bdate[1]  Then 
+   { 
+    최종청산손익_매수 = 0; 최종청산손익_매도 = 0;
+    진입회수_매수 = 0;     진입회수_매도 = 0; 수익회수 = 0; 손실회수 = 0;
+	최종청산_경과 = 0;
+   }
+If I_MarketPosition <> 0 Then
+   {
+    If I_MarketPosition[1] <> I_MarketPosition Then
+      {
+       진입경과 = 1;
+       진입수량 = I_CurrentContracts;
+	   진입손익 = 0;
+       진입최고가 = H;
+       진입최저가 = L;
+       진입최저가Cnt = 0;
+       진입최고가Cnt = 0;
+
+	   진입수익_매수 = 0;
+	   진입손실_매수 = 0; 
+	   진입손익_매수 = 0; 
+
+	   진입수익_매도 = 0; 	    
+	   진입손실_매도 = 0;
+	   진입손익_매도 = 0; 
+
+       청산회수 = 0;
+       청산손익 = 0;
+       청산경과 = 0;
+	   
+	   최종청산_경과 = 0;
+	   If I_MarketPosition > 0 Then 진입회수_매수 = 진입회수_매수 + 1;
+       If I_MarketPosition < 0 Then 진입회수_매도 = 진입회수_매도 + 1;
+       
+      } 
+   Else 
+      {
+       진입경과 = 진입경과 + 1;
+	   진입손익 = IFF(I_MarketPosition >  0, C - I_AvgEntryPrice, I_AvgEntryPrice - C);
+       진입최고가 = Max(H,진입최고가);
+       진입최저가 = Min(L,진입최저가);
+       
+       If    진입최저가 <> 진입최저가[1] Then 
+	         진입최저가Cnt = 0;
+       Else  진입최저가Cnt = 진입최저가Cnt + 1;  
+
+       If    진입최고가 <> 진입최고가[1] Then 
+             진입최고가Cnt = 0;
+       Else  진입최고가Cnt = 진입최고가Cnt + 1;  
+       
+       If I_MarketPosition > 0 Then //매수포지션
+       {
+	    진입수익_매수 = Max(H - I_AvgEntryPrice, 진입수익_매수[1]);
+		진입손실_매수 = Min(L - I_AvgEntryPrice, 진입손실_매수[1]); 
+		진입손익_매수 = C - I_AvgEntryPrice;
+	   }
+
+       If I_MarketPosition < 0 Then //매도포지션
+       {
+	    진입수익_매도 = Max(I_AvgEntryPrice-L, 진입수익_매도[1]);
+		진입손실_매도 = Min(I_AvgEntryPrice-H, 진입손실_매도[1]); 
+		진입손익_매도 = I_AvgEntryPrice - C;
+	   }
+       
+       If I_CurrentContracts <> I_CurrentContracts[1] Then
+          {
+          청산회수 = 청산회수 + 1;
+          청산손익 = 청산손익[1] + IFF(I_MarketPosition >  0, C - I_AvgEntryPrice, I_AvgEntryPrice - C);
+          청산경과 = 1;
+          }  
+       If 청산경과 > 0 Then 청산경과 = 청산경과 +1; 
+      }
+   } 
+
+If I_MarketPosition == 0 && I_MarketPosition[1] <> 0 Then
+   {
+   진입경과 = 0;
+   진입수량 = 0;
+   진입손익 = 0;
+   진입최고가 = 0;
+   진입최저가 = 0;
+   진입최고가Cnt = 0;
+   진입최저가Cnt = 0;
+
+   진입수익_매수 = 0;
+   진입손실_매수 = 0; 
+   진입손익_매수 = 0; 
+
+   진입수익_매도 = 0; 	    
+   진입손실_매도 = 0;
+   진입손익_매도 = 0; 
+
+   
+   
+   If I_MarketPosition[1] > 0 && DayIndex > 0 Then 
+      {
+
+	   최종청산손익_매수 = 최종청산손익_매수 + 청산손익 + 진입손익_매수[1]*IFF(청산회수 == 0, 최초진입수량, 일부청산수량);
+      }
+   If I_MarketPosition[1] < 0 && DayIndex > 0 Then 
+      {
+
+		최종청산손익_매도 = 최종청산손익_매도 + 청산손익 + 진입손익_매도[1]*IFF(청산회수 == 0, 최초진입수량, 일부청산수량);
+      }
+   If 최종청산손익_매수 + 최종청산손익_매도 > 0 then 수익회수 = 수익회수 + 1;
+   Else                                              손실회수 = 손실회수 + 1;
+   //////////////////////////////////////////////////////////////////////////////////////////////////////
+   청산회수 = 0;
+   청산손익 = 0;
+   청산경과 = 0;
+   
+
+   
+   손절가 = 0;
+   최종청산_경과 = 1;
+   }
+If 최종청산_경과 > 0 Then 최종청산_경과 = 최종청산_경과 + 1;
+
+
+Var : 매도수익보전비율(0);
+매도수익보전비율 =
+IFF(진입수익_매도/PriceScale > 500,0.7, 
+IFF(진입수익_매도/PriceScale > 400,0.65, 
+IFF(진입수익_매도/PriceScale > 300,0.6,
+IFF(진입수익_매도/PriceScale > 200,0.55,
+IFF(진입수익_매도/PriceScale > 150,0.5,
+IFF(진입수익_매도/PriceScale > 100,0.4,
+0))))));
+
+Var : 매수수익보전비율(0);
+매수수익보전비율 =
+IFF(진입수익_매수/PriceScale > 500,0.7, 
+IFF(진입수익_매수/PriceScale > 400,0.65, 
+IFF(진입수익_매수/PriceScale > 300,0.6,
+IFF(진입수익_매수/PriceScale > 200,0.55,
+IFF(진입수익_매수/PriceScale > 150,0.5,
+IFF(진입수익_매수/PriceScale > 100,0.4,
+0.3))))));
+If I_MarketPosition > 0 Then
+{
+Plot1(진입수익_매수/PriceScale,"진입수익_매수",
+
+IFF(진입경과 > 90 && 진입손익/PriceScale > 100 && 
+    진입수익_매수/PriceScale > 200 && 진입수익_매수/PriceScale < 300 
+	&&    진입손익/PriceScale < 진입수익_매수/PriceScale*(매수수익보전비율+0.2)
+	, cyan,
+
+IFF(진입경과 > 60 && 110 < 진입수익_매수/PriceScale,Blue,red))
+,Def,IFF(진입최고가Cnt > 10,1,0));
+
+
+Plot2(진입손실_매수/PriceScale, "진입손실_매수", IFF(진입손실_매수/PriceScale < -21,Cyan,Blue));
+
+Plot3(진입손익/PriceScale ,"진입손익_매수",
+IFF(CountIF(진입손익/PriceScale < 0, 6) > 5 && 진입손익/PriceScale > -10 &&
+    CountIF(진입손익/PriceScale > 0, 진입경과) < 1 , Orange,
+IFF(CountIF(진입손익/PriceScale < 0, 10) > 9 && 진입손익/PriceScale > -50 &&
+    CountIF(진입손익/PriceScale > 0, 진입경과) < 1 && 진입최저가 < 진입최저가[1] , Cyan,
+
+IFF(CountIF(진입손익/PriceScale < 0, 3) > 2 && 진입손익/PriceScale > -50 && 진입손익/PriceScale < -30 &&
+    CountIF(진입손익/PriceScale > 0, 진입경과) > 6 && 진입최저가 < 진입최저가[1] , Cyan,
+IFF(CountIF(진입손익/PriceScale < 0, 21) > 20 && 진입손익/PriceScale > -30 &&
+    CountIF(진입손익/PriceScale > 0, 진입경과) < 1 , Cyan,
+
+IFF(진입손익/PriceScale > 20, Magenta,
+IFF(진입손익/PriceScale > 15, RgB(190,0,0),
+IFF(진입손익/PriceScale > 10, RgB(255,0,0),
+IFF(진입손익/PriceScale > 0, RgB(255,200,200),
+IFF(진입손익/PriceScale > -10,RGB(130,165,255),
+Rgb(0,0,255)
+)))))))))
+, Def,
+IFF(CountIF(진입손익 > 0, 진입경과) > 진입경과*0.9 && 진입경과 > 30, 6,
+IFF(CountIF(진입손익 < 0, 진입경과) > 진입경과*0.9 && 진입경과 > 30, 5,
+IFF(CountIF(진입손익 < 0, 진입경과) > 진입경과*0.7 && 진입경과 > 20, 2,1))) );
+
+If CountIF(진입손익 < 0, 진입경과) > 진입경과*0.8 && 진입손실_매수/PriceScale < -25 Then
+Plot4((진입수익_매수/PriceScale)*0.7);
+If CountIF(진입손익 < 0, 진입경과) > 진입경과*0.3 Then
+Plot5(진입손실_매수/PriceScale*0.7);
+
+}
+//Var :  매수_회수(0), 매도_회수(0);
+
+Var : 수익전환_회수(0),위험수익전환_회수(0), 매수_회수(0), 매도_회수(0);
+If I_MarketPosition <> 0 Then
+{
+If 진입손익[1] <= 0 && 진입손익 > 0 Then
+   {
+   수익전환_회수 = 수익전환_회수 + 1;
+   IF CountIF(진입손익 < 0, 진입경과) > 진입경과*0.7 && 진입경과 > 20 then 위험수익전환_회수 = 위험수익전환_회수+1;
+   }
+
+}
+Else {수익전환_회수 = 0; 위험수익전환_회수 = 0;}
+If 위험수익전환_회수  > 0 Then Plot19(위험수익전환_회수,"위험수익전환_회수",magenta,def, 2);
+if 수익전환_회수> 0 Then
+Plot18(수익전환_회수,"수익전환_회수");
+
+If I_MarketPosition < 0 Then
+{
+If 진입수익_매도 > 0 Then
+Plot6(진입수익_매도/PriceScale,"진입수익_매도",
+IFF(진입경과 > 60 &&  진입손익/PriceScale > 600  
+	&& 진입수익_매도/PriceScale > 600 
+	 &&	진입최저가Cnt > 25
+	 , Orange,
+
+IFF(진입수익_매도/PriceScale> 300, Cyan, red)),Def,
+IFF(Countif(진입손익/PriceScale > 진입수익_매도/PriceScale*0.5,진입최저가Cnt) > 진입최저가Cnt*0.5 && 진입최저가Cnt > 240,2,
+IFF(진입경과 < 180 && 
+    진입손익/PriceScale < 0    && 진입최고가Cnt[1] > 120 && 진입최고가 > 진입최고가[1], 5,
+IFF(진입최저가Cnt > 10,1,0))));
+//////////////////////////////////////
+Plot7(진입손실_매도/PriceScale, "진입손실_매도",
+IFF(진입수익_매도/PriceScale > 10 &&   진입최저가Cnt > 진입최고가Cnt + 5 &&
+   -진입손실_매도/PriceScale > 진입수익_매도/PriceScale*1.5 && 
+   CountIF(진입최고가 > 진입최고가[1],청산경과) > 2 , Orange,
+
+IFF(진입손실_매도/PriceScale < -8, Cyan,Blue)),Def, 
+IFF(진입최고가Cnt[1] > 240 && 진입최고가 > 진입최고가[1], 5,
+IFF(진입최고가Cnt > 10,1,0)));
+//////////////////////////////////////
+Plot8(진입손익/PriceScale,"진입손익_매도",
+IFF(CountIF(진입손익/PriceScale < -10, 청산경과) > 0 
+&& CountIF(진입손익/PriceScale > -3, 청산경과) > 4 && 진입손익/PriceScale < 0 && 진입손익/PriceScale > -3, Green,
+IFF(진입손익/PriceScale > 20, Magenta,
+IFF(진입손익/PriceScale > 15, RgB(190,0,0),
+IFF(진입손익/PriceScale > 10, RgB(255,0,0),
+IFF(진입손익/PriceScale > 0, RgB(255,200,200),Rgb(0,0,255)
+)))))
+, Def,
+IFF(CountIF(진입손익 < 0, 진입경과) > 진입경과*0.9 && 진입경과 > 30, 6,
+IFF(CountIF(진입손익 < 0, 청산경과) > 청산경과*0.9 && 청산경과 > 15,2,1) ));
+
+Plot9(0);
+Plot10(0);
+//IFF(CountIF(진입손익_매도 < 0, 진입경과) > 진입경과*0.4 && 진입경과 > 20, Cyan, 
+//IFF(진입손익_매도 > 0,Red,Blue)),
+}
+If 청산회수 > 0 Then
+Plot11(청산손익/PriceScale,"청산손익"); 
+
+If 최종청산손익_매수 <> 0 Then
+Plot12(최종청산손익_매수/PriceScale,"최종청산손익_매수", IFF(최종청산손익_매수/PriceScale > 300, Red,orange),Def,2 );
+
+If 최종청산손익_매도 <> 0 Then
+Plot13(최종청산손익_매도/PriceScale,"최종청산손익_매도");
+
+If I_MarketPosition <> 0 Then
+Plot14(진입손익/PriceScale,"진입손익",
+IFF(진입손익/PriceScale > 14,Magenta,
+IFF(진입손익 > 0, red,Blue)),Def,iff(진입손익/PriceScale> 8, 1,0));
+
+If 최종청산손익_매수 + 최종청산손익_매도 <> 0 Then
+Plot15( (최종청산손익_매수 + 최종청산손익_매도)/PriceScale, " 총손익", Magenta,def,2);
+
+If 진입회수_매수+진입회수_매도 > 0 Then
+Plot16(진입회수_매수+진입회수_매도,"진입회수",
+IFF(진입회수_매수+진입회수_매도 > 2, green, gray), def,(진입회수_매수+진입회수_매도)-1);
+
+Plot17(수익회수,"수익회수",Magenta);
+
+If 최종청산_경과 > 1 && Int(최종청산_경과/15) < 4 Then Plot21(Int(최종청산_경과/15),"최종청산_경과"); 
+
+If 청산손익 <> 0 Then Plot22(청산손익/PriceScale,"청산손익");
+
+
+IF 진입수익_매도/PriceScale > 100 Then
+Plot23(진입수익_매도/PriceScale * 매도수익보전비율,"매도수익보전");
+IF 진입수익_매수/PriceScale > 100 Then
+Plot24(진입수익_매수/PriceScale *매수수익보전비율,"매수수익보전");
+
+
+IF 진입수익_매도/PriceScale > 200 Then
+Plot25(진입수익_매도/PriceScale * 0.7,"매도수익보전");
+
+If CountIF(최종청산손익_매수/PriceScale - 최종청산손익_매수[1]/PriceScale < -60, 30) > 0 Then
+  Plot26(0);
+
+If CountIF( I_MarketPosition[1] <> 0 && I_MarketPosition==0, DayIndex) > 3 Then Plot27(0,"진입회수", Cyan,Def,10);
+
+IF 청산손익/PriceScale < -5 && 진입수익_매도/PriceScale > -청산손익/PriceScale*1.5 && 진입손익/PriceScale < -청산손익/PriceScale*1.5 then
+Plot30(진입손익/PriceScale,"수익보점");
+/*
+Var : 선물수익(0);
+If I_I_AvgEntryPrice > 0 Then
+{
+선물수익 =
+IFF(I_I_MarketPosition > 0, (C - I_I_AvgEntryPrice)/0.05, (I_I_AvgEntryPrice - C)/0.05);
+  Plot1(선물수익,"선물수익",IFF(선물수익 > 5,RED, Gray));
+/*
+Plot10((I_I_AvgEntryPrice -DayClose(1))/0.05);
+Plot11((h -DayClose(1))/0.05);
+Plot12((곡선하-h)/0.05);
+*/
+/*
+var : 만기계산_month(0),만기계산_nday(0),만기계산_week(0),만기일(0);
+
+만기계산_month = int(date/100)-int(date/10000)*100;
+만기계산_nday = date - int(date/100)*100;
+만기계산_Week = DayOfWeek(date);///
+
+if  (만기계산_Month%3 == 0 and 만기계산_nday >= 8 and 만기계산_nday <= 14 and 만기계산_week == 4) then
+
+var : 만기계산_nday(0),만기계산_week(0),X(False),만기일(0);
+
+만기계산_nday = date - int(date/100)*100;
+만기계산_Week = DayOfWeek(date);
+
+if   (만기계산_nday >= 8 and 만기계산_nday <= 14 and 만기계산_week == 4) then 만기일 = 1;
+Else  만기일 = 0;
+
+If 만기일 > 0 Then
+Plot20(만기일,"만기일",Green,Def,0);

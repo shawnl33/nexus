@@ -334,6 +334,29 @@ const server = createServer(async (req, res) => {
       return json(res, code, reply);
     }
 
+    if (req.method === "POST" && path === "/api/sig/cfg") {
+      if (!mutationAllowed(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return json(res, 400, { error: "invalid_json" });
+      }
+      const shcode = String(parsed.shcode ?? "").trim().toUpperCase();
+      if (!isValidShcode(shcode) || parsed.cfg == null || typeof parsed.cfg !== "object") {
+        return json(res, 400, { error: "bad_request" });
+      }
+      const reply = await engineCommand(
+        `dash-sig-${reqSeq}`,
+        "sig.cfg",
+        JSON.stringify({ shcode, cfg: parsed.cfg }),
+        300000,
+      );
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
     if (req.method === "GET" && path === "/api/chart") {
       // 읽기 전용: 늦은 접속자의 과거 봉 스냅샷 (엔진 봉 링 프록시, back_index로 페이지네이션)
       // shcode가 있으면 해당 종목 파이프라인의 봉을, 없으면 선택 종목(구 호환)을 가져온다

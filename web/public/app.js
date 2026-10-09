@@ -67,9 +67,23 @@ const RENDERERS = {
   fx_ymae: YmaeLayers.YmaeRenderer,
   fx_sniper: Data2Layers.Data2Renderer,
   fx_curve_os: { createHandle: (chart) => CuLayers.createHandle(chart) },
+  fx_dnbrk: { createHandle: (chart) => CuLayers.brkHandle(chart) },
   fx_snco: { createHandle: (chart) => SncoLayers.createHandle(chart) },
-  fx_judge_v3: { createHandle: (chart) => OsLayers.judgeHandle(chart) },
+  fx_judge: { createHandle: (chart) => OsLayers.judgeHandle(chart) },
   fx_pack_v4: { createHandle: (chart) => OsLayers.packHandle(chart) },
+  fx_flat_v4: { createHandle: (chart) => OsLayers.flatHandle(chart) },
+  fx_flat_v2: { createHandle: (chart) => OsLayers.flatHandleV2(chart) },
+  fx_adj_v6: { createHandle: (chart) => OsLayers.adjHandle(chart) },
+  fx_adj_v1: { createHandle: (chart) => OsLayers.adjHandleOf(chart, "fxadj1", "w1") },
+  fx_adj_v2: { createHandle: (chart) => OsLayers.adjHandleOf(chart, "fxadj2", "w2") },
+  fx_adj_v4: { createHandle: (chart) => OsLayers.adjHandleOf(chart, "fxadj4", "w4") },
+  fx_adj_v5: { createHandle: (chart) => OsLayers.adjHandleOf(chart, "fxadj5", "w5") },
+  fx_ec19: { createHandle: (chart) => OsLayers.ecHandle(chart, false) },
+  fx_ec20: { createHandle: (chart) => OsLayers.ecHandle(chart, true) },
+  fx_paint_v12: { createHandle: () => OsLayers.paintHandle() },
+  fx_paint_os: { createHandle: () => OsLayers.paintHandle() },
+  fx_sig_v6: { createHandle: (chart) => OsLayers.sigHandle(chart) },
+  fx_pnl: { createHandle: (chart) => OsLayers.pnlHandle(chart) },
   fx_pvc: PvcLayers.PvcRenderer,
   fx_data2: Data2Layers.Data2Renderer,
   ks_data2: Data2Layers.Data2Renderer,
@@ -459,13 +473,20 @@ function pricePoint(row, draw) {
   return row;
 }
 
-// 미래곡선 해외가 켜진 칸의 봉 색은 1분통합판정과 같은 통합색이다.
+function hexRgb(rgb) {
+  return "#" + (Number(rgb) >>> 0).toString(16).padStart(6, "0");
+}
+
+// 1분봉용 페인트바가 켜지면 그 봉색을 쓴다. 꺼져 있고 미래곡선만 켜지면 통합판정색이다.
 function curveStageTint(pane, time) {
-  if (!pane?.active?.has("fx_curve_os")) return "";
   const ind = paneCache(pane)?.barInd?.get(time);
+  const paint = pane?.active?.get("fx_paint_os");
+  const paintOn = paint && (typeof paint.handle?.wantsBar !== "function" || paint.handle.wantsBar());
+  if (paintOn && ind?.os?.osPaint) return hexRgb(ind.os.osPaint);
+  if (!pane?.active?.has("fx_curve_os")) return "";
   const rgb = ind?.os?.judgeRgb;
   if (!Number.isFinite(Number(rgb))) return "";
-  return "#" + (Number(rgb) >>> 0).toString(16).padStart(6, "0");
+  return hexRgb(rgb);
 }
 
 function candlePoint(pane, row, draw) {
@@ -855,6 +876,7 @@ function removePane(pane, { release = true } = {}) {
   frame.panes.forEach((p, idx) => {
     p.heightFrac = paneH[idx];
     syncPaneSize(p);
+    buildPaneTools(p);
   });
   rebuildResizeBars();
 }
@@ -1491,7 +1513,33 @@ function clearSymbolPanes(shcode) {
 // 종목 미선택 칸은 안내 문구만 보인다. 체크 상태는 pane.active·systems 를 다시 읽는다.
 let ylCatalog = { dirs: [] };
 
+// 고를 수 없는 폴더(signals 는 첫 차트만)에 남은 체크는 끈다.
+function dropUnselectable(pane) {
+  const paneIndex = pane.frame?.panes?.indexOf(pane) ?? -1;
+  const indicators = new Set();
+  const systems = new Set();
+  for (const dir of YlTree.build(ylCatalog)) {
+    if (YlTree.selectable(dir.id, paneIndex)) continue;
+    for (const item of dir.items) {
+      if (item.port?.kind === "indicator") indicators.add(item.port.id);
+      else if (item.port?.kind === "system") systems.add(item.port.id);
+    }
+  }
+  for (const id of indicators) {
+    if (pane.active.has(id)) deactivateIndicator(pane, id);
+  }
+  let changed = false;
+  for (const id of systems) {
+    if (pane.systems.delete(id)) changed = true;
+  }
+  if (changed) {
+    refreshWeeklyPlots(pane);
+    syncFrameChips(pane.frame);
+  }
+}
+
 function buildPaneTools(pane) {
+  dropUnselectable(pane);
   const panel = pane.panelEl;
   panel.replaceChildren();
 
@@ -1759,7 +1807,7 @@ async function loadWeeklyPlots(pane) {
             const q = new URLSearchParams({
               side: String(side.side), self: chart.self, opp: chart.opp, fut: chart.fut,
             });
-            const vars = pane.systemVars?.[side.systemId];
+            const vars = frameVarBag(pane.frame, side.systemId);
             if (vars && Object.keys(vars).length) q.set("cfg", JSON.stringify(vars));
             const res = await fetch(`/api/pair/sim?${q}`);
             const data = await res.json().catch(() => ({}));
@@ -1842,11 +1890,16 @@ function buildChartControls(pane) {
 function buildSourceDir(pane, dir) {
   const node = document.createElement("div");
   node.className = "ind-cat";
+  const paneIndex = pane.frame?.panes?.indexOf(pane) ?? -1;
+  const locked = !YlTree.selectable(dir.id, paneIndex);
+  if (locked) node.classList.add("locked");
   const folded = !!pane.treeFold[dir.id];
   const head = document.createElement("div");
   head.className = "ind-cat-head";
   head.textContent = `${folded ? "▸" : "▾"} ${dir.name}`;
-  head.title = folded ? "펼치기" : "접기";
+  head.title = locked
+    ? "이 화면틀의 첫 번째 차트에서만 고를 수 있습니다"
+    : (folded ? "펼치기" : "접기");
   head.onclick = () => {
     pane.treeFold[dir.id] = !folded;
     buildPaneTools(pane);
@@ -1855,7 +1908,7 @@ function buildSourceDir(pane, dir) {
   if (!folded) {
     const body = document.createElement("div");
     body.className = "ind-cat-body";
-    for (const item of dir.items) body.append(buildSourceItem(pane, item));
+    for (const item of dir.items) body.append(buildSourceItem(pane, item, locked));
     node.append(body);
   }
   return node;
@@ -1866,11 +1919,11 @@ function sourceTitle(item) {
   return item.port?.note ? `${path}. ${item.port.note}` : path;
 }
 
-function buildSourceItem(pane, item) {
-  if (item.port?.kind === "system") return buildSystemNode(pane, item);
+function buildSourceItem(pane, item, locked) {
+  if (item.port?.kind === "system") return buildSystemNode(pane, item, locked);
   if (item.port?.kind === "indicator" && item.port.id in RENDERERS) {
     const meta = indicatorManifest.find((m) => m.id === item.port.id) || { id: item.port.id, layers: [] };
-    return buildIndNode(pane, meta, item);
+    return buildIndNode(pane, meta, item, locked);
   }
   const row = document.createElement("div");
   row.className = "ind-row src-plain";
@@ -1879,16 +1932,22 @@ function buildSourceItem(pane, item) {
   return row;
 }
 
-function buildSystemNode(pane, item) {
+function buildSystemNode(pane, item, locked) {
   const node = document.createElement("div");
   node.className = "ind-item";
   const row = document.createElement("div");
   row.className = "ind-row";
+  if (locked) row.classList.add("locked");
   const label = document.createElement("label");
   const box = document.createElement("input");
   box.type = "checkbox";
-  box.checked = pane.systems.has(item.port.id);
+  box.checked = !locked && pane.systems.has(item.port.id);
+  box.disabled = !!locked;
   box.onchange = () => {
+    if (locked) {
+      box.checked = false;
+      return;
+    }
     if (box.checked) pane.systems.add(item.port.id);
     else pane.systems.delete(item.port.id);
     syncPairLegs(pane.frame);
@@ -1897,17 +1956,21 @@ function buildSystemNode(pane, item) {
   const name = document.createElement("span");
   name.className = "src-name";
   name.textContent = item.label;
-  name.title = `${sourceTitle(item)}. 종목 순서: 지수, 콜, 풋`;
+  name.title = locked
+    ? "이 화면틀의 첫 번째 차트에서만 고를 수 있습니다"
+    : `${sourceTitle(item)}. 종목 순서: 지수, 콜, 풋`;
   label.append(box, name);
   const gear = document.createElement("button");
   gear.type = "button";
   gear.className = "src-gear";
-  gear.title = "변수 설정";
+  gear.title = locked ? "이 화면틀의 첫 번째 차트에서만 고를 수 있습니다" : "변수 설정";
   gear.setAttribute("aria-label", "변수 설정");
+  gear.disabled = !!locked;
   gear.innerHTML = GEAR_SVG;
   gear.onclick = (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
+    if (locked) return;
     openSystemVars(pane, item);
   };
   row.append(label, gear);
@@ -1917,8 +1980,46 @@ function buildSystemNode(pane, item) {
 
 const GEAR_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.22-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.39-.96c.5.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.22 1.13-.54 1.63-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>`;
 
+const FRAME_VAR_IDS = new Set(["fx_sig_v6", "pair-long", "pair-short", "fx_pnl"]);
+
+function frameVarBag(frame, id) {
+  const panes = frame?.panes || [];
+  const first = panes[0]?.systemVars?.[id];
+  if (first && typeof first === "object" && Object.keys(first).length) return first;
+  for (const pane of panes) {
+    const bag = pane.systemVars?.[id];
+    if (bag && typeof bag === "object" && Object.keys(bag).length) return bag;
+  }
+  return {};
+}
+
+function writeFrameVars(frame, id, next) {
+  if (!frame) return;
+  for (const pane of frame.panes || []) {
+    if (!pane.systemVars) pane.systemVars = {};
+    pane.systemVars[id] = { ...next };
+  }
+}
+
+function signalCfgForFrame(frame) {
+  return { ...frameVarBag(frame, "fx_pnl"), ...frameVarBag(frame, "fx_sig_v6") };
+}
+
+async function postSignalCfg(frame) {
+  const shcode = frame?.panes?.find((pane) => pane.symbol)?.symbol || "";
+  if (!shcode) return;
+  const token = await apiToken();
+  if (!token) return;
+  const res = await fetch("/api/sig/cfg", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": token },
+    body: JSON.stringify({ shcode, cfg: signalCfgForFrame(frame) }),
+  });
+  if (res.ok) await seedSymbol(shcode);
+}
+
 function systemVarValues(pane, id) {
-  const saved = pane.systemVars?.[id] || {};
+  const saved = FRAME_VAR_IDS.has(id) ? frameVarBag(pane.frame, id) : (pane.systemVars?.[id] || {});
   const out = {};
   for (const [name, fallback] of YlTree.inputsFor(id)) {
     const n = Number(saved[name]);
@@ -1943,7 +2044,9 @@ function openSystemVars(pane, item) {
   title.textContent = `시스템 트레이딩 설정 - ${item.label}`;
   const note = document.createElement("div");
   note.className = "sysvar-note";
-  note.textContent = "시스템의 변수를 설정합니다";
+  note.textContent = id === "fx_pnl"
+    ? "이 화면틀의 시그널 포지션을 쓰고, 수량은 틀 안의 차트가 같이 씁니다"
+    : "시스템의 변수를 설정합니다";
   const table = document.createElement("div");
   table.className = "sysvar-table";
   const basisLine = document.createElement("label");
@@ -1963,10 +2066,14 @@ function openSystemVars(pane, item) {
   const head = document.createElement("div");
   head.className = "sysvar-head";
   head.innerHTML = "<span>변수이름</span><span>변수값</span>";
-  table.append(basisLine, head);
+  const pair = id === "pair-long" || id === "pair-short";
+  if (pair) table.append(basisLine);
+  table.append(head);
   const values = systemVarValues(pane, id);
+  const signalBag = frameVarBag(pane.frame, "fx_sig_v6");
+  const ownBag = id === "fx_pnl" ? frameVarBag(pane.frame, "fx_pnl") : values;
   const inputs = [];
-  for (const [name] of fields) {
+  for (const [name, fallback] of fields) {
     const line = document.createElement("label");
     line.className = "sysvar-line";
     const lab = document.createElement("span");
@@ -1974,8 +2081,17 @@ function openSystemVars(pane, item) {
     const input = document.createElement("input");
     input.type = "number";
     input.step = "any";
-    input.value = String(values[name]);
+    const fromSignal = id === "fx_pnl" && Object.prototype.hasOwnProperty.call(signalBag, name)
+      && Number.isFinite(Number(signalBag[name]));
+    input.value = String(id === "fx_pnl"
+      ? YlTree.sharedValue(signalBag, ownBag, name, fallback)
+      : values[name]);
     input.dataset.name = name;
+    input.dataset.fromSignal = fromSignal ? "1" : "";
+    if (fromSignal) {
+      input.readOnly = true;
+      input.title = "첫 번째 차트의 시그널 설정에서 가져옵니다";
+    }
     line.append(lab, input);
     table.append(line);
     inputs.push(input);
@@ -1996,7 +2112,7 @@ function openSystemVars(pane, item) {
   back.addEventListener("mousedown", (ev) => {
     if (ev.target === back) close();
   });
-  ok.onclick = () => {
+  ok.onclick = async () => {
     const next = {};
     for (const input of inputs) {
       const n = Number(input.value);
@@ -2008,10 +2124,14 @@ function openSystemVars(pane, item) {
     }
     if (!pane.systemVars) pane.systemVars = {};
     if (!pane.systemBasis) pane.systemBasis = {};
-    pane.systemVars[id] = next;
-    pane.systemBasis[id] = basis.value === "P" ? "P" : "C";
+    if (FRAME_VAR_IDS.has(id)) writeFrameVars(pane.frame, id, next);
+    else pane.systemVars[id] = next;
+    if (id === "pair-long" || id === "pair-short") {
+      pane.systemBasis[id] = basis.value === "P" ? "P" : "C";
+      refreshWeeklyPlots(pane);
+    }
     close();
-    refreshWeeklyPlots(pane);
+    if ((id === "fx_sig_v6" || id === "fx_pnl") && pane.frame) await postSignalCfg(pane.frame);
     if (el.wsName.value.trim()) saveWorkspace({ quiet: true });
   };
   document.body.append(back);
@@ -2027,15 +2147,21 @@ function openSystemVars(pane, item) {
 // 지표 체크는 activateIndicator/deactivateIndicator를 그대로 부르고 트리를 재구성한다
 // (칩 시절과 같은 경로). 레이어 체크는 handle.setLayers만 반영한다 — 체크박스 자체가
 // 상태 표시라 트리 재구성은 필요 없다 (칩 시절 classList.toggle과 같은 계약).
-function buildIndNode(pane, meta, source) {
+function buildIndNode(pane, meta, source, locked) {
   const node = document.createElement("div");
   node.className = "ind-item";
   const row = document.createElement("label");
   row.className = "ind-row";
+  if (locked) row.classList.add("locked");
   const box = document.createElement("input");
   box.type = "checkbox";
-  box.checked = pane.active.has(meta.id);
+  box.checked = !locked && pane.active.has(meta.id);
+  box.disabled = !!locked;
   box.onchange = () => {
+    if (locked) {
+      box.checked = false;
+      return;
+    }
     if (box.checked) activateIndicator(pane, meta.id);
     else deactivateIndicator(pane, meta.id);
     if (WPLOT_IDS.includes(meta.id)) syncPairLegs(pane.frame);
@@ -2045,9 +2171,33 @@ function buildIndNode(pane, meta, source) {
   const name = document.createElement("span");
   name.className = "src-name";
   name.textContent = source?.label || meta.name || meta.id;
-  if (source) name.title = sourceTitle(source);
-  row.append(box, name);
-  node.append(row);
+  if (locked) name.title = "이 화면틀의 첫 번째 차트에서만 고를 수 있습니다";
+  else if (source) name.title = sourceTitle(source);
+  if (source?.port?.inputs) {
+    const wrap = document.createElement("div");
+    wrap.className = locked ? "ind-row locked" : "ind-row";
+    const label = document.createElement("label");
+    label.append(box, name);
+    const gear = document.createElement("button");
+    gear.type = "button";
+    gear.className = "src-gear";
+    gear.title = "변수 설정";
+    gear.setAttribute("aria-label", "변수 설정");
+    gear.innerHTML = GEAR_SVG;
+    gear.disabled = !!locked;
+    if (locked) gear.title = "이 화면틀의 첫 번째 차트에서만 고를 수 있습니다";
+    gear.onclick = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (locked) return;
+      openSystemVars(pane, source);
+    };
+    wrap.append(label, gear);
+    node.append(wrap);
+  } else {
+    row.append(box, name);
+    node.append(row);
+  }
 
   const entry = pane.active.get(meta.id);
   if (entry) {
@@ -2059,7 +2209,9 @@ function buildIndNode(pane, meta, source) {
       const lbox = document.createElement("input");
       lbox.type = "checkbox";
       lbox.checked = entry.layers[layer.id] !== false;
+      lbox.disabled = !!locked;
       lbox.onchange = () => {
+        if (locked) return;
         entry.layers[layer.id] = lbox.checked;
         entry.handle.setLayers({ [layer.id]: lbox.checked });
       };

@@ -53,6 +53,9 @@
   .link-leg { display: flex; flex-direction: column; gap: 1px; color: #8a919c; font-size: 11px; }
   .link-leg select { width: 100%; padding: 1px 2px; font-size: 11px; }
   .ind-panel .ind-cat-head { cursor: pointer; color: #8a919c; font-weight: 700; padding: 3px 0; user-select: none; }
+  .ind-panel .ind-cat.locked .ind-cat-body { opacity: 0.55; }
+  .ind-panel .ind-row.locked,
+  .ind-panel .ind-row.locked label { cursor: default; }
   .ind-panel .ind-cat-head:hover { color: #d1d4dc; }
   .ind-panel .ind-cat-body { padding-left: 12px; }
   .ind-panel .ind-row { display: flex; align-items: flex-start; padding: 2px 0; cursor: pointer; }
@@ -60,6 +63,8 @@
   .ind-panel .src-name { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
   .ind-panel .src-gear { flex: none; width: 18px; height: 18px; margin: 1px 0 0 4px; padding: 0; border: none; background: transparent; color: #8a919c; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
   .ind-panel .src-gear:hover { color: #d1d4dc; }
+  .ind-panel .src-gear:disabled { opacity: 0.35; cursor: default; }
+  .ind-panel .src-gear:disabled:hover { color: #8a919c; }
   .sysvar-back { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
   .sysvar-box { width: 440px; max-width: calc(100vw - 24px); max-height: 80vh; overflow: auto; background: #1c2330; color: #d1d4dc; border: 1px solid #434651; border-radius: 6px; padding: 12px 14px; box-sizing: border-box; }
   .sysvar-title { font-weight: 700; }
@@ -190,11 +195,11 @@
 <script src="lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script src="mirae-layers.js"></script>
 <script src="sma-layers.js"></script>
-<script src="horiz-lines.js?v=diamond"></script>
+<script src="horiz-lines.js?v=adjslope"></script>
 <script src="fx-layers.js"></script>
 <script src="fx3-layers.js"></script>
 <script src="pgap-layers.js"></script>
-<script src="os-layers.js?v=gray"></script>
+<script src="os-layers.js?v=adjfit"></script>
 <script src="cu-layers.js?v=rails"></script>
 <script src="snco-layers.js?v=circles"></script>
 <script src="ymae-layers.js"></script>
@@ -209,13 +214,13 @@
 <script src="gap-shade.js?v=notrade"></script>
 <script src="workspace.js"></script>
 <script src="indicator-tree.js"></script>
-<script src="yl-tree.js"></script>
+<script src="yl-tree.js?v=sigqty"></script>
 <script src="pane-sync.js"></script>
 <script src="watch-guard.js"></script>
 <script src="symbol-pick.js"></script>
 <script src="symbol-browse.js"></script>
 <script src="symbol-browse-nh.js?v=cme"></script>
 <script src="overlay-ratio.js"></script>
-<script src="app.js?v=nhbrowse"></script>
+<script src="app.js?v=sigshare"></script>
 </body>
 </html>

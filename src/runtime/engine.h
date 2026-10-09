@@ -169,6 +169,7 @@ typedef struct {
     uint32_t os_cf_rgb;
     int os_ent_on, os_ent_y, os_ent_w;
     uint32_t os_ent_rgb;
+    tr_fxos_out_t os_full;
     /* #우드스탁_미래곡선_해외선물. 켜진 Plot만 */
     int cu_n;
     uint16_t cu_id[TR_FXCU_PLOTS];
@@ -413,6 +414,8 @@ bool tr_engine_pipe_resize(tr_engine_t *e, tr_pipeline_t *p, size_t bb_capacity)
  * chart.snapshot의 reg_flat 재계산 등 엔진 밖 포맷이 엔진과 같은 규칙을 쓰게 한다. */
 double tr_engine_pipe_tick_scale(const tr_pipeline_t *p);
 
+/* 진입신호 설정을 반영하고, 가진 1분봉으로 그 계산만 다시 돌린다. */
+void tr_engine_replay_os(tr_pipeline_t *p);
 void tr_engine_attach_ipc(tr_engine_t *e, tr_ipc_t *ipc, const char *stream_id);
 void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ctx);
 

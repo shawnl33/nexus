@@ -66,6 +66,14 @@ void tr_fxcu_eval(tr_fxcu_t *s, const tr_fxmirae_input_t *in, const tr_fxsyn_t *
         return;
     }
     bool is_new = !s->has_bar || in->bar.bar_open != s->last_open;
+    if (is_new && s->brk_has_cur) {
+        s->brk_prev_buy = s->brk_buy;
+        s->brk_prev_sell = s->brk_sell;
+        s->brk_prev_dn_hi = s->brk_dn_hi;
+        s->brk_prev_up_lo = s->brk_up_lo;
+        s->brk_prev_close = s->brk_close;
+        s->brk_has_prev = 1;
+    }
     if (is_new) {
         s->prev = s->st;
         s->has_bar = true;
@@ -171,5 +179,28 @@ void tr_fxcu_eval(tr_fxcu_t *s, const tr_fxmirae_input_t *in, const tr_fxsyn_t *
         if (s->entry.out.emph) {
             set_plot(&s->plots[25], true, s->entry.out.price, s->entry.out.emph_rgb, 3);
         }
+    }
+    /* #우드스탁_해외선물하락최고돌파. 완화단계 기본 2, 표시여유틱 4. */
+    {
+        int valid = o->lup_high > 0.0 && o->lup_low > 0.0 && o->ldn_high > 0.0 && o->ldn_low > 0.0;
+        double buy_base = o->lup_500;
+        double sell_base = o->ldn_500;
+        int buy = valid && buy_base < o->ldn_low && o->ldn_high >= o->lup_high;
+        int sell = valid && sell_base > o->lup_high && o->lup_low <= o->ldn_low;
+        double ps = s->base.fv.cfg.price_scale;
+        int broke_up = s->brk_has_prev && s->brk_prev_buy &&
+                       in->bar.close > s->brk_prev_dn_hi && s->brk_prev_close <= s->brk_prev_dn_hi;
+        int broke_dn = s->brk_has_prev && s->brk_prev_sell &&
+                       in->bar.close < s->brk_prev_up_lo && s->brk_prev_close >= s->brk_prev_up_lo;
+        set_plot(&s->plots[28], broke_up, in->bar.low - 4.0 * ps, RGB_(255, 190, 0), 6);
+        set_plot(&s->plots[29], broke_dn, in->bar.high + 4.0 * ps, RGB_(0, 200, 200), 6);
+        set_plot(&s->plots[30], buy, o->ldn_high, RGB_(230, 180, 0), 1);
+        set_plot(&s->plots[31], sell, o->lup_low, RGB_(0, 170, 170), 1);
+        s->brk_buy = buy;
+        s->brk_sell = sell;
+        s->brk_dn_hi = o->ldn_high;
+        s->brk_up_lo = o->lup_low;
+        s->brk_close = in->bar.close;
+        s->brk_has_cur = 1;
     }
 }

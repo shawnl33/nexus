@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -888,6 +889,9 @@ static const char SNAP_IND_MANIFEST_B[] =
     "{\"id\":\"swing\",\"name\":\"지난 구간\",\"defaultOn\":true},"
     "{\"id\":\"synth\",\"name\":\"합성 5/15/30\",\"defaultOn\":true},"
     "{\"id\":\"entry\",\"name\":\"진입후보\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_dnbrk\",\"name\":\"#우드스탁_해외선물하락최고돌파V1\",\"layers\":["
+    "{\"id\":\"mark\",\"name\":\"돌파점\",\"defaultOn\":true},"
+    "{\"id\":\"line\",\"name\":\"조건선\",\"defaultOn\":true}]},"
     "{\"id\":\"fx_snco\",\"name\":\"스나이퍼 CO\",\"layers\":["
     "{\"id\":\"three\",\"name\":\"삼선 비율\",\"defaultOn\":true},"
     "{\"id\":\"reg\",\"name\":\"회귀 비율\",\"defaultOn\":true},"
@@ -899,18 +903,79 @@ static const char SNAP_IND_MANIFEST_B[] =
     "{\"id\":\"range\",\"name\":\"범위·이탈\",\"defaultOn\":true},"
     "{\"id\":\"scope\",\"name\":\"스코프 유지\",\"defaultOn\":true},"
     "{\"id\":\"both\",\"name\":\"동시압축\",\"defaultOn\":true}]},"
-    "{\"id\":\"fx_judge_v3\",\"name\":\"1분통합판정\",\"layers\":["
+    "{\"id\":\"fx_judge\",\"name\":\"#우드스탁_해외선물1분통합판정\",\"layers\":["
     "{\"id\":\"state\",\"name\":\"당일통합상태\",\"defaultOn\":true},"
     "{\"id\":\"fut\",\"name\":\"미래방향\",\"defaultOn\":true},"
     "{\"id\":\"prof\",\"name\":\"5선매물대\",\"defaultOn\":true},"
     "{\"id\":\"di\",\"name\":\"DI방향\",\"defaultOn\":true},"
     "{\"id\":\"adx\",\"name\":\"ADX상태\",\"defaultOn\":true},"
     "{\"id\":\"entry\",\"name\":\"진입후보\",\"defaultOn\":true},"
-    "{\"id\":\"release\",\"name\":\"압축해제\",\"defaultOn\":true}]},"
+    "{\"id\":\"release\",\"name\":\"압축해제\",\"defaultOn\":true},"
+    "{\"id\":\"resume\",\"name\":\"조정재개\",\"defaultOn\":true},"
+    "{\"id\":\"break\",\"name\":\"구조돌파\",\"defaultOn\":true},"
+    "{\"id\":\"lead\",\"name\":\"선행첫이탈\",\"defaultOn\":true}]},"
     "{\"id\":\"fx_pack_v4\",\"name\":\"매물대압축\",\"layers\":["
     "{\"id\":\"hold\",\"name\":\"압축지속\",\"defaultOn\":true},"
     "{\"id\":\"ratio\",\"name\":\"폭비율\",\"defaultOn\":true},"
     "{\"id\":\"mark\",\"name\":\"해제·확정\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_flat_v4\",\"name\":\"평탄카운트\",\"layers\":["
+    "{\"id\":\"pos\",\"name\":\"위치카운트\",\"defaultOn\":true},"
+    "{\"id\":\"slope\",\"name\":\"기울기카운트\",\"defaultOn\":true},"
+    "{\"id\":\"mark\",\"name\":\"첫이탈\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_adj_v6\",\"name\":\"조정분석\",\"layers\":["
+    "{\"id\":\"state\",\"name\":\"상태\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"조정비\",\"defaultOn\":true},"
+    "{\"id\":\"sig\",\"name\":\"재개신호\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_adj_v1\",\"name\":\"#우드스탁_해외선물조정분석V1\",\"layers\":["
+    "{\"id\":\"state\",\"name\":\"상태\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"조정비\",\"defaultOn\":true},"
+    "{\"id\":\"sig\",\"name\":\"재개신호\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_adj_v2\",\"name\":\"#우드스탁_해외선물조정분석V2\",\"layers\":["
+    "{\"id\":\"state\",\"name\":\"상태\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"조정비\",\"defaultOn\":true},"
+    "{\"id\":\"sig\",\"name\":\"재개신호\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_adj_v4\",\"name\":\"#우드스탁_해외선물조정분석V4\",\"layers\":["
+    "{\"id\":\"state\",\"name\":\"상태\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"조정비\",\"defaultOn\":true},"
+    "{\"id\":\"sig\",\"name\":\"재개신호\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_adj_v5\",\"name\":\"#우드스탁_해외선물조정분석V5\",\"layers\":["
+    "{\"id\":\"state\",\"name\":\"상태\",\"defaultOn\":true},"
+    "{\"id\":\"ratio\",\"name\":\"조정비\",\"defaultOn\":true},"
+    "{\"id\":\"sig\",\"name\":\"재개신호\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_flat_v2\",\"name\":\"#우드스탁_해외선물평탄카운트\",\"layers\":["
+    "{\"id\":\"pos\",\"name\":\"위치카운트\",\"defaultOn\":true},"
+    "{\"id\":\"slope\",\"name\":\"기울기카운트\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_ec19\",\"name\":\"#우드스탁_해외선물진입후보V19\",\"layers\":["
+    "{\"id\":\"dot\",\"name\":\"진입후보\",\"defaultOn\":true},"
+    "{\"id\":\"line\",\"name\":\"진입가격\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_ec20\",\"name\":\"#우드스탁_해외선물진입후보V20\",\"layers\":["
+    "{\"id\":\"dot\",\"name\":\"진입후보\",\"defaultOn\":true},"
+    "{\"id\":\"line\",\"name\":\"진입가격\",\"defaultOn\":true},"
+    "{\"id\":\"resume\",\"name\":\"조정재개\",\"defaultOn\":true},"
+    "{\"id\":\"break\",\"name\":\"구조돌파\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_paint_os\",\"name\":\"#우드스탁_미래곡선_1분봉용_해외\",\"layers\":["
+    "{\"id\":\"bar\",\"name\":\"봉색\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_paint_v12\",\"name\":\"1분통합판정강조\",\"layers\":["
+    "{\"id\":\"bar\",\"name\":\"봉색\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_sig_v6\",\"name\":\"진입신호\",\"layers\":["
+    "{\"id\":\"entry\",\"name\":\"진입\",\"defaultOn\":true},"
+    "{\"id\":\"exit\",\"name\":\"청산\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_pnl\",\"name\":\"수익관리\",\"layers\":["
+    "{\"id\":\"mfeLong\",\"name\":\"진입수익_매수\",\"defaultOn\":true},"
+    "{\"id\":\"maeLong\",\"name\":\"진입손실_매수\",\"defaultOn\":true},"
+    "{\"id\":\"openLong\",\"name\":\"진입손익_매수\",\"defaultOn\":true},"
+    "{\"id\":\"mfeShort\",\"name\":\"진입수익_매도\",\"defaultOn\":true},"
+    "{\"id\":\"maeShort\",\"name\":\"진입손실_매도\",\"defaultOn\":true},"
+    "{\"id\":\"openShort\",\"name\":\"진입손익_매도\",\"defaultOn\":true},"
+    "{\"id\":\"exit\",\"name\":\"청산손익\",\"defaultOn\":true},"
+    "{\"id\":\"closedLong\",\"name\":\"최종청산손익_매수\",\"defaultOn\":true},"
+    "{\"id\":\"closedShort\",\"name\":\"최종청산손익_매도\",\"defaultOn\":true},"
+    "{\"id\":\"keepShort\",\"name\":\"매도수익보전\",\"defaultOn\":true},"
+    "{\"id\":\"keepLong\",\"name\":\"매수수익보전\",\"defaultOn\":true},"
+    "{\"id\":\"keep2\",\"name\":\"매도수익보전\",\"defaultOn\":true},"
+    "{\"id\":\"p26\",\"name\":\"_PlotNo26\",\"defaultOn\":true},"
+    "{\"id\":\"p27\",\"name\":\"진입회수\",\"defaultOn\":true},"
+    "{\"id\":\"p30\",\"name\":\"수익보점\",\"defaultOn\":true}]},"
     "{\"id\":\"fx_sniper\",\"name\":\"스나이퍼스코프\",\"layers\":["
     "{\"id\":\"three\",\"name\":\"삼선 비율\",\"defaultOn\":true},"
     "{\"id\":\"reg\",\"name\":\"회귀 비율\",\"defaultOn\":true},"
@@ -1077,6 +1142,188 @@ static void pair_apply_user_cfg(tr_wpair_config_t *cfg, yyjson_val *raw) {
     if (pair_cfg_num(raw, "저수익대기분", &n)) cfg->low_wait_min = (int32_t)n;
     if (pair_cfg_num(raw, "저수익기준률", &n)) cfg->low_pct = n;
     if (pair_cfg_num(raw, "저수익청산비율", &n)) cfg->low_cut_pct = n;
+}
+
+static void sig_apply_cfg(tr_fxsig_cfg_t *cfg, yyjson_val *raw) {
+    double n;
+    if (cfg == 0) {
+        return;
+    }
+    if (pair_cfg_num(raw, "매매시작시각", &n)) cfg->trade_start = (int)n;
+    if (pair_cfg_num(raw, "매매종료시각", &n)) cfg->trade_end = (int)n;
+    if (pair_cfg_num(raw, "본장시작시각", &n)) cfg->rth_start = (int)n;
+    if (pair_cfg_num(raw, "조정최소비", &n)) cfg->adj_min = n;
+    if (pair_cfg_num(raw, "조정통합확인", &n)) cfg->adj_unified = (int)n;
+    if (pair_cfg_num(raw, "조정매수382제한", &n)) cfg->buy_382 = (int)n;
+    if (pair_cfg_num(raw, "조정상태봉수", &n)) cfg->state_bars = (int)n;
+    if (pair_cfg_num(raw, "조정상태비율", &n)) cfg->state_pct = (int)n;
+    if (pair_cfg_num(raw, "조정연빨강포함", &n)) cfg->state_pink = (int)n;
+    if (pair_cfg_num(raw, "조정매도통합100", &n)) cfg->sell_u100 = (int)n;
+    if (pair_cfg_num(raw, "조정매도저점근접비", &n)) cfg->sell_low = n;
+    if (pair_cfg_num(raw, "선행통합100", &n)) cfg->lead_u100 = (int)n;
+    if (pair_cfg_num(raw, "기울기기준", &n)) cfg->slope_min = (int)n;
+    if (pair_cfg_num(raw, "직전기울기제한", &n)) cfg->slope_limit = (int)n;
+    if (pair_cfg_num(raw, "제한등급", &n)) cfg->grade_limit = (int)n;
+    if (pair_cfg_num(raw, "조정재개1회", &n)) cfg->adj_once = (int)n;
+    if (pair_cfg_num(raw, "강가격기준", &n)) cfg->strong_px = n;
+    if (pair_cfg_num(raw, "강시간기준", &n)) cfg->strong_time = n;
+    if (pair_cfg_num(raw, "중가격기준", &n)) cfg->mid_px = n;
+    if (pair_cfg_num(raw, "시작가B만갱신", &n)) cfg->start_b_only = (int)n;
+    if (pair_cfg_num(raw, "구조등급상향", &n)) cfg->struct_boost = (int)n;
+    if (pair_cfg_num(raw, "구조중가격기준", &n)) cfg->struct_px = n;
+    if (pair_cfg_num(raw, "신호제한봉수", &n)) cfg->signal_limit = (int)n;
+    if (pair_cfg_num(raw, "전환반대기울기비", &n)) cfg->flip_opp_pct = n;
+    if (pair_cfg_num(raw, "최소구간봉수", &n)) cfg->min_leg = (int)n;
+    if (pair_cfg_num(raw, "최소추세봉수", &n)) cfg->min_trend = (int)n;
+    if (pair_cfg_num(raw, "최소반대봉수", &n)) cfg->min_opp = (int)n;
+    if (pair_cfg_num(raw, "복귀확인봉수", &n)) cfg->confirm_back = (int)n;
+    if (pair_cfg_num(raw, "예측봉수1", &n)) cfg->predict_bars[0] = (int)n;
+    if (pair_cfg_num(raw, "예측봉수2", &n)) cfg->predict_bars[1] = (int)n;
+    if (pair_cfg_num(raw, "예측봉수3", &n)) cfg->predict_bars[2] = (int)n;
+    if (pair_cfg_num(raw, "예측봉수4", &n)) cfg->predict_bars[3] = (int)n;
+    if (pair_cfg_num(raw, "예측봉수5", &n)) cfg->predict_bars[4] = (int)n;
+    if (pair_cfg_num(raw, "최소신뢰도", &n)) cfg->min_r2 = n;
+    if (pair_cfg_num(raw, "지속봉수", &n)) cfg->persist_bars = (int)n;
+    if (pair_cfg_num(raw, "마켓계산기간", &n)) cfg->market_period = (int)n;
+    if (pair_cfg_num(raw, "최소전환유지봉수", &n)) cfg->min_hold_bars = (int)n;
+    if (pair_cfg_num(raw, "스윙연결", &n)) cfg->swing_link = (int)n;
+    if (pair_cfg_num(raw, "기세무시틱", &n)) cfg->momentum_ignore_ticks = n;
+    if (pair_cfg_num(raw, "예측변수", &n)) cfg->predict_ticks = (int)n;
+    if (pair_cfg_num(raw, "확정봉판정", &n)) cfg->confirm_closed = (int)n;
+    if (pair_cfg_num(raw, "완화단계", &n)) cfg->relax = (int)n;
+    if (pair_cfg_num(raw, "돌파통합확인", &n)) cfg->brk_check = (int)n;
+    if (pair_cfg_num(raw, "돌파1회", &n)) cfg->brk_once = (int)n;
+    if (pair_cfg_num(raw, "최초진입수량", &n)) cfg->qty_full = n;
+    if (pair_cfg_num(raw, "일부청산수량", &n)) cfg->qty_part = n;
+    if (pair_cfg_num(raw, "수량", &n) && n > 0.0) cfg->order_qty = (int)n;
+}
+
+static void sig_apply_entry(tr_fxec_cfg_t *cfg, yyjson_val *raw) {
+    double n;
+    if (cfg == 0) {
+        return;
+    }
+    if (pair_cfg_num(raw, "판정방식", &n)) cfg->mode = (int)n;
+    if (pair_cfg_num(raw, "등급C사용", &n)) cfg->c_grade_in = (int)n;
+    if (pair_cfg_num(raw, "돌파여유틱", &n)) cfg->break_ticks_in = n;
+    if (pair_cfg_num(raw, "돌파확인봉수", &n)) cfg->confirm_bars = (int)n;
+    if (pair_cfg_num(raw, "DI일치필수", &n)) cfg->di_required = (int)n;
+    if (pair_cfg_num(raw, "확장확인봉수", &n)) cfg->expand_bars = (int)n;
+    if (pair_cfg_num(raw, "해제유효봉수", &n)) cfg->release_valid_bars = (int)n;
+    if (pair_cfg_num(raw, "해제A사용", &n)) cfg->release_a = (int)n;
+    if (pair_cfg_num(raw, "재돌파허용봉수", &n)) cfg->rearm_bars = (int)n;
+    if (pair_cfg_num(raw, "B보완사용", &n)) cfg->b_extra = (int)n;
+    if (pair_cfg_num(raw, "B사용", &n)) cfg->b_on = (int)n;
+    if (pair_cfg_num(raw, "진입시작시각", &n)) cfg->entry_start = (int)n;
+    if (pair_cfg_num(raw, "진입종료시각", &n)) cfg->entry_end = (int)n;
+    if (pair_cfg_num(raw, "구조사용", &n)) cfg->struct_on = (int)n;
+    if (pair_cfg_num(raw, "구조폭기준", &n)) cfg->struct_width = (int)n;
+    if (pair_cfg_num(raw, "구조유효봉수", &n)) cfg->struct_valid_bars = (int)n;
+    if (pair_cfg_num(raw, "구조매수사용", &n)) cfg->struct_buy = (int)n;
+    if (pair_cfg_num(raw, "구조해제포함", &n)) cfg->struct_include_release = (int)n;
+    if (pair_cfg_num(raw, "S사용", &n)) cfg->s_on = (int)n;
+    if (pair_cfg_num(raw, "S구조폭기준", &n)) cfg->s_width = (int)n;
+    if (pair_cfg_num(raw, "S압축봉수", &n)) cfg->s_squeeze_bars = (int)n;
+    if (pair_cfg_num(raw, "S폭비율기준", &n)) cfg->s_ratio = (int)n;
+    if (pair_cfg_num(raw, "S진행중봉수", &n)) cfg->s_active_bars = (int)n;
+    if (pair_cfg_num(raw, "S대기봉수", &n)) cfg->s_wait_bars = (int)n;
+    if (pair_cfg_num(raw, "반대차단시작시각", &n)) cfg->block_start = (int)n;
+    if (pair_cfg_num(raw, "반대차단봉수", &n)) cfg->block_bars = (int)n;
+    if (pair_cfg_num(raw, "R사용", &n)) cfg->r_on = (int)n;
+    if (pair_cfg_num(raw, "R삼선기준", &n)) cfg->r_three = (int)n;
+    if (pair_cfg_num(raw, "R구조폭기준", &n)) cfg->r_swing = (int)n;
+    if (pair_cfg_num(raw, "R조합", &n)) cfg->r_and = (int)n;
+    if (pair_cfg_num(raw, "R폭비율기준", &n)) cfg->r_ratio_max = (int)n;
+    if (pair_cfg_num(raw, "R반전봉수", &n)) cfg->r_rev_bars = (int)n;
+    if (pair_cfg_num(raw, "R위치사용", &n)) cfg->r_pos_on = (int)n;
+    if (pair_cfg_num(raw, "R직전구간최소봉수", &n)) cfg->r_leg_min = (int)n;
+    if (pair_cfg_num(raw, "R이탈여유틱", &n)) cfg->r_slack_ticks = n;
+    if (pair_cfg_num(raw, "약신호확정분", &n)) cfg->weak_window = (int)n;
+    if (pair_cfg_num(raw, "약신호대기봉수", &n)) cfg->weak_wait = (int)n;
+    if (pair_cfg_num(raw, "반대압축확인분", &n)) cfg->opp_window = (int)n;
+    if (pair_cfg_num(raw, "반대압축최소봉수", &n)) cfg->opp_min = (int)n;
+    if (pair_cfg_num(raw, "반대압축구조포함", &n)) cfg->opp_struct = (int)n;
+    if (pair_cfg_num(raw, "T사용", &n)) cfg->t_on = (int)n;
+    if (pair_cfg_num(raw, "T시작시각", &n)) cfg->t_start = (int)n;
+    if (pair_cfg_num(raw, "T종료시각", &n)) cfg->t_end = (int)n;
+    if (pair_cfg_num(raw, "T무신호분", &n)) cfg->t_quiet = (int)n;
+    if (pair_cfg_num(raw, "T삼선기준", &n)) cfg->t_three = (int)n;
+    if (pair_cfg_num(raw, "T폭비율기준", &n)) cfg->t_ratio = (int)n;
+    if (pair_cfg_num(raw, "T구조폭기준", &n)) cfg->t_width = (int)n;
+    if (pair_cfg_num(raw, "T위치사용", &n)) cfg->t_pos_on = (int)n;
+    if (pair_cfg_num(raw, "돌파사용", &n)) cfg->brk_on = (int)n;
+    if (pair_cfg_num(raw, "돌파통합기준", &n)) cfg->brk_unified = (int)n;
+    if (pair_cfg_num(raw, "돌파위치사용", &n)) cfg->brk_pos_on = (int)n;
+    if (pair_cfg_num(raw, "돌파과열분", &n)) cfg->brk_heat = (int)n;
+    if (pair_cfg_num(raw, "가치영역배수", &n)) cfg->value_mult = n;
+    if (pair_cfg_num(raw, "최소봉수", &n)) cfg->min_bars = (int)n;
+    if (pair_cfg_num(raw, "ADX기간", &n)) cfg->adx_period = (int)n;
+    if (pair_cfg_num(raw, "ADX추세기준", &n)) cfg->adx_trend = n;
+    if (pair_cfg_num(raw, "ADX강세기준", &n)) cfg->adx_strong = n;
+    if (pair_cfg_num(raw, "매물대기준모드", &n)) cfg->profile_mode = (int)n;
+    if (pair_cfg_num(raw, "폭계산봉수", &n)) cfg->width_bars = (int)n;
+    if (pair_cfg_num(raw, "비율기준봉수", &n)) cfg->ratio_bars = (int)n;
+    if (pair_cfg_num(raw, "단계1봉수", &n)) cfg->stage1_bars = (int)n;
+    if (pair_cfg_num(raw, "방향확정봉수", &n)) cfg->confirm_sq_bars = (int)n;
+    if (pair_cfg_num(raw, "좁음기준", &n)) cfg->narrow_pct = n;
+    if (pair_cfg_num(raw, "예측변수", &n)) cfg->predict_ticks = n;
+    if (pair_cfg_num(raw, "확정봉판정", &n)) cfg->confirm_closed = (int)n;
+}
+
+/* 진입신호 변수를 엔진에 넣고 가진 1분봉의 신호·손익을 다시 계산한다. */
+static void sig_cfg_command(tr_ipc_command_t *cmd, const char *p) {
+    tr_engine_t *eng = g_live_ctx.engine;
+    yyjson_doc *doc;
+    yyjson_val *data;
+    yyjson_val *code;
+    tr_pipeline_t *pipe = 0;
+    tr_fxsig_cfg_t cfg;
+    tr_fxec_cfg_t entry;
+    const char *sh = 0;
+    int i;
+    if (eng == 0) {
+        cmd->status = "rejected";
+        cmd->error_code = "not_ready";
+        cmd->payload_json = 0;
+        return;
+    }
+    doc = yyjson_read((char *)p, strlen(p), 0);
+    data = doc != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0;
+    code = data != 0 ? yyjson_obj_get(data, "shcode") : 0;
+    if (yyjson_is_str(code)) {
+        sh = yyjson_get_str(code);
+    }
+    for (i = 0; sh != 0 && i < eng->pipe_count; i++) {
+        if (eng->pipes[i] != 0 && strcasecmp(eng->pipes[i]->shcode, sh) == 0) {
+            pipe = eng->pipes[i];
+            break;
+        }
+    }
+    if (pipe == 0 || !pipe->is_ovs) {
+        if (doc != 0) {
+            yyjson_doc_free(doc);
+        }
+        cmd->status = "rejected";
+        cmd->error_code = "not_watched";
+        cmd->payload_json = 0;
+        return;
+    }
+    tr_fxsig_cfg_default(&cfg);
+    tr_fxec_default_cfg(&entry);
+    if (data != 0) {
+        yyjson_val *raw = yyjson_obj_get(data, "cfg");
+        sig_apply_cfg(&cfg, raw);
+        sig_apply_entry(&entry, raw);
+    }
+    if (doc != 0) {
+        yyjson_doc_free(doc);
+    }
+    tr_fxos_set_cfg(&pipe->os_scope, &cfg);
+    tr_fxec_use_cfg(&pipe->os_scope.entry, &entry);
+    tr_engine_replay_os(pipe);
+    cmd->status = "applied";
+    cmd->error_code = "none";
+    cmd->payload_json = "{\"ok\":true}";
 }
 
 /* 보유 1분봉으로 페어 주문을 다시 계산한다. 브로커 주문은 내지 않는다. */
@@ -2204,18 +2451,18 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         off += snprintf(buf + off, sizeof(buf) - (size_t)off, "],\"os\":[");
         SNAP_CLAMP(buf, off);
         first = true;
-        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 420 - SNAP_TAIL_FIXED - gaps_len;) {
+        for (size_t k = from + take; k-- > from && off < (int)sizeof(buf) - 2200 - SNAP_TAIL_FIXED - gaps_len;) {
             tr_bar_status_t st;
+            char row[4096];
+            int rn;
             memset(&st, 0, sizeof(st));
             tr_engine_pipe_status_at(eng, pipe_id, k, &st);
-            off += snprintf(buf + off, sizeof(buf) - (size_t)off,
-                            "%s[%d,%u,%d,%d,%d,%d,%d,%d,%u,%d,%d,%u,%d,%.10g,%u,%d,%d,%u,%d,%d,%d,%u,%d,%d,%d,%u,%d]",
-                            first ? "" : ",", st.os_judge, st.os_judge_rgb, st.os_fut, st.os_prof,
-                            st.os_di, st.os_adx, st.os_sq_on, st.os_sq_len, st.os_sq_rgb, st.os_sq_w,
-                            st.os_hold, st.os_hold_rgb, st.os_ratio_on, st.os_ratio, st.os_ratio_rgb,
-                            st.os_rel_on, st.os_rel_len, st.os_rel_rgb, st.os_rel_w,
-                            st.os_cf_on, st.os_cf_len, st.os_cf_rgb, st.os_cf_w,
-                            st.os_ent_on, st.os_ent_y, st.os_ent_rgb, st.os_ent_w);
+            rn = tr_fxos_format(row, sizeof(row), &st.os_full);
+            if (rn < 0 || (size_t)rn >= sizeof(row)) {
+                rn = 0;
+                row[0] = '\0';
+            }
+            off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%s]", first ? "" : ",", row);
             SNAP_CLAMP(buf, off);
             first = false;
         }
@@ -2280,6 +2527,11 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         cmd->status = "applied";
         cmd->error_code = "none";
         cmd->payload_json = buf;
+        return;
+    }
+
+    if (strstr(p, "\"type\":\"sig.cfg\"") != 0) {
+        sig_cfg_command(cmd, p);
         return;
     }
 

@@ -489,8 +489,8 @@ const HorizLines = (() => {
   }
 
   // Def. 같은 값은 가로. 크게 바뀌면 새 봉에서 세로로 꺾고, 조금씩 바뀌면 사선.
-  // 봉이 비어도 지우지 않고 잇는다. step 이면 틱 단위로 바뀌는 회귀선처럼 변화는 항상 세로다.
-  function defLine(step) {
+  // breakGap 이면 값이 없는 구간은 잇지 않는다. step 이면 변화는 항상 세로다.
+  function defLine(step, breakGap) {
     let series = null;
     let chart = null;
     let points = [];
@@ -523,12 +523,27 @@ const HorizLines = (() => {
                   if (!Number.isFinite(a.value) || !Number.isFinite(b.value)) continue;
                   const color = b.color;
                   const width = b.width;
-                  if (a.value === b.value) {
-                    segs.push({ t0: a.time, v0: a.value, t1: b.time, v1: b.value, color, width });
+                  const gap = b.time - a.time > bar * 1.5;
+                  if (gap) {
+                    if (breakGap) {
+                      segs.push({ t0: a.time, v0: a.value, t1: a.time + bar, v1: a.value, color: a.color, width: a.width });
+                      if (i === points.length - 1) {
+                        segs.push({ t0: b.time, v0: b.value, t1: b.time + bar, v1: b.value, color, width });
+                      }
+                    } else {
+                      segs.push({ t0: a.time, v0: a.value, t1: b.time, v1: b.value, color, width });
+                    }
                     continue;
                   }
-                  const large = step || Math.abs(b.value - a.value) > 4;
+                  if (a.value === b.value) {
+                    segs.push({ t0: a.time, v0: a.value, t1: b.time, v1: b.value, color: a.color, width: a.width });
+                    continue;
+                  }
+                  const prev = i >= 2 ? points[i - 2] : null;
+                  const held = prev && prev.value === a.value && a.time - prev.time <= bar * 1.5;
+                  const large = step || (held && Math.abs(b.value - a.value) > 4);
                   if (large) {
+                    segs.push({ t0: a.time, v0: a.value, t1: b.time, v1: a.value, color: a.color, width: a.width });
                     segs.push({ t0: b.time, v0: a.value, t1: b.time, v1: b.value, color, width });
                   } else {
                     segs.push({ t0: a.time, v0: a.value, t1: b.time, v1: b.value, color, width });
