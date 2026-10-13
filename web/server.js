@@ -63,8 +63,12 @@ for (const root of ROOT_CANDIDATES) {
 const INDEX_FILE = firstExisting(join(PUBLIC_DIR, "index.html"));
 if (INDEX_FILE == null) {
   console.error("cannot open dashboard index.html", ROOT_CANDIDATES.join(" | "));
-} else {
-  console.error("dashboard files:", INDEX_FILE);
+}
+
+function consoleLine(tag, msg) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  console.log(`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}  ${tag}  ${msg}`);
 }
 
 async function readStatic(file) {
@@ -371,6 +375,24 @@ const server = createServer(async (req, res) => {
       return json(res, code, reply);
     }
 
+    if (req.method === "POST" && path === "/api/backtest") {
+      if (!mutationAllowed(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      let data;
+      try { data = JSON.parse(body || "{}"); } catch { return json(res, 400, { error: "bad_request" }); }
+      const reply = await engineCommand(`dash-bt-${reqSeq}`, "backtest.run", JSON.stringify(data), 300000);
+      if (reply.payload && reply.payload.result_file === true) {
+        try {
+          const text = await readFile(join(__dirname, ".runtime", "backtest-result.json"), "utf8");
+          reply.payload = JSON.parse(text);
+        } catch (e) {
+          return json(res, 500, { status: "error", error_code: "result_missing", message: String(e) });
+        }
+      }
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
     if (req.method === "GET" && path === "/api/pair/sim") {
       // 읽기 전용. 보유 1분봉으로 페어 신호를 다시 계산한다. 주문은 내지 않는다.
       const side = Number(url.searchParams.get("side"));
@@ -610,7 +632,9 @@ function stopBridge() {
 const isMain = process.argv[1] != null && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
   server.listen(PORT, HOST, () => {
-    console.log(`dashboard: http://${HOST}:${PORT} (token: ${TOKEN_PATH})`);
+    if (process.env.NEXUS_QUIET_HTTP !== "1") {
+      consoleLine("화면", `http://${HOST}:${PORT}`);
+    }
     startBridge().catch((e) => {
       console.error("status bridge stopped:", e);
       process.exitCode = 1;

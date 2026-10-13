@@ -1,0 +1,35 @@
+# Theta Terminal 3. traderctl up 이 이 폴더에서 켠다.
+# 키는 여기 두지 않는다. THETADATA_API_KEY 는 프로젝트 .env 에서 환경변수로 넘긴다.
+
+host = "127.0.0.1"
+port = 25503
+log_directory = "log"
+
+[env]
+mdds_type = "PROD"
+
+[auth]
+base_url = "https://nexus-api.thetadata.us/identity/terminal/auth_user"
+
+[mdds]
+enable = true
+
+[mdds_server]
+host = "mdds-01.thetadata.us"
+port = 443
+tls = true
+
+[mdds_stage]
+host = "mdds-stage.thetadata.us"
+port = 443
+tls = true
+
+[fpss]
+enable = true
+reconnect_wait = 1000
+fpss_queue_depth = 1000000
+ws_port = 25520
+fpss_region = "fpss_nj_hosts"
+fpss_nj_hosts = "nj-a.thetadata.us:20000,nj-a.thetadata.us:20001,nj-b.thetadata.us:20000,nj-b.thetadata.us:20001"
+fpss_stage_hosts = "nj-a.thetadata.us:20100,test-server.thetadata.us:20100,test-server.thetadata.us:20101"
+fpss_dev_hosts = "nj-a.thetadata.us:20200,test-server.thetadata.us:20200,test-server.thetadata.us:20201"

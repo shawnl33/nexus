@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "adapters/nh/nh_chart.h"
+#include "adapters/nh/nh_rt.h"
 
 static const char SAMPLE[] =
     "{\"nxt_key\":\"20261008160500999999999999999999\",\"nrec\":\"0003\",\"sym\":\"\",\"exch_cd\":\"OCBO\","
@@ -49,7 +50,21 @@ static void test_parse(void) {
     TR_CHECK(nh_exch_for_symbol("A016C000") == 0);
 }
 
+static void test_take_pong(void) {
+    const char *raw = "{ \"code\" : \"pingpong\" , \"msg\" : \"pingpong\" }";
+    char out[128];
+    memset(out, 0x5a, sizeof(out));
+    const char *init = "{\"code\":\"INIT\",\"msg\":\"INIT_SUCCESS\"}";
+    const char *other = "{\"code\":\"pingpong\",\"msg\":\"other\"}";
+    TR_CHECK(nh_rt_take_pong(raw, strlen(raw), out, sizeof(out)));
+    TR_CHECK(strcmp(out, raw) == 0);
+    TR_CHECK(!nh_rt_take_pong(init, strlen(init), out, sizeof(out)));
+    TR_CHECK(strcmp(out, raw) == 0);
+    TR_CHECK(!nh_rt_take_pong(other, strlen(other), out, sizeof(out)));
+}
+
 int main(void) {
     test_parse();
+    test_take_pong();
     TR_TEST_SUMMARY();
 }

@@ -18,6 +18,7 @@ typedef struct {
 /* JSON POST. token이 있으면 Authorization: Bearer. 토큰은 로그에 넣지 않는다. */
 int nh_http_post_json(const char *url, const char *bearer, const char *json, long timeout_ms,
                       nh_http_resp_t *resp);
+int nh_http_get(const char *url, long timeout_ms, nh_http_resp_t *resp);
 int nh_http_post_form(const char *url, const char *form, long timeout_ms, nh_http_resp_t *resp);
 void nh_http_resp_free(nh_http_resp_t *resp);
 

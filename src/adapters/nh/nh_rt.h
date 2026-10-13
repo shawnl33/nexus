@@ -31,4 +31,7 @@ int nh_rt_service(nh_rt_t *rt, int timeout_ms);
 bool nh_rt_next(nh_rt_t *rt, nh_rt_tick_t *out);
 bool nh_rt_ready(const nh_rt_t *rt);
 
+/* 서버 pingpong이면 받은 원문을 out에 복사한다. 회신은 쓰지 않는다. */
+bool nh_rt_take_pong(const char *text, size_t len, char *out, size_t cap);
+
 #endif

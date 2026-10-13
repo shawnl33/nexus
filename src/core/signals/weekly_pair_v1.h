@@ -214,4 +214,10 @@ int tr_wpair_replay(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
                     size_t nfut, const tr_ksscore_config_t *score_cfg, tr_wpair_event_t *ev,
                     size_t cap);
 
+/* eval이 낸 AtMarket을 장부에 넣는다. 체결 시각, 이름, 수량은 replay 이벤트와 같다. */
+struct tr_yl_book;
+int tr_wpair_fill(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
+                  const tr_wpair_pxbar_t *opp, size_t nopp, const tr_wpair_pxbar_t *fut,
+                  size_t nfut, const tr_ksscore_config_t *score_cfg, struct tr_yl_book *book);
+
 #endif

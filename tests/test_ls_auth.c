@@ -48,9 +48,41 @@ static void test_paper_key_name(void) {
     remove(FIXTURE);
 }
 
+static void test_nh_key_names(void) {
+    write_fixture(
+        "NH_OVERSEAS_APP_KEY=ovs-key\n"
+        "NH_OVERSEAS_SECRET_KEY=ovs-secret\n"
+        "NH_DOMESTIC_APP_KEY=dom-key\n"
+        "NH_DOMESTIC_SECRET_KEY=dom-secret\n"
+        "NH_PAPER_OVERSEAS_APP_KEY=paper-ovs-key\n"
+        "NH_PAPER_OVERSEAS_SECRET_KEY=paper-ovs-secret\n"
+        "NH_PAPER_DOMESTIC_APP_KEY=paper-dom-key\n"
+        "NH_PAPER_DOMESTIC_SECRET_KEY=paper-dom-secret\n"
+        "NH_APP_KEY=old-live\n"
+        "NH_SECRET_KEY=old-secret\n"
+        "NH_PAPER_APP_KEY=old-paper\n"
+        "NH_PAPER_SECRET_KEY=old-paper-secret\n");
+    TR_CHECK(ls_auth_load_dotenv(FIXTURE) == 8);
+    if (getenv("NH_OVERSEAS_APP_KEY") == 0 && getenv("NH_DOMESTIC_APP_KEY") == 0 &&
+        getenv("NH_PAPER_OVERSEAS_APP_KEY") == 0 && getenv("NH_PAPER_DOMESTIC_APP_KEY") == 0) {
+        TR_CHECK(ls_auth_env_present("NH_OVERSEAS_APP_KEY"));
+        TR_CHECK(ls_auth_env_present("NH_OVERSEAS_SECRET_KEY"));
+        TR_CHECK(ls_auth_env_present("NH_DOMESTIC_APP_KEY"));
+        TR_CHECK(ls_auth_env_present("NH_DOMESTIC_SECRET_KEY"));
+        TR_CHECK(ls_auth_env_present("NH_PAPER_OVERSEAS_APP_KEY"));
+        TR_CHECK(ls_auth_env_present("NH_PAPER_OVERSEAS_SECRET_KEY"));
+        TR_CHECK(ls_auth_env_present("NH_PAPER_DOMESTIC_APP_KEY"));
+        TR_CHECK(ls_auth_env_present("NH_PAPER_DOMESTIC_SECRET_KEY"));
+        TR_CHECK(!ls_auth_env_present("NH_APP_KEY"));
+        TR_CHECK(!ls_auth_env_present("NH_PAPER_APP_KEY"));
+    }
+    remove(FIXTURE);
+}
+
 int main(void) {
     test_parse_variants();
     test_missing_file();
     test_paper_key_name();
+    test_nh_key_names();
     TR_TEST_SUMMARY();
 }

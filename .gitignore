@@ -14,5 +14,9 @@ engine.db-shm
 .vscode/
 *.deb
 .playwright-mcp/
+.superpowers/
+tools/theta/*.jar
+tools/theta/log/
+tools/theta/lib/
 dash-*.png
 original-indicator.png

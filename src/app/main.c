@@ -37,6 +37,8 @@ static void sleep_ms(int ms) {
 #include "core/indicators/weekly_plot_v1.h"
 #include "core/signals/weekly_pair_v1.h"
 #include "runtime/bar_cache.h"
+#include "app/backtest_cmd.h"
+#include "runtime/clog.h"
 #include "runtime/engine.h"
 #ifdef TR_HAS_STORE
 #include "adapters/storage/live_bars.h"
@@ -349,7 +351,7 @@ static void nh_watch_realtime(const char *code, uint64_t id) {
         char err[128] = {0};
         g_nh_rt = nh_rt_open(&g_nh, err, sizeof(err));
         if (g_nh_rt == 0) {
-            fprintf(stderr, "NH realtime: %s\n", err[0] != 0 ? err : "open failed");
+            tr_clog("시세", "%s", err[0] != 0 ? err : "열기 실패");
             return;
         }
     }
@@ -385,7 +387,7 @@ static int nh_replace_pipe_bars(tr_engine_t *eng, tr_pipeline_t *pipe, const cha
 static int backfill_nh_minutes(tr_engine_t *eng, tr_pipeline_t *pipe, const char *shcode) {
     const char *exch = nh_exch_for_symbol(shcode);
     if (exch == 0) {
-        fprintf(stderr, "NH backfill skip %s\n", shcode != 0 ? shcode : "");
+        tr_clog("봉", "%s  건너뜀", shcode != 0 ? shcode : "");
         return 0;
     }
     char err[128] = {0};
@@ -400,7 +402,7 @@ static int backfill_nh_minutes(tr_engine_t *eng, tr_pipeline_t *pipe, const char
     }
     if (nh_chart_fetch_minutes(&g_nh, shcode, exch, qty, "", pipe->instrument_id, g_hist, HIST_CAP, &n,
                                nxt, sizeof(nxt), err, sizeof(err)) != 0) {
-        fprintf(stderr, "NH backfill %s: %s\n", shcode, err);
+        tr_clog("봉", "%s  실패  %s", shcode, err);
         return 0;
     }
     const tr_candle_t *src = g_hist;
@@ -595,7 +597,7 @@ static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t
  * 워밍업된 호가·회귀 상태를 보존하기 위한다. watch 백필과 마찬가지로 루프를 막는다.
  * 선물 야간 세션(t8461)은 커버하지 않는다 — 주간 TR(t8465)만 조회한다 (후속 과제). */
 static void rt_catchup_missing_bars(live_ctx_t *lc, tr_time_us_t now_us) {
-    fprintf(stderr, "rt catch-up: start (watches=%d)\n", lc->watch_count);
+    tr_clog("봉", "보충 시작  %d종목", lc->watch_count);
     for (int i = 0; i < lc->watch_count; i++) {
         const watch_entry_t *w = &lc->watches[i];
         if (w->rt_only) {
@@ -624,17 +626,16 @@ static void rt_catchup_missing_bars(live_ctx_t *lc, tr_time_us_t now_us) {
             fetched = page.count;
         }
         if (rc != LS_HTTP_OK && rc != LS_CHART_EMPTY) {
-            fprintf(stderr, "rt catch-up %s: fetch failed rc=%d: %s\n", w->shcode, rc, cerr);
+            tr_clog("봉", "%s  보충 실패  %s", w->shcode, cerr[0] != 0 ? cerr : "");
             continue;
         }
         size_t merged = tr_engine_pipe_merge_bars(lc->engine, w->instrument_id,
                                                   g_page, fetched, now_us,
                                                   g_merge_bars, g_bar_cap,
                                                   g_merge_status, g_bar_cap);
-        fprintf(stderr, "rt catch-up %s: merged %zu bars (page=%zu)\n", w->shcode, merged,
-                fetched);
+        tr_clog("봉", "%s  보충 %zu개", w->shcode, merged);
     }
-    fprintf(stderr, "rt catch-up: done\n");
+    tr_clog("봉", "보충 끝");
 }
 
 static live_ctx_t g_live_ctx;
@@ -1659,12 +1660,11 @@ static const char *switch_broker_profile(const char *id) {
             }
             int nb = nh_replace_pipe_bars(lc->engine, pipe, w->shcode, w->kind);
             w->rt_only = false;
-            fprintf(stderr, "NH backfill %s: %d\n", w->shcode, nb);
+            tr_clog("봉", "%s  %d개", w->shcode, nb);
             nh_watch_realtime(w->shcode, w->instrument_id);
         }
         save_broker_profile_id(next->id);
-        printf("broker: %s\n", next->label);
-        fflush(stdout);
+        tr_clog("증권", "%s", next->label);
         return 0;
     }
     const tr_broker_profile_t *prev = g_broker;
@@ -1727,7 +1727,7 @@ static const char *switch_broker_profile(const char *id) {
             bool rt_only = false;
             int nb = backfill_minute_bars(lc->auth, lc->engine, pipe, w->shcode, w->kind, &rt_only);
             w->rt_only = rt_only;
-            fprintf(stderr, "broker backfill %s: %d\n", w->shcode, nb);
+            tr_clog("봉", "%s  %d개", w->shcode, nb);
         }
         if (lc->rt != 0) {
             tr_ls_rt_subscribe(lc->rt, w->tick_cd, w->shcode, w->instrument_id);
@@ -1736,8 +1736,7 @@ static const char *switch_broker_profile(const char *id) {
     }
     g_broker = next;
     save_broker_profile_id(next->id);
-    printf("broker: %s\n", next->label);
-    fflush(stdout);
+    tr_clog("증권", "%s", next->label);
     return 0;
 }
 
@@ -1756,14 +1755,13 @@ static void nh_market_instruments(tr_ipc_command_t *cmd, const char *p) {
         char err[128] = {0};
         g_nh_master = nh_master_open_cached("web/.runtime", err, sizeof(err));
         if (g_nh_master == 0) {
-            fprintf(stderr, "NH master: %s\n", err[0] != 0 ? err : "unavailable");
+            tr_clog("종목", "%s", err[0] != 0 ? err : "목록 없음");
             cmd->status = "rejected";
             cmd->error_code = "registry_unavailable";
             cmd->payload_json = 0;
             return;
         }
-        printf("NH instruments: %zu\n", nh_master_count(g_nh_master));
-        fflush(stdout);
+        tr_clog("종목", "%zu개", nh_master_count(g_nh_master));
     }
     char qbuf[80];
     char expiry[48];
@@ -2542,6 +2540,20 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         return;
     }
 
+    if (strstr(p, "\"type\":\"backtest.run\"") != 0) {
+        static char bt_buf[16 * 1024 * 1024];
+        if (tr_backtest_run(p, bt_buf, sizeof(bt_buf)) != 0 ||
+            tr_backtest_fit_ipc(bt_buf, sizeof(bt_buf)) != 0) {
+            cmd->status = "rejected";
+            cmd->error_code = "bad_request";
+        } else {
+            cmd->status = "applied";
+            cmd->error_code = "none";
+        }
+        cmd->payload_json = bt_buf;
+        return;
+    }
+
     if (strstr(p, "\"type\":\"pair.plots\"") != 0) {
         pair_plots_command(cmd, p);
         return;
@@ -2752,7 +2764,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
 
 static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const char *pub_ep,
                     const char *pidfile) {
-    /* 1) 인증. 저장된 프로필이 있으면 그것, 없으면 NH 실전. */
+    /* 1) 인증. 저장된 프로필이 있으면 그것. 없으면 NH 모의, NH 실전, LS 순. */
     char saved_profile[40];
     read_broker_profile_id(saved_profile, sizeof(saved_profile));
     g_broker = tr_broker_profile_choose(saved_profile[0] != '\0' ? saved_profile : 0,
@@ -2761,8 +2773,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         fprintf(stderr, "error: no broker profile with keys\n");
         return 3;
     }
-    printf("broker: %s\n", g_broker->label);
-    fflush(stdout);
+    tr_clog("증권", "%s", g_broker->label);
     ls_auth_t auth;
     ls_auth_init(&auth, 0);
     if (broker_is_nh()) {
@@ -2895,8 +2906,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     if (have_symbol) {
         int nb = backfill_minute_bars(&auth, &engine, engine.pipes[0], shcode, kind, &rt_only);
         if (nb > 0) {
-            printf("backfill: %d bars\n", nb);
-            fflush(stdout);
+            tr_clog("봉", "%d개", nb);
         }
     }
     g_boot_ipc = 0;
@@ -2963,14 +2973,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     }
 
     if (have_symbol) {
-        printf("live %s %s: streaming (stop with Ctrl+C or 'traderctl engine stop')\n",
-               kind == LS_MARKET_OVS_FUT        ? "OVS"
-               : kind == LS_MARKET_KP200_FUT ? "FUT"
-               : kind == LS_MARKET_KP200_OPT ? "OPT"
-                                             : "STK",
-               shcode);
+        tr_clog("시세", "%s  수신 중", shcode);
     } else {
-        printf("live: no symbol. Open one in the dashboard (stop with Ctrl+C or 'traderctl engine stop')\n");
+        tr_clog("대기", "대시보드에서 종목을 여세요");
     }
 
     int rc = 0;
@@ -2983,6 +2988,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
     time_t last_backfill_retry = time(0);
     time_t last_nh_poll = time(0);
     int nh_poll_cursor = 0;
+    bool nh_quote_ready_seen = false;
     while (!g_stop) {
         rt = g_live_ctx.rt;
         if (broker_is_nh() && rt != 0) {
@@ -3043,12 +3049,22 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                     tk.volume_meaning = TR_TICK_VOLUME_PER_TRADE;
                     tr_bb_status_t st = tr_engine_on_tick(&engine, &env, &tk);
                     tr_engine_on_timer(&engine, ntk.event_time_us);
-                    static int nh_tick_logs = 0;
-                    if (nh_tick_logs < 3 || st == TR_BB_REJECTED_OUT_OF_SESSION) {
-                        if (nh_tick_logs < 8) {
-                            fprintf(stderr, "NH tick %s px=%lld st=%d\n", ntk.sym,
-                                    (long long)ntk.price_raw, (int)st);
-                            nh_tick_logs++;
+                    static char seen_tick[8][40];
+                    static int seen_tick_n = 0;
+                    bool seen = false;
+                    for (int s = 0; s < seen_tick_n; s++) {
+                        if (strcmp(seen_tick[s], ntk.sym) == 0) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (!seen && seen_tick_n < 8) {
+                        snprintf(seen_tick[seen_tick_n], sizeof(seen_tick[0]), "%s", ntk.sym);
+                        seen_tick_n++;
+                        if (st == TR_BB_REJECTED_OUT_OF_SESSION) {
+                            tr_clog("체결", "%s  장외", ntk.sym);
+                        } else {
+                            tr_clog("체결", "%s  %.2f", ntk.sym, (double)ntk.price_raw / 100.0);
                         }
                     }
                 }
@@ -3075,6 +3091,8 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
             int start = nh_poll_cursor % nwatch;
             int walked = 0;
             int tried = 0;
+            bool ready_now = nh_rt_ready(g_nh_rt);
+            bool repair = !ready_now || !nh_quote_ready_seen;
             while (walked < nwatch && tried < 5) {
                 int i = (start + walked) % nwatch;
                 walked++;
@@ -3094,6 +3112,11 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                     tr_engine_pipe_merge_bars(&engine, w->instrument_id, g_page, n,
                                               (tr_time_us_t)now_sec * TR_US_PER_SEC, g_merge_bars,
                                               BB_STORE_MAX, g_merge_status, BB_STORE_MAX);
+                    /* 소켓이 없거나 방금 다시 붙은 때만 같은 분의 봉을 조회값으로 덮는다.
+                     * 붙어 있는 동안 매초 덮으면 방금 받은 틱이 지워진다. */
+                    if (repair) {
+                        tr_engine_pipe_repair_bars(&engine, w->instrument_id, g_page, n);
+                    }
                     /* 체결 소켓이 없을 때는 최근 분봉 종가로 화면을 갱신한다. */
                     if (!nh_rt_ready(g_nh_rt)) {
                         const tr_candle_t *last = &g_page[n - 1];
@@ -3115,6 +3138,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
             }
             nh_poll_cursor = (start + walked) % nwatch;
             last_nh_poll = time(0);
+            nh_quote_ready_seen = ready_now;
         }
         if (now_sec - last_backfill_retry >= 60) {
             last_backfill_retry = now_sec;
@@ -3132,9 +3156,9 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                                    : pipe->is_futures ? LS_MARKET_KP200_FUT : LS_MARKET_KOSPI;
                 int nb = backfill_minute_bars(&auth, &engine, pipe, pipe->shcode, kind, 0);
                 if (nb > 0) {
-                    fprintf(stderr, "backfill retry %s: %d bars\n", pipe->shcode, nb);
+                    tr_clog("봉", "%s  다시 %d개", pipe->shcode, nb);
                 } else {
-                    fprintf(stderr, "backfill retry %s: still empty\n", pipe->shcode);
+                    tr_clog("봉", "%s  아직 없음", pipe->shcode);
                 }
                 retried = true;
             }
@@ -3153,8 +3177,7 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
         }
     }
     g_running = 0;
-    printf("stopping: %llu status messages published\n",
-           (unsigned long long)(engine.status_seq - 1));
+    tr_clog("엔진", "종료  상태 %llu건", (unsigned long long)(engine.status_seq - 1));
 
     if (g_live_ctx.rt != 0) {
         tr_ls_rt_close(g_live_ctx.rt);

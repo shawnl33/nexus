@@ -495,6 +495,11 @@ size_t tr_engine_pipe_merge_bars(tr_engine_t *e, uint64_t instrument_id,
                                  tr_candle_t *bar_scratch, size_t bar_scratch_cap,
                                  tr_bar_status_t *st_scratch, size_t st_scratch_cap);
 
+/* 같은 open 시각의 봉만 조회 봉의 시고저종·거래량으로 덮는다. 봉 상태는 유지하고
+ * 없는 시각은 삽입하지 않는다. 반환은 값이 바뀐 봉 수. */
+size_t tr_engine_pipe_repair_bars(tr_engine_t *e, uint64_t instrument_id, const tr_candle_t *bars,
+                                  size_t n);
+
 /* chart.snapshot의 시간축 공백(gaps) 수집 (2026-09-30 RT 공백 사건 후속, G2):
  * 봉 링의 창 [from, from+take) (back_index 기준) 안에서 시간상 이웃한 두 봉의
  * open 시각 차가 timeframe을 넘고 **같은 세션**이면 구멍으로 기록한다.

@@ -70,6 +70,38 @@ int nh_http_post_json(const char *url, const char *bearer, const char *json, lon
     return post(url, bearer, json, "application/json", timeout_ms, resp);
 }
 
+int nh_http_get(const char *url, long timeout_ms, nh_http_resp_t *resp) {
+    memset(resp, 0, sizeof(*resp));
+    if (url == 0) {
+        resp->rc = -1;
+        return -1;
+    }
+    CURL *curl = curl_easy_init();
+    if (curl == 0) {
+        resp->rc = -1;
+        snprintf(resp->err, sizeof(resp->err), "curl init failed");
+        return -1;
+    }
+    char errbuf[CURL_ERROR_SIZE];
+    errbuf[0] = 0;
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms > 0 ? timeout_ms : 20000L);
+    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp->body);
+    CURLcode cc = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &resp->http_status);
+    curl_easy_cleanup(curl);
+    if (cc != CURLE_OK) {
+        resp->rc = -1;
+        snprintf(resp->err, sizeof(resp->err), "%.120s", errbuf[0] ? errbuf : curl_easy_strerror(cc));
+        return -1;
+    }
+    resp->rc = 0;
+    return 0;
+}
+
 int nh_http_post_form(const char *url, const char *form, long timeout_ms, nh_http_resp_t *resp) {
     return post(url, 0, form, "application/x-www-form-urlencoded", timeout_ms, resp);
 }

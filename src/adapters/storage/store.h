@@ -90,6 +90,11 @@ tr_store_rc_t tr_store_get_instrument(tr_store_t *s, uint64_t instrument_id, tr_
 /* 종목+주기+시작+출처를 고유키로, 더 큰 revision만 반영한다. */
 tr_store_rc_t tr_store_put_candle(tr_store_t *s, const tr_candle_t *c);
 
+/* 한 페이지 분봉을 한 번에 기록한다. 중첩 트랜잭션은 쓰지 않는다. */
+tr_store_rc_t tr_store_tx_begin(tr_store_t *s);
+tr_store_rc_t tr_store_tx_commit(tr_store_t *s);
+tr_store_rc_t tr_store_tx_rollback(tr_store_t *s);
+
 /* from_us <= open_time < to_us, 시작 시각 오름차순, 최대 limit개. 반환값은 행 수, 실패 시 -1. */
 typedef void (*tr_store_candle_fn)(void *ctx, const tr_candle_t *c);
 int tr_store_query_candles(tr_store_t *s, uint64_t instrument_id, uint32_t timeframe,

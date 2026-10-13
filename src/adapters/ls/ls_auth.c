@@ -11,19 +11,30 @@
 
 #define LS_REFRESH_MARGIN_US (300LL * TR_US_PER_SEC) /* 만료 5분 전 갱신 */
 
-/* .env에서 읽은 백업 키 (환경변수가 우선). 이름만 보관하고 로그에는 값을 남기지 않는다. */
-#define LS_DOTENV_CAP 8
+/* .env에서 읽은 백업 키 (환경변수가 우선). 이름만 보관하고 로그에는 값을 남기지 않는다.
+ * NH는 해외·국내 앱키가 다르다. 시세 프로필은 해외 키를 쓴다. */
+static const char *DOTENV_KEYS[] = {
+    "LS_APP_KEY",
+    "LS_SECRET_KEY",
+    "LS_PAPER_APP_KEY",
+    "LS_PAPER_SECRET_KEY",
+    "NH_OVERSEAS_APP_KEY",
+    "NH_OVERSEAS_SECRET_KEY",
+    "NH_DOMESTIC_APP_KEY",
+    "NH_DOMESTIC_SECRET_KEY",
+    "NH_PAPER_OVERSEAS_APP_KEY",
+    "NH_PAPER_OVERSEAS_SECRET_KEY",
+    "NH_PAPER_DOMESTIC_APP_KEY",
+    "NH_PAPER_DOMESTIC_SECRET_KEY",
+};
+
+#define LS_DOTENV_CAP (int)(sizeof(DOTENV_KEYS) / sizeof(DOTENV_KEYS[0]))
 static struct {
     char name[40];
     char value[256];
 } g_dotenv[LS_DOTENV_CAP];
 static int g_dotenv_count = 0;
 static bool g_dotenv_attempted = false;
-
-static const char *DOTENV_KEYS[] = {
-    "LS_APP_KEY",          "LS_SECRET_KEY",       "LS_PAPER_APP_KEY", "LS_PAPER_SECRET_KEY",
-    "NH_APP_KEY",          "NH_SECRET_KEY",       "NH_PAPER_APP_KEY", "NH_PAPER_SECRET_KEY",
-};
 
 static bool dotenv_known(const char *name) {
     for (size_t i = 0; i < sizeof(DOTENV_KEYS) / sizeof(DOTENV_KEYS[0]); i++) {

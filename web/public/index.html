@@ -8,6 +8,11 @@
   :root { color-scheme: dark; }
   body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #131722; color: #d1d4dc; }
   header { display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: #1c2330; border-bottom: 1px solid #2a2e39; flex-wrap: wrap; }
+  .mode-tabs { display: inline-flex; flex: none; border: 1px solid #434651; border-radius: 6px; overflow: hidden; background: #12161f; }
+  .mode-tabs a { color: #8a919c; text-decoration: none; padding: 4px 12px; font-size: 13px; line-height: 1.4; }
+  .mode-tabs a + a { border-left: 1px solid #434651; }
+  .mode-tabs a:hover { color: #d1d4dc; background: #1c2330; }
+  .mode-tabs a[aria-current="page"] { background: #14282c; color: #26a69a; font-weight: 700; }
   .layout-tools { display: inline-flex; gap: 12px; align-items: center; flex: none; }
   header .title { font-weight: 700; }
   .badge { padding: 2px 8px; border-radius: 4px; background: #2a2e39; font-size: 12px; }
@@ -164,6 +169,10 @@
 </div>
 <header>
   <span class="title">Nexus Trading Engine 대시보드</span>
+  <nav class="mode-tabs" aria-label="화면">
+    <a href="/" aria-current="page">실시간</a>
+    <a href="/backtest.html">백테스트</a>
+  </nav>
   <span class="badge" id="mode">–</span>
   <span id="mirae-badges" hidden>
     <span>점수 <span id="score">–</span></span>

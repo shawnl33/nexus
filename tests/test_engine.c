@@ -1903,10 +1903,49 @@ static void test_ks_domestic_futures_three_ratio(void) {
     TR_CHECK(st.pg_v[0][3] == 0.0);
 }
 
+/* 끊김 복구: 같은 open 시각의 봉은 조회 봉의 시고저종·거래량으로 덮고, 상태는 유지한다.
+ * 다음 틱은 덮인 고가 위에서 이어진다. 없는 시각은 삽입하지 않는다. */
+static void test_repair_open_bar(void) {
+    tr_engine_t e;
+    capture_t cap;
+    init_engine(&e, &cap);
+    feed_min1(&e, 4, 104, 1);
+    feed_min1(&e, 4, 110, 2);
+    tr_candle_t cur;
+    TR_CHECK(tr_ring_at(&e.bb.bars, 0, &cur));
+    TR_CHECK(cur.state == TR_CANDLE_OPEN);
+    TR_CHECK(cur.high == 110 && cur.volume == 20);
+
+    tr_candle_t fetched = fetched_bar(9, 4, 150);
+    fetched.instrument_id = e.cfg.instrument_id;
+    fetched.open = 100;
+    fetched.high = 200;
+    fetched.low = 90;
+    fetched.close = 150;
+    fetched.volume = 500;
+    fetched.close_time_us = cur.close_time_us;
+    TR_CHECK(tr_engine_pipe_repair_bars(&e, e.cfg.instrument_id, &fetched, 1) == 1);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 1);
+    TR_CHECK(tr_ring_at(&e.bb.bars, 0, &cur));
+    TR_CHECK(cur.state == TR_CANDLE_OPEN);
+    TR_CHECK(cur.open == 100 && cur.high == 200 && cur.low == 90 && cur.close == 150);
+    TR_CHECK(cur.volume == 500);
+
+    tr_candle_t other = fetched_bar(9, 5, 160);
+    other.instrument_id = e.cfg.instrument_id;
+    TR_CHECK(tr_engine_pipe_repair_bars(&e, e.cfg.instrument_id, &other, 1) == 0);
+    TR_CHECK(tr_ring_count(&e.bb.bars) == 1);
+
+    feed_min1(&e, 4, 120, 3);
+    TR_CHECK(tr_ring_at(&e.bb.bars, 0, &cur));
+    TR_CHECK(cur.high == 200 && cur.close == 120 && cur.volume == 510);
+}
+
 int main(void) {
     test_merge_bars_catchup();
     test_merge_bars_keeps_live_open();
     test_merge_bars_wrapped_ring();
+    test_repair_open_bar();
     test_snapshot_gaps();
     test_replay_pipeline();
     test_session_first_reset();

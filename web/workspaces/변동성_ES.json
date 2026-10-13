@@ -16,12 +16,12 @@
       "overlayScale": "shared",
       "panels": [
         {
-          "height": 0.6048922056384742,
+          "height": 0.28503315910088173,
           "symbol": "ESZ26",
-          "panelOpen": true,
+          "panelOpen": false,
           "data2": "NQZ26",
           "candles": true,
-          "barStyle": "candle",
+          "barStyle": "bar",
           "indicators": [
             {
               "id": "fx_curve_os",
@@ -32,6 +32,13 @@
                 "swing": true,
                 "synth": false,
                 "entry": true
+              }
+            },
+            {
+              "id": "fx_sig_v6",
+              "layers": {
+                "entry": true,
+                "exit": true
               }
             }
           ],
@@ -51,9 +58,53 @@
           }
         },
         {
-          "height": 0.15713101160862353,
+          "height": 0.11197484938147279,
           "symbol": "ESZ26",
-          "panelOpen": true,
+          "panelOpen": false,
+          "data2": "NQZ26",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "fx_pnl",
+              "layers": {
+                "mfeLong": true,
+                "maeLong": true,
+                "openLong": true,
+                "mfeShort": true,
+                "maeShort": true,
+                "openShort": true,
+                "exit": true,
+                "closedLong": true,
+                "closedShort": true,
+                "keepShort": true,
+                "keepLong": true,
+                "keep2": true,
+                "p26": true,
+                "p27": true,
+                "p30": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "",
+              "fut": "ESZ26"
+            },
+            "w_link_short": {
+              "opp": "NQZ26",
+              "fut": "ESZ26"
+            }
+          },
+          "overlayStyles": {
+            "NQZ26": "none"
+          }
+        },
+        {
+          "height": 0.15509259399175468,
+          "symbol": "ESZ26",
+          "panelOpen": false,
           "data2": "NQZ26",
           "candles": false,
           "barStyle": "none",
@@ -62,10 +113,10 @@
               "id": "fx_snco",
               "layers": {
                 "three": true,
-                "reg": false,
-                "market": false,
-                "price": false,
-                "vol": false,
+                "reg": true,
+                "market": true,
+                "price": true,
+                "vol": true,
                 "signal": true,
                 "emphasis": true,
                 "range": true,
@@ -90,15 +141,15 @@
           }
         },
         {
-          "height": 0.1,
+          "height": 0.11270730104657403,
           "symbol": "ESZ26",
-          "panelOpen": true,
+          "panelOpen": false,
           "data2": "NQZ26",
           "candles": false,
           "barStyle": "none",
           "indicators": [
             {
-              "id": "fx_judge_v3",
+              "id": "fx_judge",
               "layers": {
                 "state": true,
                 "fut": true,
@@ -107,7 +158,9 @@
                 "adx": true,
                 "entry": true,
                 "release": true,
-                "detail": true
+                "resume": true,
+                "break": true,
+                "lead": true
               }
             }
           ],
@@ -127,9 +180,9 @@
           }
         },
         {
-          "height": 0.13797678275290226,
+          "height": 0.1,
           "symbol": "ESZ26",
-          "panelOpen": true,
+          "panelOpen": false,
           "data2": "NQZ26",
           "candles": false,
           "barStyle": "none",
@@ -139,6 +192,72 @@
               "layers": {
                 "hold": true,
                 "ratio": true,
+                "mark": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "",
+              "fut": "ESZ26"
+            },
+            "w_link_short": {
+              "opp": "NQZ26",
+              "fut": "ESZ26"
+            }
+          },
+          "overlayStyles": {
+            "NQZ26": "none"
+          }
+        },
+        {
+          "height": 0.1,
+          "symbol": "ESZ26",
+          "panelOpen": false,
+          "data2": "NQZ26",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "fx_adj_v6",
+              "layers": {
+                "state": true,
+                "ratio": true,
+                "sig": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "",
+              "fut": "ESZ26"
+            },
+            "w_link_short": {
+              "opp": "NQZ26",
+              "fut": "ESZ26"
+            }
+          },
+          "overlayStyles": {
+            "NQZ26": "none"
+          }
+        },
+        {
+          "height": 0.13519209647931682,
+          "symbol": "ESZ26",
+          "panelOpen": false,
+          "data2": "NQZ26",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "fx_flat_v4",
+              "layers": {
+                "pos": true,
+                "slope": true,
+                "prev": true,
+                "amp": true,
                 "mark": true
               }
             }

@@ -22,7 +22,15 @@ static bool keys_both_ls(const char *name, void *ctx) {
 }
 
 static bool keys_nh_live(const char *name, void *ctx) {
-    return key_is(name, ctx, "NH_APP_KEY", "NH_SECRET_KEY");
+    return key_is(name, ctx, "NH_OVERSEAS_APP_KEY", "NH_OVERSEAS_SECRET_KEY");
+}
+
+static bool keys_nh_paper(const char *name, void *ctx) {
+    return key_is(name, ctx, "NH_PAPER_OVERSEAS_APP_KEY", "NH_PAPER_OVERSEAS_SECRET_KEY");
+}
+
+static bool keys_nh_and_ls(const char *name, void *ctx) {
+    return keys_both_ls(name, ctx) || keys_nh_live(name, ctx) || keys_nh_paper(name, ctx);
 }
 
 static bool keys_ls_and_nh(const char *name, void *ctx) {
@@ -38,7 +46,14 @@ static bool keys_none(const char *name, void *ctx) {
 static void test_ports(void) {
     const tr_broker_profile_t *paper = tr_broker_profile_find("ls-paper");
     const tr_broker_profile_t *live = tr_broker_profile_find("ls-live");
+    const tr_broker_profile_t *nh_paper = tr_broker_profile_find("nh-paper");
+    const tr_broker_profile_t *nh_live = tr_broker_profile_find("nh-live");
     TR_CHECK(paper != 0 && live != 0);
+    TR_CHECK(nh_paper != 0 && nh_live != 0);
+    TR_CHECK(strcmp(nh_live->app_key_env, "NH_OVERSEAS_APP_KEY") == 0);
+    TR_CHECK(strcmp(nh_live->secret_env, "NH_OVERSEAS_SECRET_KEY") == 0);
+    TR_CHECK(strcmp(nh_paper->app_key_env, "NH_PAPER_OVERSEAS_APP_KEY") == 0);
+    TR_CHECK(strcmp(nh_paper->secret_env, "NH_PAPER_OVERSEAS_SECRET_KEY") == 0);
     TR_CHECK(strstr(paper->rest_base, ":8080") != 0);
     TR_CHECK(strstr(live->rest_base, ":8080") != 0);
     TR_CHECK(strstr(paper->ws_url, ":29443/") != 0);
@@ -65,6 +80,12 @@ static void test_choose(void) {
 
     p = tr_broker_profile_choose(0, keys_ls_and_nh, 0);
     TR_CHECK(p != 0 && strcmp(p->id, "nh-live") == 0);
+
+    p = tr_broker_profile_choose(0, keys_nh_and_ls, 0);
+    TR_CHECK(p != 0 && strcmp(p->id, "nh-paper") == 0);
+
+    p = tr_broker_profile_choose(0, keys_nh_paper, 0);
+    TR_CHECK(p != 0 && strcmp(p->id, "nh-paper") == 0);
 
     p = tr_broker_profile_choose(0, keys_nh_live, 0);
     TR_CHECK(p != 0 && strcmp(p->id, "nh-live") == 0);

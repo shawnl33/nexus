@@ -1989,6 +1989,45 @@ bool tr_engine_inject_bar(tr_engine_t *e, const tr_candle_t *bar) {
     return tr_bar_builder_inject_bar(&p->bb, bar != 0 ? bar->close_time_us : 0, bar);
 }
 
+size_t tr_engine_pipe_repair_bars(tr_engine_t *e, uint64_t instrument_id, const tr_candle_t *bars,
+                                  size_t n) {
+    if (e == 0 || bars == 0 || n == 0) {
+        return 0;
+    }
+    tr_pipeline_t *p = tr_engine_pipe_find(e, instrument_id);
+    if (p == 0) {
+        return 0;
+    }
+    size_t changed = 0;
+    size_t have = tr_ring_count(&p->bb.bars);
+    for (size_t j = 0; j < n; j++) {
+        const tr_candle_t *src = &bars[j];
+        if (src->instrument_id != p->instrument_id || src->timeframe_sec != p->bb.cfg.timeframe_sec) {
+            continue;
+        }
+        for (size_t i = 0; i < have; i++) {
+            tr_candle_t *cur = (tr_candle_t *)tr_ring_get_mut(&p->bb.bars, i);
+            if (cur == 0 || cur->open_time_us != src->open_time_us) {
+                continue;
+            }
+            if (cur->open == src->open && cur->high == src->high && cur->low == src->low &&
+                cur->close == src->close && cur->volume == src->volume) {
+                break;
+            }
+            cur->open = src->open;
+            cur->high = src->high;
+            cur->low = src->low;
+            cur->close = src->close;
+            cur->volume = src->volume;
+            cur->revision++;
+            cur->quality |= TR_QUALITY_CORRECTED;
+            changed++;
+            break;
+        }
+    }
+    return changed;
+}
+
 size_t tr_engine_pipe_merge_bars(tr_engine_t *e, uint64_t instrument_id,
                                  const tr_candle_t *bars, size_t n, tr_time_us_t now_us,
                                  tr_candle_t *bar_scratch, size_t bar_scratch_cap,

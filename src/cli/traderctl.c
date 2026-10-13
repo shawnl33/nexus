@@ -39,6 +39,7 @@
 #endif
 
 #include "adapters/ipc/ipc_client.h"
+#include "runtime/clog.h"
 #include "yyjson.h"
 
 #define TRADERCTL_VERSION "0.1.0"
@@ -59,7 +60,8 @@ static void print_usage(const char *prog) {
     printf("  up                      Run the engine and dashboard in this terminal\n");
     printf("                          Starts with no symbol. Open symbols in the dashboard\n");
     printf("                          --live SYM | --live-fut SYM | --replay FILE [--replay-delay MS]\n");
-    printf("                          --web DIR (default ./web). Ctrl+C stops both\n");
+    printf("                          --web DIR (default ./web). Ctrl+C stops the engine, dashboard, and Theta Terminal\n");
+    printf("                          Starts tools/theta/ThetaTerminalv3.jar when port 25503 is closed.\n");
     printf("                          Runs npm install when packages are missing.\n");
     printf("                          A broken node_modules is removed and installed again.\n");
     printf("  engine restart          Restart the engine after it has exited\n");
@@ -593,6 +595,10 @@ static BOOL WINAPI on_up_console(DWORD type) {
 static HANDLE g_node_proc;
 #endif
 static long g_node_pid = -1;
+static long g_theta_pid = -1;
+#ifdef _WIN32
+static HANDLE g_theta_proc;
+#endif
 
 static bool file_readable(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -1042,6 +1048,168 @@ static bool node_exited(void) {
 #endif
 }
 
+/* .env 한 줄. 값은 로그에 남기지 않는다. */
+static bool read_dotenv_key(const char *path, const char *key, char *out, size_t cap) {
+    FILE *f = fopen(path, "r");
+    if (f == 0 || cap == 0) {
+        if (f != 0) {
+            fclose(f);
+        }
+        return false;
+    }
+    size_t klen = strlen(key);
+    char line[512];
+    bool ok = false;
+    while (fgets(line, sizeof(line), f) != 0) {
+        if (strncmp(line, key, klen) != 0 || line[klen] != '=') {
+            continue;
+        }
+        char *v = line + klen + 1;
+        size_t n = strlen(v);
+        while (n > 0 && (v[n - 1] == '\n' || v[n - 1] == '\r' || v[n - 1] == ' ')) {
+            v[--n] = '\0';
+        }
+        if (n >= 2 && ((v[0] == '"' && v[n - 1] == '"') || (v[0] == '\'' && v[n - 1] == '\''))) {
+            v[n - 1] = '\0';
+            v++;
+            n -= 2;
+        }
+        if (n == 0 || n >= cap) {
+            break;
+        }
+        memcpy(out, v, n + 1);
+        ok = true;
+        break;
+    }
+    fclose(f);
+    return ok;
+}
+
+static void theta_stop(void) {
+    if (g_theta_pid < 0) {
+        return;
+    }
+#ifndef _WIN32
+    kill((pid_t)g_theta_pid, SIGTERM);
+    for (int i = 0; i < 20; i++) {
+        int st = 0;
+        if (waitpid((pid_t)g_theta_pid, &st, WNOHANG) == (pid_t)g_theta_pid) {
+            g_theta_pid = -1;
+            return;
+        }
+        sleep_ms(100);
+    }
+    if (pid_alive(g_theta_pid)) {
+        kill((pid_t)g_theta_pid, SIGKILL);
+    }
+    waitpid((pid_t)g_theta_pid, 0, WNOHANG);
+#else
+    if (g_theta_proc != NULL) {
+        TerminateProcess(g_theta_proc, 1);
+        CloseHandle(g_theta_proc);
+        g_theta_proc = NULL;
+    }
+#endif
+    g_theta_pid = -1;
+}
+
+/* 25503 이 비어 있고 JAR 이 있을 때만 켠다. 실패해도 엔진 기동은 막지 않는다. */
+static void theta_start(const char *web_abs) {
+    if (port_open(25503)) {
+        tr_clog("세타", "25503 이미 사용 중");
+        return;
+    }
+    char root[1100];
+    snprintf(root, sizeof(root), "%s", web_abs);
+    size_t n = strlen(root);
+    if (n >= 4 && (strcmp(root + n - 4, "/web") == 0 || strcmp(root + n - 4, "\\web") == 0)) {
+        root[n - 4] = '\0';
+    }
+    char dir[1220];
+    char jar[1300];
+    char envpath[1220];
+    if (snprintf(dir, sizeof(dir), "%s/tools/theta", root) >= (int)sizeof(dir) ||
+        snprintf(jar, sizeof(jar), "%s/ThetaTerminalv3.jar", dir) >= (int)sizeof(jar) ||
+        snprintf(envpath, sizeof(envpath), "%s/.env", root) >= (int)sizeof(envpath)) {
+        fprintf(stderr, "error: theta path is too long\n");
+        return;
+    }
+    if (!file_readable(jar)) {
+        tr_clog("세타", "JAR 없음  %s", jar);
+        return;
+    }
+    char key[400];
+    if (!read_dotenv_key(envpath, "THETADATA_API_KEY", key, sizeof(key))) {
+        tr_clog("세타", "THETADATA_API_KEY 없음");
+        return;
+    }
+#ifdef _WIN32
+    SetEnvironmentVariableA("THETADATA_API_KEY", key);
+    memset(key, 0, sizeof(key));
+    char cmdline[1600];
+    snprintf(cmdline, sizeof(cmdline), "java -jar \"%s\"", jar);
+    STARTUPINFOA si;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi;
+    memset(&pi, 0, sizeof(pi));
+    BOOL ok = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, dir, &si, &pi);
+    SetEnvironmentVariableA("THETADATA_API_KEY", NULL);
+    if (!ok) {
+        fprintf(stderr, "error: Theta Terminal failed to start: %lu\n", (unsigned long)GetLastError());
+        return;
+    }
+    CloseHandle(pi.hThread);
+    g_theta_proc = pi.hProcess;
+    g_theta_pid = (long)pi.dwProcessId;
+#else
+    pid_t pid = fork();
+    if (pid < 0) {
+        memset(key, 0, sizeof(key));
+        fprintf(stderr, "error: Theta Terminal fork failed: %s\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        if (chdir(dir) != 0) {
+            _exit(127);
+        }
+        setenv("THETADATA_API_KEY", key, 1);
+        memset(key, 0, sizeof(key));
+        char *av[] = {"java", "-jar", "ThetaTerminalv3.jar", 0};
+        execvp(av[0], av);
+        _exit(127);
+    }
+    memset(key, 0, sizeof(key));
+    g_theta_pid = (long)pid;
+#endif
+    tr_clog("세타", "시작  pid %ld", g_theta_pid);
+}
+
+static void theta_wait_ready(void) {
+    if (g_theta_pid < 0) {
+        return;
+    }
+    unsigned long start = now_ms();
+    while (!g_up_stop && now_ms() - start < 30000UL) {
+        if (port_open(25503)) {
+            tr_clog("세타", "준비됨  127.0.0.1:25503");
+            return;
+        }
+#ifndef _WIN32
+        int st = 0;
+        if (waitpid((pid_t)g_theta_pid, &st, WNOHANG) == (pid_t)g_theta_pid) {
+            g_theta_pid = -1;
+            fprintf(stderr, "error: Theta Terminal exited during startup\n");
+            return;
+        }
+#endif
+        sleep_ms(200);
+    }
+    if (!port_open(25503)) {
+        fprintf(stderr, "error: Theta Terminal port 25503 did not open within 30 seconds\n");
+    }
+}
+
 /* 엔진(우리가 띄운 경우)과 대시보드를 이 터미널에서 함께 실행한다. */
 static int run_up(const opts_t *opts, int argc, char **argv) {
     const char *mode = 0;
@@ -1097,8 +1265,7 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     long engine_pid = -1;
     int st = query_status_pid(opts->endpoint, opts->timeout_ms, cmd_id, &existing);
     if (st > 0) {
-        printf("engine already running: pid %ld - starting dashboard only\n", existing);
-        fflush(stdout);
+        tr_clog("엔진", "이미 실행 중  pid %ld", existing);
     } else {
         if (!file_readable(exe)) {
             fprintf(stderr, "error: engine binary not found: %s\n", exe);
@@ -1129,15 +1296,13 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
             return 6;
         }
         started_engine = true;
-        printf("starting engine: pid %ld\n", engine_pid);
-        fflush(stdout);
+        tr_clog("엔진", "시작  pid %ld", engine_pid);
         unsigned long start = now_ms();
         for (;;) {
             snprintf(cmd_id, sizeof(cmd_id), "traderctl-%llu", (unsigned long long)g_cmd_seq++);
             long new_pid = -1;
             if (query_status_pid(opts->endpoint, 500, cmd_id, &new_pid) != 0) {
-                printf("engine ready: pid %ld\n", new_pid > 0 ? new_pid : engine_pid);
-                fflush(stdout);
+                tr_clog("엔진", "준비됨");
                 break;
             }
             if (child_exited(engine_pid)) {
@@ -1198,15 +1363,19 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     int dash_port = 18080;
     if (port_open(dash_port) || port_open_v6(dash_port)) {
         dash_port = 18081;
-        fprintf(stderr, "18080 is already in use. Dashboard will use port %d\n", dash_port);
+        tr_clog("화면", "18080 사용 중  %d", dash_port);
     }
     char port_text[16];
     snprintf(port_text, sizeof(port_text), "%d", dash_port);
 #ifdef _WIN32
     SetEnvironmentVariableA("DASHBOARD_PORT", port_text);
+    SetEnvironmentVariableA("NEXUS_QUIET_HTTP", "1");
 #else
     setenv("DASHBOARD_PORT", port_text, 1);
+    setenv("NEXUS_QUIET_HTTP", "1", 1);
 #endif
+
+    theta_start(web_abs);
 
     const char *nav[3];
     nav[0] = "node";
@@ -1216,6 +1385,7 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     long node_pid = spawn_attached(0, (char *const *)nav, web, err, sizeof(err), true);
     if (node_pid < 0) {
         fprintf(stderr, "error: failed to start dashboard: %s\n", err);
+        theta_stop();
         if (started_engine) {
             force_kill(engine_pid);
         }
@@ -1223,8 +1393,7 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     }
     char dash_url[64];
     snprintf(dash_url, sizeof(dash_url), "http://127.0.0.1:%d", dash_port);
-    printf("dashboard: %s  (Ctrl+C to stop)\n", dash_url);
-    fflush(stdout);
+    tr_clog("화면", "%s", dash_url);
     bool ready = false;
     unsigned long wait_from = now_ms();
     while (!g_up_stop && !node_exited() && now_ms() - wait_from < 20000UL) {
@@ -1239,6 +1408,7 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
     } else if (!node_exited()) {
         fprintf(stderr, "error: dashboard port did not open within 20 seconds\n");
     }
+    theta_wait_ready();
 
     while (!g_up_stop) {
         if (started_engine && child_exited(engine_pid)) {
@@ -1249,8 +1419,19 @@ static int run_up(const opts_t *opts, int argc, char **argv) {
             fprintf(stderr, "dashboard exited\n");
             break;
         }
+#ifndef _WIN32
+        if (g_theta_pid >= 0) {
+            int tst = 0;
+            if (waitpid((pid_t)g_theta_pid, &tst, WNOHANG) == (pid_t)g_theta_pid) {
+                fprintf(stderr, "Theta Terminal exited\n");
+                g_theta_pid = -1;
+            }
+        }
+#endif
         sleep_ms(200);
     }
+
+    theta_stop();
 
     if (!node_exited()) {
 #ifdef _WIN32

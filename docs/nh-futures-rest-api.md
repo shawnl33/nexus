@@ -442,4 +442,4 @@ HTTP 200, 보유 0건이었다. 보유가 있을 때의 행 필드는 명세 기
 
 ## 자격증명
 
-앱키와 시크릿은 환경변수 `NH_APP_KEY`, `NH_SECRET_KEY` 로 둔다. 코드와 로그에 토큰, 앱키, 시크릿, 계좌번호를 남기지 않는다. 토큰 응답과 예수금 응답에는 그 값이 들어 있다.
+앱키와 시크릿은 시장마다 다르다. 해외 실전은 `NH_OVERSEAS_APP_KEY`, `NH_OVERSEAS_SECRET_KEY`, 국내 실전은 `NH_DOMESTIC_APP_KEY`, `NH_DOMESTIC_SECRET_KEY` 다. 모의는 `NH_PAPER_OVERSEAS_APP_KEY`, `NH_PAPER_OVERSEAS_SECRET_KEY`, `NH_PAPER_DOMESTIC_APP_KEY`, `NH_PAPER_DOMESTIC_SECRET_KEY` 다. 엔진의 NH 시세 프로필은 해외 키를 쓴다. 코드와 로그에 토큰, 앱키, 시크릿, 계좌번호를 남기지 않는다. 토큰 응답과 예수금 응답에는 그 값이 들어 있다.

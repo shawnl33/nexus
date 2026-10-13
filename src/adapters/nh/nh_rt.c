@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include "core/model/civil_time.h"
+#include "runtime/clog.h"
 #include "yyjson.h"
 
 #define NH_RT_SUBS 16
@@ -18,27 +19,39 @@
 typedef struct {
     char sym[40];
     uint64_t instrument_id;
-    bool sent;
 } nh_sub_t;
+
+typedef struct nh_sock {
+    struct lws *wsi;
+    char key[128];
+    char path[512];
+    char rx[NH_RT_RX];
+    size_t rx_len;
+    char pong[256];
+    bool need_init;
+    bool need_pong;
+    bool ready;
+    bool intentional_close;
+    bool close_noted;
+    bool sent[NH_RT_SUBS];
+    int64_t ready_us;
+    int64_t next_try_us;
+    unsigned last_close_code;
+} nh_sock;
 
 struct nh_rt {
     nh_auth_t *auth;
     struct lws_context *ctx;
-    struct lws *wsi;
-    char key[128];
+    nh_sock sock[2];
+    int feed;
+    int pending;
     char host[64];
-    char path[512];
-    bool need_init;
     nh_sub_t subs[NH_RT_SUBS];
     int nsubs;
     nh_rt_tick_t queue[NH_RT_QUEUE];
     int qh;
     int qt;
-    char rx[NH_RT_RX];
-    size_t rx_len;
-    bool ready;
     bool want_connect;
-    int64_t next_try_us;
     int closes;
     lws_sorted_usec_list_t sul;
     char err[128];
@@ -51,7 +64,8 @@ static int64_t now_us(void) {
 /* 접속 경로에 access_key가 들어 있다. lws 기본 로그가 그 경로를 찍지 않게 한다. */
 static void nh_lws_log(int level, const char *line) {
     (void)level;
-    if (line == 0 || strstr(line, "access_key") != 0 || strstr(line, "session_token") != 0) {
+    if (line == 0 || strstr(line, "access_key") != 0 || strstr(line, "session_token") != 0 ||
+        strstr(line, "lws_smd") != 0 || strstr(line, "timing out") != 0) {
         return;
     }
     fputs(line, stderr);
@@ -71,7 +85,7 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
     return add;
 }
 
-static bool fetch_access_key(nh_rt_t *rt) {
+static bool fetch_access_key(nh_rt_t *rt, char *key_out, size_t key_n) {
     const char *token = 0;
     if (!nh_auth_ensure(rt->auth, &token)) {
         snprintf(rt->err, sizeof(rt->err), "NH token unavailable");
@@ -105,7 +119,7 @@ static bool fetch_access_key(nh_rt_t *rt) {
         yyjson_doc *doc = yyjson_read(body, strlen(body), 0);
         const char *key = doc != 0 ? yyjson_get_str(yyjson_obj_get(yyjson_doc_get_root(doc), "access_key")) : 0;
         if (key != 0 && key[0] != 0) {
-            snprintf(rt->key, sizeof(rt->key), "%s", key);
+            snprintf(key_out, key_n, "%s", key);
             ok = true;
         }
         if (doc != 0) {
@@ -181,7 +195,40 @@ static const char *read_text(yyjson_val *v) {
 
 static bool send_text(struct lws *wsi, const char *json);
 
-static void handle_text(nh_rt_t *rt, const char *text, size_t len) {
+bool nh_rt_take_pong(const char *text, size_t len, char *out, size_t cap) {
+    if (text == 0 || out == 0 || len == 0 || len + 1 > cap) {
+        return false;
+    }
+    yyjson_doc *doc = yyjson_read(text, len, 0);
+    if (doc == 0) {
+        return false;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    const char *code = yyjson_get_str(yyjson_obj_get(root, "code"));
+    const char *msg = yyjson_get_str(yyjson_obj_get(root, "msg"));
+    bool hit = code != 0 && msg != 0 && strcmp(code, "pingpong") == 0 && strcmp(msg, "pingpong") == 0;
+    yyjson_doc_free(doc);
+    if (!hit) {
+        return false;
+    }
+    memcpy(out, text, len);
+    out[len] = 0;
+    return true;
+}
+
+static bool is_feed(const nh_rt_t *rt, const nh_sock *sk) {
+    return rt != 0 && sk == &rt->sock[rt->feed];
+}
+
+static void handle_text(nh_rt_t *rt, nh_sock *sk, const char *text, size_t len) {
+    if (nh_rt_take_pong(text, len, sk->pong, sizeof(sk->pong))) {
+        /* lws_write는 RECEIVE에서 부르면 무시되거나 소켓이 죽는다. */
+        sk->need_pong = true;
+        if (sk->wsi != 0) {
+            lws_callback_on_writable(sk->wsi);
+        }
+        return;
+    }
     yyjson_doc *doc = yyjson_read(text, len, 0);
     if (doc == 0) {
         return;
@@ -189,28 +236,27 @@ static void handle_text(nh_rt_t *rt, const char *text, size_t len) {
     yyjson_val *root = yyjson_doc_get_root(doc);
     const char *code = yyjson_get_str(yyjson_obj_get(root, "code"));
     const char *msg = yyjson_get_str(yyjson_obj_get(root, "msg"));
-    if (code != 0 && strcmp(code, "FA") != 0 && strstr(code, "eyJ") == 0) {
+    if (code != 0 && strcmp(code, "FA") != 0 && strcmp(code, "pingpong") != 0 &&
+        strcmp(code, "INIT") != 0 && strcmp(code, "RT_INIT") != 0 && strstr(code, "eyJ") == 0) {
         char brief[80];
         snprintf(brief, sizeof(brief), "%s", msg != 0 ? msg : "");
         if (strstr(brief, "eyJ") == 0 && strstr(brief, "access_key") == 0) {
-            fprintf(stderr, "NH realtime msg %s %s\n", code, brief);
+            tr_clog("시세", "%s  %s", code, brief);
         }
-    }
-    if (code != 0 && msg != 0 && strcmp(code, "pingpong") == 0 && strcmp(msg, "pingpong") == 0) {
-        if (rt->wsi != 0) {
-            send_text(rt->wsi, text);
-        }
-        yyjson_doc_free(doc);
-        return;
     }
     if ((code != 0 && strcmp(code, "INIT") == 0) || (msg != 0 && strstr(msg, "INIT_SUCCESS") != 0)) {
-        rt->ready = true;
-        rt->closes = 0;
+        sk->ready = true;
+        sk->ready_us = now_us();
+        sk->close_noted = false;
         for (int i = 0; i < rt->nsubs; i++) {
-            rt->subs[i].sent = false;
+            sk->sent[i] = false;
         }
-        if (rt->wsi != 0) {
-            lws_callback_on_writable(rt->wsi);
+        if (is_feed(rt, sk)) {
+            rt->closes = 0;
+            tr_clog("시세", "연결");
+        }
+        if (sk->wsi != 0) {
+            lws_callback_on_writable(sk->wsi);
         }
         yyjson_doc_free(doc);
         return;
@@ -228,7 +274,7 @@ static void handle_text(nh_rt_t *rt, const char *text, size_t len) {
         }
         int idx = sym != 0 ? find_sub(rt, sym) : -1;
         double px = 0.0;
-        if (idx >= 0 && read_num(yyjson_obj_get(body, "last_pric"), &px)) {
+        if (idx >= 0 && is_feed(rt, sk) && read_num(yyjson_obj_get(body, "last_pric"), &px)) {
             nh_rt_tick_t tk;
             memset(&tk, 0, sizeof(tk));
             snprintf(tk.sym, sizeof(tk.sym), "%s", sym);
@@ -269,8 +315,8 @@ static bool send_text(struct lws *wsi, const char *json) {
     return wr >= (int)n;
 }
 
-static void send_subs(nh_rt_t *rt) {
-    if (!rt->ready || rt->wsi == 0) {
+static void send_subs(nh_rt_t *rt, nh_sock *sk) {
+    if (!sk->ready || sk->wsi == 0) {
         return;
     }
     const char *token = 0;
@@ -279,7 +325,7 @@ static void send_subs(nh_rt_t *rt) {
     }
     (void)token;
     for (int i = 0; i < rt->nsubs; i++) {
-        if (rt->subs[i].sent) {
+        if (sk->sent[i]) {
             continue;
         }
         char msg[256];
@@ -287,12 +333,15 @@ static void send_subs(nh_rt_t *rt) {
                  "{\"header\":{\"api_ver\":\"1\",\"action\":\"A\"},"
                  "\"body\":{\"action_code\":\"FA\",\"action_sym\":\"%s\"}}",
                  rt->subs[i].sym);
-        if (send_text(rt->wsi, msg)) {
-            rt->subs[i].sent = true;
+        if (send_text(sk->wsi, msg)) {
+            sk->sent[i] = true;
+            if (is_feed(rt, sk)) {
+                tr_clog("시세", "구독  %s", rt->subs[i].sym);
+            }
         }
         for (int j = i + 1; j < rt->nsubs; j++) {
-            if (!rt->subs[j].sent) {
-                lws_callback_on_writable(rt->wsi);
+            if (!sk->sent[j]) {
+                lws_callback_on_writable(sk->wsi);
                 break;
             }
         }
@@ -300,42 +349,81 @@ static void send_subs(nh_rt_t *rt) {
     }
 }
 
+static void note_down(nh_rt_t *rt, nh_sock *sk, bool error, const char *why) {
+    bool replacing = is_feed(rt, sk) && rt->pending >= 0 && rt->sock[rt->pending].ready;
+    sk->wsi = 0;
+    sk->ready = false;
+    sk->need_init = false;
+    sk->need_pong = false;
+    if (sk->intentional_close || replacing) {
+        sk->intentional_close = false;
+        return;
+    }
+    if (rt->pending >= 0 && sk == &rt->sock[rt->pending]) {
+        sk->next_try_us = now_us() + 3000000LL;
+        return;
+    }
+    rt->closes++;
+    sk->next_try_us = now_us() + (rt->closes < 3 ? 5000000LL : 30000000LL);
+    if (sk->close_noted) {
+        return;
+    }
+    sk->close_noted = true;
+    if (error && why != 0 && why[0] != 0 && strstr(why, "access_key") == 0 && strstr(why, "session_token") == 0) {
+        tr_clog("시세", "오류  %s", why);
+    } else if (error) {
+        tr_clog("시세", "오류");
+    } else {
+        tr_clog("시세", "끊김");
+    }
+}
+
 static int callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     (void)user;
     nh_rt_t *rt = wsi != 0 ? (nh_rt_t *)lws_context_user(lws_get_context(wsi)) : 0;
+    nh_sock *sk = wsi != 0 ? (nh_sock *)lws_get_opaque_user_data(wsi) : 0;
+    if (rt == 0) {
+        return 0;
+    }
+    if (sk == 0) {
+        for (int i = 0; i < 2; i++) {
+            if (rt->sock[i].wsi == wsi) {
+                sk = &rt->sock[i];
+            }
+        }
+    }
+    if (sk == 0) {
+        return 0;
+    }
     switch (reason) {
     case LWS_CALLBACK_CLIENT_ESTABLISHED:
-        if (rt == 0) {
-            break;
-        }
-        rt->ready = false;
-        rt->need_init = true;
-        rt->rx_len = 0;
+        sk->wsi = wsi;
+        sk->ready = false;
+        sk->need_init = true;
+        sk->need_pong = false;
+        sk->rx_len = 0;
         lws_callback_on_writable(wsi);
         break;
     case LWS_CALLBACK_CLIENT_RECEIVE:
-        if (rt == 0 || in == 0) {
+        if (in == 0) {
             break;
         }
-        if (rt->rx_len + len >= sizeof(rt->rx)) {
-            rt->rx_len = 0;
+        if (sk->rx_len + len >= sizeof(sk->rx)) {
+            sk->rx_len = 0;
             break;
         }
-        memcpy(rt->rx + rt->rx_len, in, len);
-        rt->rx_len += len;
+        memcpy(sk->rx + sk->rx_len, in, len);
+        sk->rx_len += len;
         if (lws_is_final_fragment(wsi)) {
-            rt->rx[rt->rx_len] = 0;
-            handle_text(rt, rt->rx, rt->rx_len);
-            rt->rx_len = 0;
+            sk->rx[sk->rx_len] = 0;
+            handle_text(rt, sk, sk->rx, sk->rx_len);
+            sk->rx_len = 0;
         }
         break;
     case LWS_CALLBACK_CLIENT_WRITEABLE:
-        if (rt == 0) {
-            break;
-        }
-        if (rt->need_init) {
+        if (sk->need_init) {
             const char *token = 0;
-            rt->need_init = false;
+            sk->need_init = false;
             if (nh_auth_ensure(rt->auth, &token)) {
                 char msg[2200];
                 int n = snprintf(msg, sizeof(msg),
@@ -343,20 +431,48 @@ static int callback(struct lws *wsi, enum lws_callback_reasons reason, void *use
                                  "\"body\":{\"action_code\":\"session_init\",\"session_token\":\"%s\"}}",
                                  token);
                 if (n > 0 && n < (int)sizeof(msg) && send_text(wsi, msg)) {
-                    if (rt->closes < 3) {
-                        fprintf(stderr, "NH realtime session\n");
+                    if (is_feed(rt, sk)) {
+                        tr_clog("시세", "접속");
                     }
-                } else if (rt->closes < 3) {
-                    fprintf(stderr, "NH realtime session send failed\n");
+                } else if (is_feed(rt, sk)) {
+                    tr_clog("시세", "접속 실패");
                 }
                 memset(msg, 0, sizeof(msg));
             }
             break;
         }
-        send_subs(rt);
+        if (sk->need_pong) {
+            if (!send_text(wsi, sk->pong)) {
+                lws_callback_on_writable(wsi);
+                break;
+            }
+            sk->need_pong = false;
+            for (int i = 0; i < rt->nsubs; i++) {
+                if (!sk->sent[i]) {
+                    lws_callback_on_writable(wsi);
+                    break;
+                }
+            }
+            break;
+        }
+        {
+            bool waiting = false;
+            for (int i = 0; i < rt->nsubs; i++) {
+                if (!sk->sent[i]) {
+                    waiting = true;
+                    break;
+                }
+            }
+            if (waiting) {
+                send_subs(rt, sk);
+            }
+        }
         break;
     case LWS_CALLBACK_WS_PEER_INITIATED_CLOSE:
-        if (rt != 0 && rt->closes < 3 && in != 0 && len >= 2) {
+        if (sk->intentional_close) {
+            break;
+        }
+        if (in != 0 && len >= 2) {
             const unsigned char *b = (const unsigned char *)in;
             unsigned code_n = ((unsigned)b[0] << 8) | b[1];
             char why[80];
@@ -366,41 +482,25 @@ static int callback(struct lws *wsi, enum lws_callback_reasons reason, void *use
             }
             memcpy(why, b + 2, n);
             why[n] = 0;
-            if (strstr(why, "access_key") == 0 && strstr(why, "eyJ") == 0) {
-                fprintf(stderr, "NH realtime peer close %u %s\n", code_n, why);
-            } else {
-                fprintf(stderr, "NH realtime peer close %u\n", code_n);
+            if (!is_feed(rt, sk)) {
+                break;
+            }
+            if (!sk->close_noted || code_n != sk->last_close_code) {
+                if (strstr(why, "access_key") == 0 && strstr(why, "eyJ") == 0 && why[0] != 0) {
+                    tr_clog("시세", "끊김  %u %s", code_n, why);
+                } else {
+                    tr_clog("시세", "끊김  %u", code_n);
+                }
+                sk->close_noted = true;
+                sk->last_close_code = code_n;
             }
         }
         break;
     case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-        if (rt != 0) {
-            const char *why = in != 0 ? (const char *)in : "";
-            rt->wsi = 0;
-            rt->ready = false;
-            rt->need_init = false;
-            rt->closes++;
-            rt->next_try_us = now_us() + (rt->closes < 3 ? 5000000LL : 30000000LL);
-            if (rt->closes <= 3) {
-                if (strstr(why, "access_key") == 0 && strstr(why, "session_token") == 0) {
-                    fprintf(stderr, "NH realtime error: %s\n", why);
-                } else {
-                    fprintf(stderr, "NH realtime error\n");
-                }
-            }
-        }
+        note_down(rt, sk, true, in != 0 ? (const char *)in : "");
         break;
     case LWS_CALLBACK_CLIENT_CLOSED:
-        if (rt != 0) {
-            rt->wsi = 0;
-            rt->ready = false;
-            rt->need_init = false;
-            rt->closes++;
-            rt->next_try_us = now_us() + (rt->closes < 3 ? 5000000LL : 30000000LL);
-            if (rt->closes <= 3) {
-                fprintf(stderr, "NH realtime closed\n");
-            }
-        }
+        note_down(rt, sk, false, 0);
         break;
     default:
         break;
@@ -411,6 +511,11 @@ static int callback(struct lws *wsi, enum lws_callback_reasons reason, void *use
 static const struct lws_protocols k_protocols[] = {
     {"nh-rt", callback, 0, NH_RT_RX, 0, 0, 0},
     {0, 0, 0, 0, 0, 0, 0},
+};
+
+/* secs_since_valid_hangup 이 0 이면 핸드셰이크 때 300초 유효성 타이머를 걸지 않는다. */
+static const lws_retry_bo_t k_idle_off = {
+    0, 0, 0, 0, 0, 0,
 };
 
 static void copy_host(char *dst, size_t n, const char *base) {
@@ -431,43 +536,53 @@ static void copy_host(char *dst, size_t n, const char *base) {
     }
 }
 
-static void start_connect(nh_rt_t *rt) {
-    if (!fetch_access_key(rt)) {
-        rt->next_try_us = now_us() + 5000000LL;
-        fprintf(stderr, "NH realtime: %s\n", rt->err);
+static void start_connect(nh_rt_t *rt, int idx) {
+    nh_sock *sk = &rt->sock[idx];
+    if (!fetch_access_key(rt, sk->key, sizeof(sk->key))) {
+        sk->next_try_us = now_us() + 5000000LL;
+        if (is_feed(rt, sk)) {
+            tr_clog("시세", "%s", rt->err);
+        }
         return;
     }
     copy_host(rt->host, sizeof(rt->host), rt->auth->base);
     /* access_key에 +, /, = 가 있으면 쿼리가 깨져 서버가 바로 끊는다. */
-    snprintf(rt->path, sizeof(rt->path), "/trade/ws-stream?access_key=");
+    snprintf(sk->path, sizeof(sk->path), "/trade/ws-stream?access_key=");
     {
-        size_t o = strlen(rt->path);
-        for (const unsigned char *p = (const unsigned char *)rt->key; *p != 0 && o + 4 < sizeof(rt->path); p++) {
+        size_t o = strlen(sk->path);
+        for (const unsigned char *p = (const unsigned char *)sk->key; *p != 0 && o + 4 < sizeof(sk->path); p++) {
             if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
                 *p == '-' || *p == '_' || *p == '.' || *p == '~') {
-                rt->path[o++] = (char)*p;
+                sk->path[o++] = (char)*p;
             } else {
-                o += (size_t)snprintf(rt->path + o, sizeof(rt->path) - o, "%%%02X", *p);
+                o += (size_t)snprintf(sk->path + o, sizeof(sk->path) - o, "%%%02X", *p);
             }
         }
-        rt->path[o] = 0;
+        sk->path[o] = 0;
     }
+    sk->ready = false;
+    sk->need_init = false;
+    sk->need_pong = false;
+    sk->intentional_close = false;
+    sk->rx_len = 0;
+    memset(sk->sent, 0, sizeof(sk->sent));
     struct lws_client_connect_info cc;
     memset(&cc, 0, sizeof(cc));
     cc.context = rt->ctx;
     cc.address = rt->host;
     cc.port = 443;
-    cc.path = rt->path;
+    cc.path = sk->path;
     cc.host = rt->host;
     cc.origin = rt->host;
     /* 원격 서브프로토콜은 비운다. 로컬 콜백만 nh-rt에 묶는다. */
     cc.protocol = 0;
     cc.local_protocol_name = k_protocols[0].name;
     cc.ssl_connection = LCCSCF_USE_SSL;
-    cc.userdata = rt;
-    rt->wsi = lws_client_connect_via_info(&cc);
-    if (rt->wsi == 0) {
-        rt->next_try_us = now_us() + 3000000LL;
+    cc.opaque_user_data = sk;
+    cc.retry_and_idle_policy = &k_idle_off;
+    sk->wsi = lws_client_connect_via_info(&cc);
+    if (sk->wsi == 0) {
+        sk->next_try_us = now_us() + 3000000LL;
     }
 }
 
@@ -490,12 +605,13 @@ nh_rt_t *nh_rt_open(nh_auth_t *auth, char *err, size_t err_cap) {
     rt->ctx = lws_create_context(&info);
     if (rt->ctx == 0) {
         if (err != 0 && err_cap > 0) {
-            snprintf(err, err_cap, "NH realtime context failed");
+            snprintf(err, err_cap, "준비 실패");
         }
         free(rt);
         return 0;
     }
     rt->want_connect = true;
+    rt->pending = -1;
     return rt;
 }
 
@@ -506,8 +622,10 @@ void nh_rt_close(nh_rt_t *rt) {
     if (rt->ctx != 0) {
         lws_context_destroy(rt->ctx);
     }
-    memset(rt->key, 0, sizeof(rt->key));
-    memset(rt->path, 0, sizeof(rt->path));
+    memset(rt->sock[0].key, 0, sizeof(rt->sock[0].key));
+    memset(rt->sock[1].key, 0, sizeof(rt->sock[1].key));
+    memset(rt->sock[0].path, 0, sizeof(rt->sock[0].path));
+    memset(rt->sock[1].path, 0, sizeof(rt->sock[1].path));
     free(rt);
 }
 
@@ -523,12 +641,16 @@ bool nh_rt_subscribe(nh_rt_t *rt, const char *sym, uint64_t instrument_id) {
     if (rt->nsubs >= NH_RT_SUBS) {
         return false;
     }
-    nh_sub_t *s = &rt->subs[rt->nsubs++];
+    idx = rt->nsubs++;
+    nh_sub_t *s = &rt->subs[idx];
     memset(s, 0, sizeof(*s));
     snprintf(s->sym, sizeof(s->sym), "%s", sym);
     s->instrument_id = instrument_id;
-    if (rt->ready && rt->wsi != 0) {
-        lws_callback_on_writable(rt->wsi);
+    for (int n = 0; n < 2; n++) {
+        rt->sock[n].sent[idx] = false;
+        if (rt->sock[n].ready && rt->sock[n].wsi != 0) {
+            lws_callback_on_writable(rt->sock[n].wsi);
+        }
     }
     return true;
 }
@@ -541,16 +663,22 @@ bool nh_rt_unsubscribe(nh_rt_t *rt, const char *sym) {
     if (idx < 0) {
         return false;
     }
-    if (rt->ready && rt->wsi != 0) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                 "{\"header\":{\"api_ver\":\"1\",\"action\":\"D\"},"
-                 "\"body\":{\"action_code\":\"FA\",\"action_sym\":\"%s\"}}",
-                 rt->subs[idx].sym);
-        send_text(rt->wsi, msg);
+    for (int n = 0; n < 2; n++) {
+        nh_sock *sk = &rt->sock[n];
+        if (sk->ready && sk->wsi != 0) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "{\"header\":{\"api_ver\":\"1\",\"action\":\"D\"},"
+                     "\"body\":{\"action_code\":\"FA\",\"action_sym\":\"%s\"}}",
+                     rt->subs[idx].sym);
+            send_text(sk->wsi, msg);
+        }
     }
     for (int i = idx; i < rt->nsubs - 1; i++) {
         rt->subs[i] = rt->subs[i + 1];
+        for (int n = 0; n < 2; n++) {
+            rt->sock[n].sent[i] = rt->sock[n].sent[i + 1];
+        }
     }
     rt->nsubs--;
     return true;
@@ -562,8 +690,10 @@ int nh_rt_service(nh_rt_t *rt, int timeout_ms) {
     if (rt == 0 || rt->ctx == 0) {
         return -1;
     }
-    if (rt->wsi == 0 && now_us() >= rt->next_try_us) {
-        start_connect(rt);
+    int64_t now = now_us();
+    nh_sock *live = &rt->sock[rt->feed];
+    if (rt->pending < 0 && live->wsi == 0 && now >= live->next_try_us) {
+        start_connect(rt, rt->feed);
     }
     /* lws_service의 timeout은 무시되는 빌드가 있다. LS 실시간과 같이 깨움 예약을 건다. */
     int wait = timeout_ms < 0 ? 0 : timeout_ms;
@@ -576,7 +706,7 @@ static void sul_wake(lws_sorted_usec_list_t *sul) {
 }
 
 bool nh_rt_ready(const nh_rt_t *rt) {
-    return rt != 0 && rt->ready;
+    return rt != 0 && rt->sock[rt->feed].ready;
 }
 
 bool nh_rt_next(nh_rt_t *rt, nh_rt_tick_t *out) {

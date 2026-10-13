@@ -1,5 +1,7 @@
 #include "core/signals/weekly_pair_v1.h"
 
+#include "core/backtest/yl_fill.h"
+
 #include <string.h>
 
 #include "core/model/civil_time.h"
@@ -543,10 +545,10 @@ static void apply_score(tr_wpair_bar_t *b, const tr_ksscore_out_t *o) {
     b->price_ratio = o->price_ratio;
 }
 
-int tr_wpair_replay(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
-                    const tr_wpair_pxbar_t *opp, size_t nopp, const tr_wpair_pxbar_t *fut,
-                    size_t nfut, const tr_ksscore_config_t *score_cfg, tr_wpair_event_t *ev,
-                    size_t cap) {
+static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
+                       const tr_wpair_pxbar_t *opp, size_t nopp, const tr_wpair_pxbar_t *fut,
+                       size_t nfut, const tr_ksscore_config_t *score_cfg, tr_wpair_event_t *ev,
+                       size_t cap, tr_yl_book_t *book) {
     tr_wpair_config_t cfg;
     tr_ksscore_config_t fallback;
     const tr_ksscore_config_t *scfg;
@@ -640,8 +642,34 @@ int tr_wpair_replay(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
             apply_score(&bar, &g_wpair_score.out);
         }
 
+        if (book != 0) {
+            tr_yl_bar_t yb;
+            memset(&yb, 0, sizeof(yb));
+            yb.time = s->open_us / INT64_C(1000000);
+            yb.open = s->open;
+            yb.high = s->high;
+            yb.low = s->low;
+            yb.close = s->close;
+            tr_yl_book_open(book, &yb);
+        }
         if (tr_wpair_eval(st, &bar, &out) != 0) {
             return -1;
+        }
+        if (book != 0 && out.order_kind != TR_WPAIR_ORDER_NONE) {
+            tr_yl_order_t yo;
+            memset(&yo, 0, sizeof(yo));
+            yo.name = out.order_name != 0 ? out.order_name : "";
+            yo.qty = out.order_qty;
+            yo.price_type = TR_YL_MARKET;
+            if (out.order_kind == TR_WPAIR_ORDER_ENTRY) {
+                yo.action = st->side == TR_WPAIR_LONG ? TR_YL_BUY : TR_YL_SELL;
+            } else {
+                yo.action = st->side == TR_WPAIR_LONG ? TR_YL_EXIT_LONG : TR_YL_EXIT_SHORT;
+            }
+            tr_yl_book_submit(book, &yo);
+        }
+        if (book != 0) {
+            tr_yl_book_close(book);
         }
         if (out.order_kind != TR_WPAIR_ORDER_NONE) {
             tr_wpair_event_t e;
@@ -658,5 +686,24 @@ int tr_wpair_replay(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
         }
     }
     (void)kept;
+    if (book != 0) {
+        tr_yl_book_finish(book);
+    }
     return (int)total;
+}
+
+int tr_wpair_replay(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
+                    const tr_wpair_pxbar_t *opp, size_t nopp, const tr_wpair_pxbar_t *fut,
+                    size_t nfut, const tr_ksscore_config_t *score_cfg, tr_wpair_event_t *ev,
+                    size_t cap) {
+    return replay_body(st, self, nself, opp, nopp, fut, nfut, score_cfg, ev, cap, 0);
+}
+
+int tr_wpair_fill(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
+                  const tr_wpair_pxbar_t *opp, size_t nopp, const tr_wpair_pxbar_t *fut,
+                  size_t nfut, const tr_ksscore_config_t *score_cfg, tr_yl_book_t *book) {
+    if (book == 0) {
+        return -1;
+    }
+    return replay_body(st, self, nself, opp, nopp, fut, nfut, score_cfg, 0, 0, book);
 }

@@ -13,10 +13,11 @@ static const tr_broker_profile_t PROFILES[] = {
     {"ls-live", "LS 실전", "ls", "live", "https://openapi.ls-sec.co.kr:8080",
      "wss://openapi.ls-sec.co.kr:9443/websocket", "LS_APP_KEY", "LS_SECRET_KEY", true},
     {"nh-paper", "NH 모의", "nh", "paper", "https://apidemo.futures.co.kr",
-     "wss://apidemo.futures.co.kr/trade/ws-stream", "NH_PAPER_APP_KEY", "NH_PAPER_SECRET_KEY",
-     true},
+     "wss://apidemo.futures.co.kr/trade/ws-stream", "NH_PAPER_OVERSEAS_APP_KEY",
+     "NH_PAPER_OVERSEAS_SECRET_KEY", true},
     {"nh-live", "NH 실전", "nh", "live", "https://api.futures.co.kr",
-     "wss://api.futures.co.kr/trade/ws-stream", "NH_APP_KEY", "NH_SECRET_KEY", true},
+     "wss://api.futures.co.kr/trade/ws-stream", "NH_OVERSEAS_APP_KEY", "NH_OVERSEAS_SECRET_KEY",
+     true},
 };
 
 size_t tr_broker_profile_count(void) {
@@ -55,6 +56,10 @@ const tr_broker_profile_t *tr_broker_profile_choose(
     const tr_broker_profile_t *saved = tr_broker_profile_find(saved_id);
     if (tr_broker_profile_usable(saved, key_present, ctx)) {
         return saved;
+    }
+    const tr_broker_profile_t *nh_paper = tr_broker_profile_find("nh-paper");
+    if (tr_broker_profile_usable(nh_paper, key_present, ctx)) {
+        return nh_paper;
     }
     const tr_broker_profile_t *nh_live = tr_broker_profile_find("nh-live");
     if (tr_broker_profile_usable(nh_live, key_present, ctx)) {

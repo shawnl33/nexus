@@ -43,6 +43,8 @@ add_library(core STATIC
     src/core/market/bar_aggregator.c
     src/core/market/bar_builder.c
     src/core/market/candle.c
+    src/core/backtest/yl_fill.c
+    src/core/backtest/yl_link.c
     src/core/market/ring.c
     src/core/market/var.c
     src/core/market/session.c
@@ -128,13 +130,14 @@ if(SQLite3_FOUND)
     add_library(storage STATIC
         src/adapters/storage/store.c
         src/adapters/storage/live_bars.c
+        src/core/backtest/bar_fill.c
     )
     if(TARGET SQLite3::SQLite3)
         set(TR_SQLITE_LIB SQLite3::SQLite3)
     else()
         set(TR_SQLITE_LIB SQLite::SQLite3)
     endif()
-    target_link_libraries(storage PUBLIC core ${TR_SQLITE_LIB})
+    target_link_libraries(storage PUBLIC core yyjson ${TR_SQLITE_LIB})
     target_include_directories(storage PUBLIC src)
     target_compile_options(storage PRIVATE ${TR_WARNINGS})
 else()
@@ -254,7 +257,7 @@ if(TR_LWS_READY)
         target_link_libraries(nh PUBLIC ${LWS_LIBRARY})
         target_include_directories(nh PRIVATE ${LWS_INCLUDE_DIR})
         if(NOT WIN32)
-            target_link_libraries(nh PUBLIC ssl crypto)
+            target_link_libraries(nh PUBLIC ssl crypto cap)
         endif()
     endif()
 else()
@@ -333,7 +336,15 @@ endif()
 if(TR_IPC_FOUND)
     add_executable(trading-engine
         src/app/main.c
+        src/app/backtest_cmd.c
     )
+    if(SQLite3_FOUND)
+        add_executable(test_backtest_run tests/test_backtest_run.c src/app/backtest_cmd.c)
+        target_link_libraries(test_backtest_run PRIVATE storage nh)
+        target_include_directories(test_backtest_run PRIVATE src)
+        target_compile_options(test_backtest_run PRIVATE ${TR_WARNINGS})
+        add_test(NAME backtest_run COMMAND test_backtest_run)
+    endif()
     target_compile_definitions(trading-engine
         PRIVATE TRADING_ENGINE_VERSION="${PROJECT_VERSION}"
     )
@@ -393,7 +404,7 @@ endif()
 enable_testing()
 
 # 0개 테스트 실행을 통과로 간주하지 않는다(계획서 §25).
-foreach(t IN ITEMS ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict fx_curve fx_swing fx_future fx_synthetic ks_session ks_synthetic ks_values ks_score wpair wplot fx_mirae fx_mirae_v3 fx_persist_gap fx_yangmae fx_sniper osf_flow fx_trend_state fx_align fx_adx fx_gap fx_market fx_trend fx_session_profile fx_decision fx_squeeze fx_os_scope fx_flat fx_wave fx_pnl fx_curve_os fx_sniper_co fx_entry_cand)
+foreach(t IN ITEMS clog ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict fx_curve fx_swing fx_future fx_synthetic ks_session ks_synthetic ks_values ks_score wpair wplot fx_mirae fx_mirae_v3 fx_persist_gap fx_yangmae fx_sniper osf_flow fx_trend_state fx_align fx_adx fx_gap fx_market fx_trend fx_session_profile fx_decision fx_squeeze fx_os_scope fx_flat fx_wave fx_pnl fx_curve_os fx_sniper_co fx_entry_cand yl_fill)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE core)
     target_compile_options(test_${t} PRIVATE ${TR_WARNINGS})
@@ -459,6 +470,11 @@ if(SQLite3_FOUND)
     target_link_libraries(test_store PRIVATE storage)
     target_compile_options(test_store PRIVATE ${TR_WARNINGS})
     add_test(NAME store COMMAND test_store)
+
+    add_executable(test_bar_fill tests/test_bar_fill.c)
+    target_link_libraries(test_bar_fill PRIVATE storage yyjson)
+    target_compile_options(test_bar_fill PRIVATE ${TR_WARNINGS})
+    add_test(NAME bar_fill COMMAND test_bar_fill)
 endif()
 
 if(TR_LS_FOUND)

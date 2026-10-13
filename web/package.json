@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "lightweight-charts": "^4.2.0",
+    "tabulator-tables": "^6.6.1",
     "ws": "^8.18.0",
     "zeromq": "^6.1.1"
   }

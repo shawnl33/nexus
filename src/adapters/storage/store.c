@@ -296,6 +296,18 @@ tr_store_rc_t tr_store_put_candle(tr_store_t *s, const tr_candle_t *c) {
     return rc;
 }
 
+tr_store_rc_t tr_store_tx_begin(tr_store_t *s) {
+    return s != 0 ? exec_sql(s, "BEGIN IMMEDIATE;") : TR_STORE_ERR;
+}
+
+tr_store_rc_t tr_store_tx_commit(tr_store_t *s) {
+    return s != 0 ? exec_sql(s, "COMMIT;") : TR_STORE_ERR;
+}
+
+tr_store_rc_t tr_store_tx_rollback(tr_store_t *s) {
+    return s != 0 ? exec_sql(s, "ROLLBACK;") : TR_STORE_ERR;
+}
+
 int tr_store_query_candles(tr_store_t *s, uint64_t instrument_id, uint32_t timeframe,
                            int64_t from_us, int64_t to_us, size_t limit,
                            tr_store_candle_fn cb, void *ctx) {
