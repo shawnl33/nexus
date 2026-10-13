@@ -148,7 +148,8 @@ function ctxFor(cache) {
 // (전파 계약은 pane-sync.js 헤더 참조). 범위 이벤트는 동기 호출 안과 뒤따르는 rAF
 // 프레임에 걸쳐 나오므로(실측), 뮤트는 프레임이 지난 뒤에 푼다 — 라이브 1봉 적용용.
 function mutePaneRange(pane) {
-  const sync = pane.frame.sync;
+  const sync = pane.frame?.sync;
+  if (!sync || !pane.syncHandle) return;
   sync.mute(pane.syncHandle);
   requestAnimationFrame(() => requestAnimationFrame(() => sync.unmute(pane.syncHandle)));
 }
@@ -156,18 +157,19 @@ function mutePaneRange(pane) {
 // 시딩 적용용 뮤트: scrollToRealTime은 400ms 스크롤 애니메이션이라 프레임마다 범위
 // 이벤트를 흘리므로(실측), 애니메이션이 끝날 때까지 뮤트를 유지한다.
 function mutePaneRangeForSeeding(pane) {
-  const sync = pane.frame.sync;
+  const sync = pane.frame?.sync;
+  if (!sync || !pane.syncHandle) return;
   sync.mute(pane.syncHandle);
   setTimeout(() => sync.unmute(pane.syncHandle), 450); // 400ms 애니메이션 + 여유
 }
 
-function chartOptions(pane) {
+function chartOptions(frame) {
   return {
     layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
     grid: { vertLines: { color: "#1e2530" }, horzLines: { color: "#1e2530" } },
     localization: {
       locale: "ko-KR",
-      priceFormatter: (p) => fmtPrice(p, paneCache(pane)?.tickRaw ?? 5),
+      priceFormatter: (p) => fmtPrice(p, paneCache(frame.panes[0])?.tickRaw ?? 5),
       timeFormatter: (t) => {
         const p = kstParts(t);
         return `${p.y}-${pad2(p.mo)}-${pad2(p.d)} ${pad2(p.hh)}:${pad2(p.mm)}:${pad2(p.ss)}`;
@@ -199,17 +201,49 @@ function chartOptions(pane) {
 // 차트 크기의 기준은 차트 호스트(.chart-host)다 — 지표 패널을 접으면 칸 폭은
 // 그대로여도 호스트 폭이 늘어나므로, 패널 접기/펼치기에서도 이 함수를 부른다.
 function syncPaneSize(pane) {
-  pane.el.style.height = `${pane.heightFrac * 100}%`;
-  pane.chart.resize(pane.chartEl.clientWidth, pane.chartEl.clientHeight);
+  resizeFrameChart(pane.frame);
+}
+
+function resizeFrameChart(frame) {
+  if (!frame?.chart || !frame.chartHost) return;
+  const w = frame.chartHost.clientWidth;
+  const h = frame.chartHost.clientHeight;
+  if (w > 0 && h > 0) frame.chart.resize(w, h);
+  const plots = frame.chart.panes();
+  frame.panes.forEach((p, i) => {
+    const plot = plots[i];
+    if (!plot) return;
+    plot.setStretchFactor(Math.max(p.heightFrac, 0.05));
+    plot.setPreserveEmptyPane(true);
+  });
+  watchPaneBoxes(frame);
+  syncSideToPlots(frame);
+}
+
+// 사이드바 칸 높이를 같은 순번의 서브플롯 높이에 맞춘다. 아래 빈칸은 시간축 높이다.
+function syncSideToPlots(frame) {
+  if (!frame?.chart || !frame.sideEl) return;
+  const plots = frame.chart.panes();
+  const rects = frame.panes.map((pane, i) => plots[i]?.getHTMLElement?.()?.getBoundingClientRect());
+  const heights = rects.map((rect, i) => {
+    if (!rect) return 0;
+    const next = rects[i + 1];
+    return next ? next.top - rect.top : rect.height;
+  });
+  const sum = heights.reduce((s, h) => s + h, 0);
+  if (sum <= 0) return;
+  const hostTop = frame.chartHost.getBoundingClientRect().top;
+  frame.panes.forEach((pane, i) => {
+    pane.heightFrac = heights[i] / sum;
+    pane.el.classList.toggle("open", !!pane.panelOpen);
+    pane.el.style.top = `${Math.max(0, (rects[i]?.top ?? hostTop) - hostTop)}px`;
+    pane.el.style.height = `${heights[i]}px`;
+    placePaneTools(pane);
+  });
 }
 
 function resizeFrameCharts(frames) {
-  for (const frame of frames) {
-    if (!frame) continue;
-    for (const pane of frame.panes) {
-      pane.chart.resize(pane.chartEl.clientWidth, pane.chartEl.clientHeight);
-    }
-  }
+  for (const frame of frames) resizeFrameChart(frame);
 }
 
 // 칸 폭이 나중에 잡히거나 패널을 접으면 봉 간격이 달라진다. 그 화면틀만 다시 맞춘다.
@@ -247,6 +281,88 @@ function updateFrameCloseButtons() {
   }
 }
 
+const SERIES_CTOR = {
+  addLineSeries: "LineSeries",
+  addAreaSeries: "AreaSeries",
+  addBarSeries: "BarSeries",
+  addCandlestickSeries: "CandlestickSeries",
+  addHistogramSeries: "HistogramSeries",
+  addBaselineSeries: "BaselineSeries",
+};
+
+// 화면틀 차트 하나에 서브플롯을 쌓는다. 레이어는 v4처럼 addLineSeries를 부르므로
+// 그 칸의 서브플롯 번호로 넘겨 시간축은 차트가 하나로 유지한다.
+function paneChart(pane) {
+  const chart = pane.frame.chart;
+  const index = () => Math.max(0, pane.frame.panes.indexOf(pane));
+  return new Proxy(chart, {
+    get(target, prop) {
+      if (prop === "remove") return () => {};
+      if (prop === "resize") return () => resizeFrameChart(pane.frame);
+      if (SERIES_CTOR[prop]) {
+        const ctor = LightweightCharts[SERIES_CTOR[prop]];
+        return (options) => target.addSeries(ctor, { crosshairMarkerVisible: false, ...(options || {}) }, index());
+      }
+      if (prop === "addCustomSeries") {
+        return (def, options) => target.addCustomSeries(def, { crosshairMarkerVisible: false, ...(options || {}) }, index());
+      }
+      if (prop === "priceScale") return (id) => target.priceScale(id, index());
+      const value = target[prop];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+function ensureFrameChart(frame) {
+  if (frame.chart) return frame.chart;
+  frame.chart = LightweightCharts.createChart(frame.chartHost, chartOptions(frame));
+  if (chartLoads > 0) lockChartInput(frame.chart, true);
+  paneResize.observe(frame.chartHost);
+  return frame.chart;
+}
+
+function placePaneTools(pane) {
+  const frame = pane.frame;
+  const box = frame?.chartHost;
+  if (!frame?.chart || !box || !pane.toolsEl) return;
+  const plot = frame.chart.panes()[frame.panes.indexOf(pane)];
+  const el = plot?.getHTMLElement?.();
+  if (!el) return;
+  const br = box.getBoundingClientRect();
+  const pr = el.getBoundingClientRect();
+  const top = `${Math.max(0, pr.top - br.top) + 2}px`;
+  for (const [node, kind] of [[pane.panelToggleEl?.parentElement, "menu"], [pane.toolsEl, "del"]]) {
+    if (!node) continue;
+    if (node.parentElement !== box) box.append(node);
+    node.classList.add(kind);
+    node.style.top = top;
+  }
+}
+
+function watchPaneBoxes(frame) {
+  if (!frame?.chart) return;
+  if (!frame.paneBoxObserver) {
+    frame.paneBoxObserver = new ResizeObserver(() => {
+      syncSideToPlots(frame);
+    });
+  }
+  frame.paneBoxObserver.disconnect();
+  for (const plot of frame.chart.panes()) {
+    const el = plot.getHTMLElement?.();
+    if (el) frame.paneBoxObserver.observe(el);
+  }
+}
+
+function setSeriesMarkers(series, markers) {
+  if (!series) return;
+  if (typeof LightweightCharts.createSeriesMarkers === "function") {
+    if (!series.__marks) series.__marks = LightweightCharts.createSeriesMarkers(series, markers);
+    else series.__marks.setMarkers(markers);
+    return;
+  }
+  if (typeof series.setMarkers === "function") series.setMarkers(markers);
+}
+
 function createFrame(row) {
   const el = document.createElement("div");
   el.className = "frame";
@@ -264,10 +380,18 @@ function createFrame(row) {
   closeBtn.textContent = "×";
   const bodyEl = document.createElement("div");
   bodyEl.className = "frame-body";
+  const sideEl = document.createElement("div");
+  sideEl.className = "pane-sides";
+  const sideSpacer = document.createElement("div");
+  sideSpacer.className = "pane-side-spacer";
+  sideEl.append(sideSpacer);
+  const chartHost = document.createElement("div");
+  chartHost.className = "chart-host";
+  bodyEl.append(sideEl, chartHost);
   el.append(tools, bodyEl);
   row.el.append(el);
   const frame = {
-    el, bodyEl, closeEl: closeBtn, panelToggleEl: menuBtn, row,
+    el, bodyEl, sideEl, sideSpacer, chartHost, chart: null, closeEl: closeBtn, panelToggleEl: menuBtn, row,
     sync: PaneSync.create(), panes: [], currentPane: null,
     pickerEl: null, symInput: null, symResults: null, chipsEl: null,
     searchSeq: 0, searchTimer: null, symActive: -1,
@@ -378,13 +502,11 @@ function createPane(frame, heightFrac = 1) {
   body.className = "pane-body";
   const panel = document.createElement("div");
   panel.className = "ind-panel";
-  const chartHost = document.createElement("div");
-  chartHost.className = "chart-host";
-  body.append(panel, chartHost);
+  body.append(panel);
   div.append(tools, body);
-  frame.bodyEl.append(div);
+  frame.sideEl.insertBefore(div, frame.sideSpacer);
   const pane = {
-    id: nextPaneId++, el: div, toolsEl: tools, panelEl: panel, chartEl: chartHost, heightFrac,
+    id: nextPaneId++, el: div, toolsEl: tools, panelEl: panel, chartEl: frame.chartHost, heightFrac,
     frame,
     symbol: "", symName: "", selSeq: 0, selTarget: "",
     active: new Map(), chart: null, candleSeries: null, syncHandle: null,
@@ -400,42 +522,15 @@ function createPane(frame, heightFrac = 1) {
     pairFut: frame.pairFut || "", pairFutName: frame.pairFutName || "",
     pairEvents: [], pairStatus: "", pairLast: null, pairBusy: false,
   };
-  pane.chart = LightweightCharts.createChart(chartHost, chartOptions(pane));
-  hideCrosshairMarkers(pane.chart);
-  if (chartLoads > 0) lockChartInput(pane.chart, true);
-  paneResize.observe(chartHost);
+  frame.panes.push(pane);
+  ensureFrameChart(frame);
+  pane.chart = paneChart(pane);
   pane.candleSeries = makePriceSeries(pane.chart, "candle", false);
-  pane.syncHandle = frame.sync.add(pane.chart, pane.candleSeries, {
-    // 크로스헤어 가로선 값과 시간축 전파의 꼬리 판정·변환은 이 칸 자기 종목의 캐시 기준이다.
-    // getPrice는 캐시의 봉 맵만 본다 — whitespace(구멍) 시각에는 항목이 없어 undefined가 나오고,
-    // pane-sync는 그 칸에 가로선을 그리지 않는다 (구멍 위 크로스헤어는 세로선만).
-    getPrice: (t) => paneCache(pane)?.bars.get(t)?.close,
-    // 시리즈 길이 = 봉 수 + whitespace(구멍) 포인트 수: setVisibleLogicalRange의 논리 인덱스는
-    // whitespace를 포함한 시리즈 기준이라 봉 수만 재면 구멍 수만큼 어긋난다.
-    // wsCount는 renderSymbolPanes(시딩)와 rebuildPaneCandles(정정)가 같은 withWhitespace
-    // 결과로 갱신한다 (정합 고정).
-    // 라이브 꼬리는 봉·whitespace(균일 분 그리드 채움)가 붙을 때 barSeq/wsCount와 시리즈가
-    // 함께 자라므로(noteBar 주석 참조) 이 합계식이 그대로 맞는다.
-    // 시간축 전파에서 이 길이는 데이터 없는 칸 스킵과 레거시 폴백(시각 미제공 칸)에만
-    // 쓴다 — 창 변환은 getTimes 기준 (pane-sync.js 헤더의 엄밀 시각 정렬 참조).
-    getLength: () => {
-      const c = feed.get(pane.symbol);
-      return c ? c.barSeq.length + (c.wsCount ?? 0) : 0;
-    },
-    // 시리즈(봉 + whitespace)의 항목별 시각(초) 오름차순 — pane-sync가 발생 칸의 오른쪽
-    // 끝 논리 인덱스를 시각으로 환산하고 대상 칸에서 그 시각의 인덱스를 찾는 기준이다.
-    // 종목마다 봉 수·구멍 수가 달라 논리 인덱스로 맞추면 칸마다 다른 시각을 보게 되므로
-    // 시각이 공통 기준이다.
-    getTimes: () => feed.get(pane.symbol)?.seriesTimes,
-    // 차트 영역(.chart-host)의 px 폭 — 새 시간축 규칙(같은 px 봉 간격 + 같은 오른쪽 끝
-    // 시각)의 줌 기준. 지표 패널 접기/펼치기로 폭이 바뀌므로 호출 시점에 잰다.
-    getWidth: () => pane.chartEl.clientWidth,
-  });
+  placePaneTools(pane);
+  pane.syncHandle = null;
   buildPaneToolButtons(pane); // ×(이 차트 삭제)는 1회 만든다. ☰는 화면틀에 있다.
   buildPaneTools(pane); // 지표 패널의 트리를 채운다
-  // 차트는 칸 높이가 잡히기 전에 만들어진다. 생성 직후 호스트 크기로 맞춘다.
   syncPaneSize(pane);
-  frame.panes.push(pane);
   syncPaneList();
   pane.el.addEventListener("pointerdown", () => {
     currentPane = pane;
@@ -449,12 +544,32 @@ function createPane(frame, heightFrac = 1) {
 
 // ×(이 차트 삭제)만 차트 모서리에 둔다. 트리 재구성 때 다시 만들지 않는다.
 function buildPaneToolButtons(pane) {
+  const menuWrap = document.createElement("div");
+  menuWrap.className = "tools menu";
+  const menu = document.createElement("button");
+  menu.type = "button";
+  menu.className = "chip panel-toggle on";
+  menu.textContent = "☰";
+  menu.title = "이 서브플롯 사이드바";
+  menu.onclick = (ev) => {
+    ev.stopPropagation();
+    setPanelOpen(pane, !pane.panelOpen);
+  };
+  menuWrap.append(menu);
+  pane.panelToggleEl = menu;
   const del = document.createElement("button");
+  del.type = "button";
   del.className = "chip del";
   del.textContent = "×";
   del.title = "이 차트 삭제";
   del.onclick = () => deleteChart(pane);
+  pane.toolsEl.classList.add("del");
   pane.toolsEl.append(del);
+  pane.frame.chartHost.append(menuWrap, pane.toolsEl);
+}
+
+function syncPanePanelToggle(pane) {
+  pane.panelToggleEl?.classList.toggle("on", !!pane.panelOpen);
 }
 
 // 칸별 지표 패널 접기/펼치기. 접으면 차트가 칸 전체 폭을 쓴다 — 호스트 폭이 바뀌므로
@@ -687,35 +802,21 @@ function syncFramePanelToggle(frame) {
 // 이 화면틀의 사이드바를 한 번에 연다/닫는다. 칸마다 줄을 두지 않기 위한 버튼이다.
 function setFramePanels(frame, open) {
   if (!frame) return;
-  const view = captureAlignView(frame);
-  holdAlignFrames.add(frame);
   for (const pane of frame.panes) {
     pane.panelOpen = open;
     pane.panelEl.hidden = !open;
-    syncPaneSize(pane);
+    syncPanePanelToggle(pane);
   }
   syncFramePanelToggle(frame);
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (frame.panes.length && view) applyAlignView(frame, view, false);
-    requestAnimationFrame(() => holdAlignFrames.delete(frame));
-  }));
+  syncSideToPlots(frame);
 }
 
 function setPanelOpen(pane, open) {
-  // 접기 전에 화면틀 창을 잡는다. 폭이 바뀐 뒤 라이브러리가 그 칸만 봉 간격을
-  // 고치므로, 접기 전의 오른쪽 끝 시각과 px 봉 간격을 두 프레임 뒤에 다시 깐다.
-  // 그 사이 ResizeObserver가 어긋난 간격을 확정하지 않게 이 틀의 맞춤을 보류한다.
-  const view = pane.frame ? captureAlignView(pane.frame) : null;
-  if (pane.frame) holdAlignFrames.add(pane.frame);
   pane.panelOpen = open;
   pane.panelEl.hidden = !open;
+  syncPanePanelToggle(pane);
   syncFramePanelToggle(pane.frame);
-  syncPaneSize(pane);
-  if (!pane.frame) return;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (pane.frame.panes.includes(pane) && view) applyAlignView(pane.frame, view, false);
-    requestAnimationFrame(() => holdAlignFrames.delete(pane.frame));
-  }));
+  syncSideToPlots(pane.frame);
 }
 
 // 복사 원본은 이 화면틀에서 마지막으로 다룬 칸이고, 없으면 맨 아래 칸이다.
@@ -852,12 +953,26 @@ function destroyPane(pane, { release = true } = {}) {
   syncFramePanelToggle(frame);
   if (frame.currentPane === pane) frame.currentPane = null;
   syncPaneList();
-  paneResize.unobserve(pane.chartEl);
   if (currentPane === pane) currentPane = null;
   pane.selSeq++; // 진행 중인 종목 선택의 늦은 완료를 폐기한다
   pane.active.clear();
-  if (pane.syncHandle) frame.sync.remove(pane.syncHandle); // 차트 제거 전에 동기화 구독부터 뗀다
-  pane.chart.remove();
+  if (pane.syncHandle) frame.sync.remove(pane.syncHandle);
+  const plotIndex = i;
+  if (frame.panes.length === 0 && frame.chart) {
+    paneResize.unobserve(frame.chartHost);
+    frame.chart.remove();
+    frame.chart = null;
+  } else if (frame.chart) {
+    const plot = frame.chart.panes()[plotIndex];
+    if (plot) {
+      plot.setPreserveEmptyPane(false);
+      for (const series of [...plot.getSeries()]) {
+        try { frame.chart.removeSeries(series); } catch { /* 이미 빠진 시리즈 */ }
+      }
+    }
+  }
+  pane.panelToggleEl?.parentElement?.remove();
+  pane.toolsEl?.remove();
   pane.el.remove();
   updateBadgeVisibility();
   // syncPaneList 뒤다. 다른 칸의 종목·Data2·진행 중 선택은 releaseSymbol이 유지한다.
@@ -1601,7 +1716,7 @@ function pairOptionCharts(pane, systemId) {
 }
 
 function paintPairSeries(pane, series, key, marks) {
-  if (!series || typeof series.setMarkers !== "function") return;
+  if (!series) return;
   if (!pane.pairLabelBy) pane.pairLabelBy = new Map();
   // 눈금·분봉 모양이 바뀌면 시리즈가 새로 생긴다. 글자는 그 시리즈에 다시 붙인다.
   let slot = pane.pairLabelBy.get(key);
@@ -1614,7 +1729,7 @@ function paintPairSeries(pane, series, key, marks) {
     if (typeof series.attachPrimitive === "function") series.attachPrimitive(slot.labels);
   }
   slot.labels.setMarks(marks);
-  series.setMarkers(PairMarkers.seriesMarkers(marks));
+  setSeriesMarkers(series, PairMarkers.seriesMarkers(marks));
 }
 
 function applyPairMarkers(pane) {

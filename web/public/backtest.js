@@ -129,11 +129,12 @@ function draw(host, bars, trades, barStyle) {
     },
     timeScale: { timeVisible: true, secondsVisible: false, tickMarkFormatter: (t) => kstText(t) },
   });
+  const seriesOf = (type, options) => chart.addSeries(LightweightCharts[type], options);
   const series = kind === "line"
-    ? chart.addLineSeries({ color: "#d1d4dc", lineWidth: 2 })
+    ? seriesOf("LineSeries", { color: "#d1d4dc", lineWidth: 2 })
     : kind === "bar"
-      ? chart.addBarSeries({ upColor: "#ef5350", downColor: "#2962ff" })
-      : chart.addCandlestickSeries({
+      ? seriesOf("BarSeries", { upColor: "#ef5350", downColor: "#2962ff" })
+      : seriesOf("CandlestickSeries", {
         upColor: hollow ? "rgba(0,0,0,0)" : "#26a69a",
         downColor: hollow ? "rgba(0,0,0,0)" : "#ef5350",
         borderUpColor: "#26a69a",
@@ -155,13 +156,15 @@ function draw(host, bars, trades, barStyle) {
   data.sort((a, b) => a.time - b.time);
   if (data.length) series.setData(data);
   if (style !== "none" && kind !== "line" && trades) {
-    series.setMarkers(trades.filter((t) => t.status === "체결" && seen.has(t.t)).map((t) => ({
+    const marks = trades.filter((t) => t.status === "체결" && seen.has(t.t)).map((t) => ({
       time: t.t,
       position: t.name.includes("청산") ? "aboveBar" : "belowBar",
       color: t.name.includes("청산") ? "#ff8c00" : "#d4ff4a",
       shape: t.name.includes("청산") ? "arrowDown" : "arrowUp",
       text: t.name,
-    })));
+    }));
+    if (typeof LightweightCharts.createSeriesMarkers === "function") LightweightCharts.createSeriesMarkers(series, marks);
+    else series.setMarkers(marks);
   }
   series.applyOptions({ visible: style !== "none" });
   chart.timeScale().fitContent();

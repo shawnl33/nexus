@@ -30,8 +30,18 @@
   .frame-tools button.panel-toggle.on { border-color: #26a69a; color: #26a69a; }
   .frame-tools .frame-close { margin-left: auto; }
   .frame-tools .sym-picker { min-width: 0; }
-  .frame-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
-  #panes .pane { width: 100%; position: relative; flex: none; display: flex; flex-direction: column; border-bottom: 1px solid #2a2e39; box-sizing: border-box; }
+  .frame-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: row; position: relative; }
+  .pane-sides { position: absolute; left: 0; top: 0; bottom: 0; width: 0; overflow: visible; z-index: 5; pointer-events: none; }
+  .pane-side-spacer { display: none; }
+  .frame-body > .chart-host { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; }
+  .chart-host > .tools { position: absolute; z-index: 6; display: flex; padding: 0; background: transparent; border: none; }
+  .chart-host > .tools.menu { left: 4px; }
+  .chart-host > .tools.del { right: 4px; }
+  .chart-host > .tools .chip.del { margin-left: 0; }
+  .chart-host > .tools .chip.panel-toggle.on { border-color: #26a69a; color: #26a69a; }
+  #panes .pane-sides > .pane { position: absolute; left: 0; width: 300px; display: none; pointer-events: auto; overflow: hidden; border-bottom: none; }
+  #panes .pane-sides > .pane.open { display: flex; }
+  #panes .pane { width: 100%; position: relative; flex: none; flex-direction: column; box-sizing: border-box; }
   /* 칸 삭제(×)만 차트 모서리에 겹친다. ☰는 화면틀의 +차트 옆이라 세로 줄을 만들지 않는다. */
   .pane .tools { position: absolute; top: 2px; right: 4px; z-index: 3; display: flex; padding: 0; background: transparent; border: none; }
   .pane .tools .chip.del { margin-left: 0; }
@@ -46,7 +56,7 @@
   .load-caption { margin-top: 4px; color: #8a919c; font-size: 13px; }
   #load-cancel { margin-top: 14px; }
   /* 칸별 지표 패널 (트리) — ☰로 접으면 숨기고(hidden) 차트가 칸 전체 폭을 쓴다 */
-  .ind-panel { flex: none; width: 300px; overflow-y: auto; background: #161b26; border-right: 1px solid #2a2e39; padding: 6px 8px; box-sizing: border-box; font-size: 12px; }
+  .ind-panel { flex: 1 1 0; width: 100%; min-height: 0; overflow-y: auto; background: #161b26; border-right: 1px solid #2a2e39; padding: 6px 8px; box-sizing: border-box; font-size: 12px; }
   .ind-panel[hidden] { display: none; }
   .ind-panel .ind-hint { color: #7d8590; font-size: 11px; line-height: 1.5; }
   .ind-chart-tools { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid #2a2e39; }
