@@ -419,7 +419,7 @@ static int fill_futures(tr_store_t *store, const tr_bar_fill_req_t *req, int64_t
                         num_of(yyjson_obj_get(row, "occurs1_high_pric")),
                         num_of(yyjson_obj_get(row, "occurs1_low_pric")),
                         num_of(yyjson_obj_get(row, "occurs1_close_pric")),
-                        num_of(yyjson_obj_get(row, "occurs1_trd_qty")), 42);
+                        num_of(yyjson_obj_get(row, "occurs1_cum_trd_qty")), 42);
             }
         }
         if (tx && tr_store_tx_commit(store) != TR_STORE_OK) {

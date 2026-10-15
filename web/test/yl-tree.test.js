@@ -47,6 +47,14 @@ test("build: 보이는 이름은 확장자가 없고 시그널은 시스템으�
   assert.deepEqual(T.inputsFor("pair-short").find((row) => row[0] === "총투자금"), ["총투자금", 10000000]);
   assert.deepEqual(T.inputsFor("fx_sig_v6").find((row) => row[0] === "예측변수"), ["예측변수", 10]);
   assert.deepEqual(T.inputsFor("fx_sig_v6").find((row) => row[0] === "선행통합100"), ["선행통합100", 1]);
+  assert.deepEqual(T.inputsFor("fx_sig_v6").find((row) => row[0] === "서머타임자동"), ["서머타임자동", 1]);
+  assert.deepEqual(T.inputsFor("fx_sig_v6").find((row) => row[0] === "장대봉필터"), ["장대봉필터", 1]);
+  assert.deepEqual(T.inputsFor("fx_sig_v6").find((row) => row[0] === "전환매수사용"), ["전환매수사용", 1]);
+  assert.deepEqual(T.inputsFor("fx_sig_v6").find((row) => row[0] === "조정매도스윙폭제한"), ["조정매도스윙폭제한", 90]);
+  assert.equal(T.inputsFor("fx_sig_v6").find((row) => row[0] === "조정A중하락구조금지"), undefined);
+  assert.equal(T.inputsFor("fx_sig_v6").find((row) => row[0] === "장대봉배수"), undefined);
+  const sigInputs = T.inputsFor("fx_sig_v6");
+  assert.deepEqual(sigInputs[sigInputs.length - 1], ["후보B매수본장전금지", 1]);
   assert.equal(T.inputsFor("fx_sig_v6").find((row) => row[0] === "최초진입수량"), undefined);
 });
 

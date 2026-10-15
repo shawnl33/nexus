@@ -32,7 +32,11 @@ const BtSide = (() => {
     fx_paint_v12: { createHandle: () => OsLayers.paintHandle() },
     fx_paint_os: { createHandle: () => OsLayers.paintHandle() },
     fx_sig_v6: { createHandle: (chart) => OsLayers.sigHandle(chart) },
+    fx_sig_pair: { createHandle: (chart) => OsLayers.sigHandle(chart, "pair") },
+    fx_sig_zd: { createHandle: (chart) => OsLayers.sigHandle(chart, "zd") },
     fx_pnl: { createHandle: (chart) => OsLayers.pnlHandle(chart) },
+    fx_pos_v1: { createHandle: (chart) => OsLayers.posHandle(chart, 1) },
+    fx_pos_v2: { createHandle: (chart) => OsLayers.posHandle(chart, 2) },
     fx_pvc: PvcLayers.PvcRenderer,
     fx_data2: Data2Layers.Data2Renderer,
     ks_data2: Data2Layers.Data2Renderer,
@@ -583,6 +587,8 @@ const BtSide = (() => {
     if (pane?.systems?.has("pair-long")) ids.push("pair-long");
     if (pane?.systems?.has("pair-short")) ids.push("pair-short");
     if (pane?.wanted?.has("fx_sig_v6")) ids.push("fx_sig_v6");
+    if (pane?.wanted?.has("fx_sig_pair")) ids.push("fx_sig_pair");
+    if (pane?.wanted?.has("fx_sig_zd")) ids.push("fx_sig_zd");
     return { ids, pair: ids.some((id) => id.startsWith("pair")) };
   }
 

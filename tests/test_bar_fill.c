@@ -69,6 +69,10 @@ static int count_range(tr_store_t *store, int64_t from, int64_t to) {
     return tr_store_query_candles(store, 7, 60, from, to, 100, 0, 0);
 }
 
+static void capture_bar(void *ctx, const tr_candle_t *bar) {
+    *(tr_candle_t *)ctx = *bar;
+}
+
 static void test_option_stores_once(void) {
     tr_store_t *store = open_db();
     script_t sc;
@@ -113,18 +117,18 @@ static void test_futures_skip_theta_and_page(void) {
     sc.page0 = "{\"nxt_key\":\"page2\",\"Occurs1\":["
                "{\"occurs1_ref_dt\":\"20261013\",\"occurs1_exch_tm\":\"100000\","
                "\"occurs1_open_pric\":\"10\",\"occurs1_high_pric\":\"11\","
-               "\"occurs1_low_pric\":\"9\",\"occurs1_close_pric\":\"10.5\",\"occurs1_trd_qty\":\"3\"},"
+               "\"occurs1_low_pric\":\"9\",\"occurs1_close_pric\":\"10.5\",\"occurs1_cum_trd_qty\":\"3\"},"
                "{\"occurs1_ref_dt\":\"20261013\",\"occurs1_exch_tm\":\"090000\","
                "\"occurs1_open_pric\":\"10\",\"occurs1_high_pric\":\"10\","
-               "\"occurs1_low_pric\":\"10\",\"occurs1_close_pric\":\"10\",\"occurs1_trd_qty\":\"1\"}"
+               "\"occurs1_low_pric\":\"10\",\"occurs1_close_pric\":\"10\",\"occurs1_cum_trd_qty\":\"1\"}"
                "]}";
     sc.page1 = "{\"nxt_key\":\"99999999999999\",\"Occurs1\":["
                "{\"occurs1_ref_dt\":\"20261001\",\"occurs1_exch_tm\":\"000000\","
                "\"occurs1_open_pric\":\"8\",\"occurs1_high_pric\":\"8\","
-               "\"occurs1_low_pric\":\"8\",\"occurs1_close_pric\":\"8\",\"occurs1_trd_qty\":\"2\"},"
+               "\"occurs1_low_pric\":\"8\",\"occurs1_close_pric\":\"8\",\"occurs1_cum_trd_qty\":\"2\"},"
                "{\"occurs1_ref_dt\":\"20260930\",\"occurs1_exch_tm\":\"235900\","
                "\"occurs1_open_pric\":\"7\",\"occurs1_high_pric\":\"7\","
-               "\"occurs1_low_pric\":\"7\",\"occurs1_close_pric\":\"7\",\"occurs1_trd_qty\":\"1\"}"
+               "\"occurs1_low_pric\":\"7\",\"occurs1_close_pric\":\"7\",\"occurs1_cum_trd_qty\":\"1\"}"
                "]}";
     memset(&req, 0, sizeof(req));
     req.product = TR_PRODUCT_FUTURES;
@@ -140,6 +144,11 @@ static void test_futures_skip_theta_and_page(void) {
     TR_CHECK(strstr(sc.last_body, "ESZ26") != 0);
     TR_CHECK(count_range(store, start, end) == 1);
     TR_CHECK(count_range(store, 0, start) == 1);
+    tr_candle_t stored = {0};
+    TR_CHECK(tr_store_query_candles(store, 7, 60, start, end, 1, capture_bar, &stored) == 1);
+    TR_CHECK(stored.close == 800);
+    TR_CHECK(stored.volume == 2);
+    TR_CHECK(stored.source_id == 42);
     TR_CHECK(tr_bar_fill(store, &req, start, end, fetch, &sc, err, sizeof(err)) == 0);
     TR_CHECK(sc.posts == 2);
     tr_store_close(store);
@@ -169,15 +178,15 @@ static void test_futures_hole_is_refetched(void) {
     sc.page0 = "{\"nxt_key\":\"page2\",\"Occurs1\":["
                "{\"occurs1_ref_dt\":\"20261013\",\"occurs1_exch_tm\":\"100000\","
                "\"occurs1_open_pric\":\"10\",\"occurs1_high_pric\":\"11\","
-               "\"occurs1_low_pric\":\"9\",\"occurs1_close_pric\":\"10\",\"occurs1_trd_qty\":\"1\"},"
+               "\"occurs1_low_pric\":\"9\",\"occurs1_close_pric\":\"10\",\"occurs1_cum_trd_qty\":\"1\"},"
                "{\"occurs1_ref_dt\":\"20261002\",\"occurs1_exch_tm\":\"100000\","
                "\"occurs1_open_pric\":\"10\",\"occurs1_high_pric\":\"10\","
-               "\"occurs1_low_pric\":\"10\",\"occurs1_close_pric\":\"10\",\"occurs1_trd_qty\":\"1\"}"
+               "\"occurs1_low_pric\":\"10\",\"occurs1_close_pric\":\"10\",\"occurs1_cum_trd_qty\":\"1\"}"
                "]}";
     sc.page1 = "{\"nxt_key\":\"99999999999999\",\"Occurs1\":["
                "{\"occurs1_ref_dt\":\"20260930\",\"occurs1_exch_tm\":\"230000\","
                "\"occurs1_open_pric\":\"7\",\"occurs1_high_pric\":\"7\","
-               "\"occurs1_low_pric\":\"7\",\"occurs1_close_pric\":\"7\",\"occurs1_trd_qty\":\"1\"}"
+               "\"occurs1_low_pric\":\"7\",\"occurs1_close_pric\":\"7\",\"occurs1_cum_trd_qty\":\"1\"}"
                "]}";
     put_min(store, us_of(2026, 9, 30, 23, 0, 540));
     put_min(store, start);
@@ -204,7 +213,7 @@ static void test_futures_before_history(void) {
     sc.page0 = "{\"nxt_key\":\"99999999999999\",\"Occurs1\":["
                "{\"occurs1_ref_dt\":\"20250911\",\"occurs1_exch_tm\":\"021000\","
                "\"occurs1_open_pric\":\"1\",\"occurs1_high_pric\":\"1\","
-               "\"occurs1_low_pric\":\"1\",\"occurs1_close_pric\":\"1\",\"occurs1_trd_qty\":\"1\"}"
+               "\"occurs1_low_pric\":\"1\",\"occurs1_close_pric\":\"1\",\"occurs1_cum_trd_qty\":\"1\"}"
                "]}";
     sc.page1 = sc.page0;
     memset(&req, 0, sizeof(req));

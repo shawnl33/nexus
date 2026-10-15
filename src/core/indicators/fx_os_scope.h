@@ -18,14 +18,20 @@
 #include "core/functions/fx_flat_count_v2.h"
 #include "core/functions/fx_wave_adj_v6.h"
 #include "core/indicators/fx_entry_cand.h"
+#include "core/indicators/fx_os_filter.h"
+#include "core/indicators/fx_os_hist.h"
+#include "core/functions/fx_synthetic_lines_v1.h"
 #include "core/indicators/fx_pnl_2023.h"
+#include "core/indicators/fx_posmon.h"
+#include "core/indicators/fx_sig_pair.h"
 #include "core/model/time_us.h"
 
 typedef struct {
     int64_t date;
     int64_t time;
     tr_time_us_t bar_open;
-    double high, low, close, volume;
+    double open, high, low, close, volume;
+    double price_unit; /* 1포인트의 입력 단위: 원가격 1, raw 가격 100. 0이면 1. */
     bool is_new_bar;
     const tr_fxfv_output_t *fv;
     int session_first;
@@ -34,6 +40,10 @@ typedef struct {
     double reg_line, reg_r2;
     int ob_valid;
     double ob_score;
+    int reg5_ok, reg15_ok, reg30_ok;
+    double reg5, reg15, reg30;
+    int mkt5_ok, mkt15_ok, mkt30_ok;
+    double mkt5, mkt15, mkt30;
 } tr_fxos_input_t;
 
 /* 조정분석 한 버전의 화면 값. 비율은 조정 중·신호 봉에서만 0이 아니다. */
@@ -82,6 +92,24 @@ typedef struct {
     int flat_on;
     int flat_up_pos, flat_dn_pos, flat_up_slope, flat_dn_slope;
     double flat_amp;
+    int rth_open;
+    int turn_on;
+    int turn_y;
+    uint32_t turn_rgb;
+    int turn_w;
+    int sig_grade;
+    int sig_adj_kind;
+    int sig_adj_grade;
+    int raw_dir;
+    int raw_kind;
+    int color_dir;
+    int session_first;
+    tr_fxpos_out_t pos_v1;
+    tr_fxpos_out_t pos_v2;
+    int pair_dir, pair_kind, pair_grade, pair_ak, pair_ag, pair_qty, pair_suf, pair_exit, pair_loss, pair_ticks;
+    int zd_dir, zd_kind, zd_grade, zd_ak, zd_ag, zd_qty, zd_suf, zd_exit, zd_loss, zd_ticks;
+    int pair_limit, zd_limit;
+    int pair_exit_qty, pair_limit_qty, zd_exit_qty, zd_limit_qty;
     double wave_time, wave_price, wave_opp;
     int wave_state;
     uint32_t wave_state_rgb;
@@ -171,6 +199,19 @@ typedef struct {
 typedef struct {
     double price_scale;
     tr_fxsig_cfg_t cfg;
+    tr_fxos_filter_cfg_t filt;
+    tr_fxos_hist_t hist;
+    /* 진행 중 봉을 다시 평가하면 이 봉 시작 상태로 되돌린 뒤 한 봉으로 다시 계산한다. */
+    tr_fxos_hist_t hist_at_open;
+    tr_fxpair_t pair_at_open;
+    tr_fxpair_t zd_at_open;
+    tr_fxflat_out_t flat_prev_open;
+    double prev_flat_open, prev_close_open;
+    int prev_pos_open, prev_slope_open, has_flat_open;
+    double prev_up_hi_open, prev_up_lo_open, prev_up_382_open, prev_up_500_open, prev_up_618_open;
+    double prev_dn_hi_open, prev_dn_lo_open, prev_dn_382_open, prev_dn_500_open, prev_dn_618_open;
+    int has_bar_open;
+    tr_fxos_filter_in_t applied;
     tr_fxfv_t sig_fv;
     tr_fxc_t curve;
     tr_fxadx_t adx;
@@ -199,6 +240,10 @@ typedef struct {
     double avg_entry;    /* I_AvgEntryPrice. 미보유면 0 */
     int contracts;       /* I_CurrentContracts */
     tr_fxpnl_t pnl;
+    tr_fxpos_t pos1;
+    tr_fxpos_t pos2;
+    tr_fxpair_t pair_st;
+    tr_fxpair_t zd_st;
     int prev_color_dir;
     int ec_dir, ec_has, ec_closed_ok;
     double ec_px_st, ec_closed_px;
@@ -220,6 +265,9 @@ void tr_fxsig_cfg_default(tr_fxsig_cfg_t *cfg);
 bool tr_fxos_init(tr_fxos_t *s, double price_scale);
 void tr_fxos_set_cfg(tr_fxos_t *s, const tr_fxsig_cfg_t *cfg);
 void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in);
+/* 5·15·30분 합성선의 회귀·마켓중심을 스코프 입력에 넣는다. */
+void tr_fxos_set_synth(tr_fxos_input_t *in, const tr_fxsyn_t *s5, const tr_fxsyn_t *s15,
+                       const tr_fxsyn_t *s30);
 bool tr_fxos_relink(tr_fxos_t *s);
 /* "os" 배열의 숫자만 쓴다. 대괄호는 호출자가 붙인다. */
 int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o);

@@ -16,6 +16,8 @@
 #include "core/backtest/bar_fill.h"
 #include "core/backtest/yl_fill.h"
 #include "core/backtest/yl_link.h"
+#include "core/indicators/fx_mirae_v1.h"
+#include "core/indicators/fx_sig_pair.h"
 #include "core/model/civil_time.h"
 #include "core/signals/weekly_pair_v1.h"
 #include "yyjson.h"
@@ -366,8 +368,13 @@ int tr_backtest_run(const char *payload, char *out, size_t cap) {
         free(obars);
         free(fbars);
         symbol = base;
-    } else if (strcmp(signal, "fx_sig_v6") == 0) {
+    } else if (strcmp(signal, "fx_sig_v6") == 0 || strcmp(signal, "fx_sig_pair") == 0 ||
+               strcmp(signal, "fx_sig_zd") == 0) {
         tr_fxos_t *scope;
+        tr_fxmirae_t *fx;
+        tr_fxpair_t *pair = 0;
+        tr_fxmirae_config_t mcfg;
+        int is_pair = strcmp(signal, "fx_sig_pair") == 0 || strcmp(signal, "fx_sig_zd") == 0;
         size_t i;
         if (symbol[0] == 0) {
             free(self);
@@ -376,26 +383,64 @@ int tr_backtest_run(const char *payload, char *out, size_t cap) {
         }
         nself = load_px(symbol, from, to, self, BT_CAP, err, sizeof(err));
         scope = (tr_fxos_t *)calloc(1, sizeof(*scope));
-        if (nself == 0 || scope == 0 || !tr_fxos_init(scope, 100.0)) {
+        fx = (tr_fxmirae_t *)calloc(1, sizeof(*fx));
+        if (is_pair) {
+            pair = (tr_fxpair_t *)calloc(1, sizeof(*pair));
+        }
+        tr_fxmirae_default_config(&mcfg, 100.0);
+        if (nself == 0 || scope == 0 || fx == 0 || (is_pair && pair == 0) || !tr_fxos_init(scope, 100.0) ||
+            !tr_fxmirae_init(fx, &mcfg)) {
+            free(pair);
+            free(fx);
             free(scope);
             free(self);
             yyjson_doc_free(doc);
             return fail(out, cap, err[0] ? err : "진입 신호 봉을 채우지 못했습니다");
         }
         scope->cfg.order_qty = qty;
+        if (pair != 0 && strcmp(signal, "fx_sig_zd") == 0) {
+            pair->v68 = 1;
+        }
         for (i = 0; i < nself; i++) {
             tr_fxos_input_t in;
+            tr_fxmirae_input_t min;
             memset(&in, 0, sizeof(in));
+            memset(&min, 0, sizeof(min));
+            min.bar.date = self[i].ymd;
+            min.bar.time = self[i].hhmmss;
+            min.bar.bar_open = self[i].open_us;
+            min.bar.high = self[i].high;
+            min.bar.low = self[i].low;
+            min.bar.close = self[i].close;
+            min.bar.volume = self[i].volume;
+            if (i > 0) {
+                min.has_prev = true;
+                min.prev_date = self[i - 1].ymd;
+                min.prev_time = self[i - 1].hhmmss;
+                min.prev_h = self[i - 1].high;
+                min.prev_l = self[i - 1].low;
+                min.prev_c = self[i - 1].close;
+                min.prev_v = self[i - 1].volume;
+            }
+            tr_fxmirae_eval(fx, &min);
             in.date = self[i].ymd;
             in.time = self[i].hhmmss;
             in.bar_open = self[i].open_us;
+            in.open = self[i].open;
             in.high = self[i].high;
             in.low = self[i].low;
             in.close = self[i].close;
             in.volume = self[i].volume;
             in.is_new_bar = true;
-            tr_yl_fxsig_bar(&book, scope, &in);
+            tr_fxos_set_synth(&in, &fx->syn5, &fx->syn15, &fx->syn30);
+            if (is_pair) {
+                tr_yl_fxpair_bar(&book, scope, pair, &in);
+            } else {
+                tr_yl_fxsig_bar(&book, scope, &in);
+            }
         }
+        free(pair);
+        free(fx);
         free(scope);
     } else {
         free(self);

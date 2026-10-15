@@ -15,6 +15,7 @@ const WS_URL = `ws://${location.host}/ws`;
 // ---- 종목별 데이터 피드 (feed.js) ----
 // 캐시는 종목(shcode)별로 격리된다. status의 payload.shcode로 캐시를 골라 갱신한다.
 const feed = Feed.create();
+const sysBook = Sysmon.create();
 let engineWatches = []; // /api/status가 알려준 관측 종목 목록 (구 엔진은 shcode 1개 폴백)
 let brokerProfileId = ""; // 엔진이 붙어 있는 접속 프로필
 let brokerSwitching = false;
@@ -83,7 +84,11 @@ const RENDERERS = {
   fx_paint_v12: { createHandle: () => OsLayers.paintHandle() },
   fx_paint_os: { createHandle: () => OsLayers.paintHandle() },
   fx_sig_v6: { createHandle: (chart) => OsLayers.sigHandle(chart) },
+  fx_sig_pair: { createHandle: (chart) => OsLayers.sigHandle(chart, "pair") },
+  fx_sig_zd: { createHandle: (chart) => OsLayers.sigHandle(chart, "zd") },
   fx_pnl: { createHandle: (chart) => OsLayers.pnlHandle(chart) },
+  fx_pos_v1: { createHandle: (chart) => OsLayers.posHandle(chart, 1) },
+  fx_pos_v2: { createHandle: (chart) => OsLayers.posHandle(chart, 2) },
   fx_pvc: PvcLayers.PvcRenderer,
   fx_data2: Data2Layers.Data2Renderer,
   ks_data2: Data2Layers.Data2Renderer,
@@ -1585,6 +1590,7 @@ async function selectPaneSymbol(pane, shcode, name) {
     adoptFrameSymbol(pane);
     // 이전 종목은 새 watch가 붙은 뒤에 해제한다 (엔진의 마지막-watch 해지 거부를 피한다)
     if (prev) releaseSymbol(prev);
+    if (prev && prev !== shcode) sysmonRescan(prev);
     await seedSymbol(shcode);
     if (seq !== pane.selSeq) return;
     syncFrameData2(pane.frame);
@@ -2367,6 +2373,7 @@ function activateIndicator(pane, indId, savedLayers) {
     if (cache) rebuildPaneCandles(pane, cache);
   }
   if (WPLOT_IDS.includes(indId)) refreshWeeklyPlots(pane);
+  if (Sysmon.ids.includes(indId) && pane.symbol) sysmonRescan(pane.symbol);
 }
 
 function deactivateIndicator(pane, indId) {
@@ -2380,6 +2387,7 @@ function deactivateIndicator(pane, indId) {
     if (cache) rebuildPaneCandles(pane, cache);
   }
   if (WPLOT_IDS.includes(indId)) refreshWeeklyPlots(pane);
+  if (Sysmon.ids.includes(indId) && pane.symbol) sysmonRescan(pane.symbol);
 }
 
 // 헤더 배지의 출처: mirae_v16이 켜진 첫 칸이 보는 캐시
@@ -2464,6 +2472,8 @@ function applyStatus(msg) {
     // 세대 상승은 엔진 쪽 재구성 신호다 (종목 전환·RT 캐치업 병합). 비운 뒤 스냅샷을
     // 다시 가져와야 병합된 과거 봉(캐치업)까지 화면에 반영된다 — 라이브만으로는 구멍이 남는다.
     // 겹침 종목도 같은 캐시를 쓰므로 같이 다시 받는다.
+    sysBook.rows = sysBook.rows.filter((r) => r.symbol !== sh);
+    paintSysmon();
     if (symbolHeld(sh)) seedSymbol(sh);
   }
   const t = Number(p.bar_open_time) / 1e6;
@@ -2542,6 +2552,7 @@ function applyStatus(msg) {
   ind.resid = p.resid ?? 0;
   ind.pvol = p.pvol ?? 0;
   cache.barInd.set(t, ind);
+  sysmonNote(sh, t);
   if (!seedInflight.has(sh)) {
     const painted = cache.bars.get(t);
     if (painted) {
@@ -3401,6 +3412,7 @@ async function seedSymbolNow(shcode) {
         ind.pvc = PvcLayers.parsePvc(b.pvc);
         cache.barInd.set(b.time, ind);
       }
+      sysmonRescan(shcode);
       // ⑥⑦ 이벤트 → 봉별 아이템으로 변환해 캐시에 심는다 (렌더러가 applySeed에서 복원)
       for (const item of MiraeLayers.buildMemItems(dedup, memEvents)) {
         const ind = cache.barInd.get(item.time);
@@ -4013,6 +4025,259 @@ async function commitBarCap(raw) {
     for (const sh of syms) await seedSymbol(sh);
   });
 }
+
+let sysmonTab = "systems";
+
+function sysmonIds(symbol) {
+  const ids = [];
+  for (const pane of panes) {
+    if (pane.symbol !== symbol) continue;
+    for (const id of Sysmon.ids) {
+      if (pane.active.has(id) && !ids.includes(id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
+function sysmonNote(symbol, time) {
+  const cache = feed.get(symbol);
+  const bar = cache?.bars.get(time);
+  const os = cache?.barInd.get(time)?.os;
+  const systems = sysmonIds(symbol);
+  if (!bar || !os || !systems.length) return;
+  if (Sysmon.note(sysBook, { symbol, time, close: bar.close, os, systems })) paintSysmon();
+}
+
+function sysmonRescan(symbol) {
+  sysBook.rows = sysBook.rows.filter((r) => r.symbol !== symbol);
+  const cache = feed.get(symbol);
+  const systems = sysmonIds(symbol);
+  if (cache && systems.length) {
+    for (const t of cache.barSeq) {
+      const bar = cache.bars.get(t);
+      const os = cache.barInd.get(t)?.os;
+      if (!bar || !os) continue;
+      Sysmon.note(sysBook, { symbol, time: t, close: bar.close, os, systems });
+    }
+  }
+  paintSysmon();
+}
+
+function sysmonTable(host, headers, records, cells, empty) {
+  host.replaceChildren();
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const name of headers) {
+    const th = document.createElement("th");
+    th.textContent = name;
+    hr.append(th);
+  }
+  head.append(hr);
+  const body = document.createElement("tbody");
+  if (!records.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = headers.length;
+    td.className = "muted";
+    td.textContent = empty;
+    tr.append(td);
+    body.append(tr);
+  } else {
+    for (const rec of records) {
+      const tr = document.createElement("tr");
+      for (const text of cells(rec)) {
+        const td = document.createElement("td");
+        td.textContent = text;
+        tr.append(td);
+      }
+      body.append(tr);
+    }
+  }
+  table.append(head, body);
+  host.append(table);
+}
+
+function sysmonClock(sec) {
+  const p = kstParts(sec);
+  return `${p.y}-${pad2(p.mo)}-${pad2(p.d)} ${pad2(p.hh)}:${pad2(p.mm)}`;
+}
+
+function sysmonPrice(row) {
+  if (row.price == null) return "—";
+  const tick = feed.get(row.symbol)?.tickRaw;
+  return fmtPrice(row.price, tick > 0 ? tick : 5);
+}
+
+function sysmonNum(v, digits) {
+  if (v == null || !Number.isFinite(v)) return "";
+  return v.toLocaleString("ko-KR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function sysmonLastClose(symbol) {
+  const cache = feed.get(symbol);
+  if (!cache) return undefined;
+  for (let i = cache.barSeq.length - 1; i >= 0; i -= 1) {
+    const bar = cache.bars.get(cache.barSeq[i]);
+    if (bar && Number.isFinite(bar.close)) return bar.close;
+  }
+  return undefined;
+}
+
+function paintPortfolio() {
+  const host = document.getElementById("sysmon-portfolio");
+  const tickRaw = {};
+  const lastClose = {};
+  const names = {};
+  const include = [];
+  const seen = new Set();
+  for (const pane of panes) {
+    if (!pane.symbol) continue;
+    const cache = feed.get(pane.symbol);
+    if (cache?.tickRaw > 0) tickRaw[pane.symbol] = cache.tickRaw;
+    if (cache?.name) names[pane.symbol] = cache.name;
+    const mark = sysmonLastClose(pane.symbol);
+    if (mark != null) lastClose[pane.symbol] = mark;
+    for (const id of sysmonIds(pane.symbol)) {
+      const key = pane.symbol + "\0" + id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      include.push({ symbol: pane.symbol, systemId: id });
+    }
+  }
+  const report = Sysmon.portfolio(sysBook.rows, { tickRaw, lastClose, include });
+  const cols = report.columns.map((col) => ({
+    ...col,
+    header: col.header !== "종합" && names[col.header] ? names[col.header] : col.header,
+  }));
+  const metrics = [
+    ["시스템명", (c) => c.system],
+    ["주기", (c) => c.interval],
+    ["시작일", (c) => c.start],
+    ["종료일", (c) => c.end],
+    ["총손익", (c) => sysmonNum(c.net, 2), true],
+    ["미청산포함총손익", (c) => sysmonNum(c.net + c.openNet, 2), true],
+    ["총수익", (c) => sysmonNum(c.grossProfit, 2), true],
+    ["총손실", (c) => sysmonNum(c.grossLoss, 2), true],
+    ["연평균 손익", (c) => sysmonNum(c.annual, 2), true],
+    ["총거래 횟수", (c) => String(c.trades), true],
+    ["수익거래 횟수", (c) => String(c.wins), true],
+    ["손실거래 횟수", (c) => String(c.losses), true],
+    ["승률(%)", (c) => sysmonNum(c.winRate, 2), true],
+    ["평균손익", (c) => sysmonNum(c.avg, 2), true],
+    ["평균손익비", (c) => sysmonNum(c.payoff, 2), true],
+    ["최대수익", (c) => sysmonNum(c.maxWin, 2), true],
+    ["평균수익", (c) => sysmonNum(c.avgWin, 2), true],
+    ["최대연속 수익거래 횟수", (c) => String(c.maxWinStreak), true],
+    ["수익거래 평균 봉 개수", (c) => sysmonNum(c.avgWinBars, 0), true],
+    ["최대손실", (c) => sysmonNum(c.maxLoss, 2), true],
+    ["평균손실", (c) => sysmonNum(c.avgLoss, 2), true],
+    ["최대연속 손실거래 횟수", (c) => String(c.maxLossStreak), true],
+    ["손실거래 평균 봉 개수", (c) => sysmonNum(c.avgLossBars, 0), true],
+    ["최대손실폭", (c) => sysmonNum(c.maxDd, 2), true],
+    ["보상비율", (c) => sysmonNum(c.reward, 2), true],
+    ["총수익/총손실", (c) => sysmonNum(c.profitFactor, 2), true],
+    ["투자요구금액", (c) => sysmonNum(c.capital, 2), true],
+    ["수익률(%)", (c) => sysmonNum(c.returnPct, 2), true],
+  ];
+  host.replaceChildren();
+  const note = document.createElement("div");
+  note.className = "muted";
+  note.style.padding = "4px 8px";
+  note.textContent = "손익은 포인트입니다. 계약 수를 곱하고, 1차청산은 진입가에서 그 틱만큼 떨어진 가격으로 계산합니다.";
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const hr = document.createElement("tr");
+  const corner = document.createElement("th");
+  corner.textContent = "종목명";
+  hr.append(corner);
+  for (const col of cols) {
+    const th = document.createElement("th");
+    th.textContent = col.header;
+    hr.append(th);
+  }
+  head.append(hr);
+  const body = document.createElement("tbody");
+  for (const [label, pick, num] of metrics) {
+    const tr = document.createElement("tr");
+    const th = document.createElement("td");
+    th.textContent = label;
+    tr.append(th);
+    for (const col of cols) {
+      const td = document.createElement("td");
+      if (num) td.className = "num";
+      td.textContent = pick(col);
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+  table.append(head, body);
+  host.append(note, table);
+}
+
+function paintSysmon() {
+  const panel = document.getElementById("sysmon");
+  if (!panel || panel.hidden) return;
+  sysmonTable(
+    document.getElementById("sysmon-systems"),
+    ["종류", "시스템명", "종목명", "주기", "포지션상태", "진입수량", "잔고수량"],
+    Sysmon.systems(sysBook, panes.filter((p) => p.symbol).map((p) => ({ symbol: p.symbol, ids: sysmonIds(p.symbol) }))),
+    (r) => [r.kind, r.name, r.symbol, r.interval, r.position, String(r.entryQty), String(r.qty)],
+    "켜 둔 신호가 없습니다",
+  );
+  sysmonTable(
+    document.getElementById("sysmon-signals"),
+    ["종목명", "신호종류", "발생신호", "신호유형", "신호시간", "신호가격", "신호수량", "신호명", "시스템명", "주기"],
+    [...sysBook.rows].reverse(),
+    (r) => [
+      r.symbol, r.kind, r.occur, r.orderType, sysmonClock(r.time), sysmonPrice(r),
+      r.qty == null ? "—" : String(r.qty), r.name, r.system, r.interval,
+    ],
+    "발생 신호가 없습니다",
+  );
+  paintPortfolio();
+}
+
+function paintSysmonPressed() {
+  const open = !document.getElementById("sysmon").hidden;
+  document.getElementById("sysmon-open").setAttribute("aria-pressed", open && sysmonTab !== "portfolio" ? "true" : "false");
+  document.getElementById("port-open").setAttribute("aria-pressed", open && sysmonTab === "portfolio" ? "true" : "false");
+}
+
+function setSysmonOpen(open, tab) {
+  if (tab) setSysmonTab(tab);
+  document.body.classList.toggle("sysmon-on", open);
+  document.getElementById("sysmon").hidden = !open;
+  paintSysmonPressed();
+  if (open) paintSysmon();
+  requestAnimationFrame(() => resizeFrameCharts(allFrames()));
+}
+
+function setSysmonTab(tab) {
+  sysmonTab = tab;
+  document.getElementById("sysmon-tab-systems").classList.toggle("on", tab === "systems");
+  document.getElementById("sysmon-tab-signals").classList.toggle("on", tab === "signals");
+  document.getElementById("sysmon-tab-port").classList.toggle("on", tab === "portfolio");
+  document.getElementById("sysmon-systems").hidden = tab !== "systems";
+  document.getElementById("sysmon-signals").hidden = tab !== "signals";
+  document.getElementById("sysmon-portfolio").hidden = tab !== "portfolio";
+  paintSysmonPressed();
+}
+
+document.getElementById("sysmon-open").onclick = () => {
+  const panel = document.getElementById("sysmon");
+  if (!panel.hidden && sysmonTab !== "portfolio") setSysmonOpen(false);
+  else setSysmonOpen(true, "systems");
+};
+document.getElementById("port-open").onclick = () => {
+  const panel = document.getElementById("sysmon");
+  if (!panel.hidden && sysmonTab === "portfolio") setSysmonOpen(false);
+  else setSysmonOpen(true, "portfolio");
+};
+document.getElementById("sysmon-close").onclick = () => setSysmonOpen(false);
+document.getElementById("sysmon-tab-systems").onclick = () => setSysmonTab("systems");
+document.getElementById("sysmon-tab-signals").onclick = () => setSysmonTab("signals");
+document.getElementById("sysmon-tab-port").onclick = () => setSysmonTab("portfolio");
 
 document.getElementById("screen-new").onclick = () => newScreen();
 document.getElementById("load-cancel").onclick = cancelLoad;

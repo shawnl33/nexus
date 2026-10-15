@@ -18,6 +18,25 @@ const OsLayers = (() => {
   }
 
   // 스냅샷·라이브 공통. 없으면 null.
+  function posExtra(row, at) {
+    if (!Array.isArray(row) || row.length <= at) {
+      return { mfeW: 1, maeW: 1, keepMfeOn: false, keepMfe: null, keepMaeOn: false, keepMae: null,
+        flips: 0, danger: 0, totalOn: false, total: null };
+    }
+    return {
+      mfeW: Number(row[at]) || 0,
+      maeW: Number(row[at + 1]) || 0,
+      keepMfeOn: Number(row[at + 2]) === 1,
+      keepMfe: num(row[at + 3]),
+      keepMaeOn: Number(row[at + 4]) === 1,
+      keepMae: num(row[at + 5]),
+      flips: Number(row[at + 6]) || 0,
+      danger: Number(row[at + 7]) || 0,
+      totalOn: Number(row[at + 8]) === 1,
+      total: num(row[at + 9]),
+    };
+  }
+
   function parse(row) {
     if (!Array.isArray(row) || row.length < 23) return null;
     return {
@@ -125,6 +144,43 @@ const OsLayers = (() => {
       bkPx: row.length >= 131 ? num(row[128]) : null,
       bkRgb: row.length >= 131 ? (Number(row[129]) || 0) : 0,
       osPaint: row.length >= 131 ? (Number(row[130]) || 0) : 0,
+      turnOn: row.length >= 156 && Number(row[149]) === 1,
+      turnY: row.length >= 156 ? num(row[150]) : null,
+      turnRgb: row.length >= 156 ? (Number(row[151]) || 0) : 0,
+      turnW: row.length >= 156 ? (Number(row[152]) || 7) : 7,
+      sigGrade: row.length >= 156 ? (Number(row[153]) || 0) : 0,
+      pos1: row.length >= 176 ? {
+        side: Number(row[156]) || 0,
+        open: num(row[157]), mfe: num(row[158]), mae: num(row[159]),
+        exitOn: Number(row[160]) === 1, exit: num(row[161]),
+        long: num(row[162]), short: num(row[163]),
+        wins: Number(row[164]) || 0, losses: Number(row[165]) || 0,
+        openRgb: Number(row[196]) || 0, mfeRgb: Number(row[197]) || 0,
+        maeRgb: Number(row[198]) || 0, longRgb: Number(row[199]) || 0, openW: Number(row[200]) || 1,
+        ...posExtra(row, 206),
+      } : null,
+      pos2: row.length >= 176 ? {
+        side: Number(row[166]) || 0,
+        open: num(row[167]), mfe: num(row[168]), mae: num(row[169]),
+        exitOn: Number(row[170]) === 1, exit: num(row[171]),
+        long: num(row[172]), short: num(row[173]),
+        wins: Number(row[174]) || 0, losses: Number(row[175]) || 0,
+        openRgb: Number(row[201]) || 0, mfeRgb: Number(row[202]) || 0,
+        maeRgb: Number(row[203]) || 0, longRgb: Number(row[204]) || 0, openW: Number(row[205]) || 1,
+        ...posExtra(row, 216),
+      } : null,
+      pairDir: Number(row[176]) || 0, pairKind: Number(row[177]) || 0, pairGrade: Number(row[178]) || 0,
+      pairAk: Number(row[179]) || 0, pairAg: Number(row[180]) || 0, pairQty: Number(row[181]) || 0,
+      pairSuf: Number(row[182]) || 0, pairExit: Number(row[183]) || 0, pairLoss: Number(row[184]) || 0,
+      pairTicks: Number(row[185]) || 0, pairLimit: Number(row[226]) || 0,
+      pairExitQty: num(row[228]), pairLimitQty: num(row[229]),
+      zdDir: Number(row[186]) || 0, zdKind: Number(row[187]) || 0, zdGrade: Number(row[188]) || 0,
+      zdAk: Number(row[189]) || 0, zdAg: Number(row[190]) || 0, zdQty: Number(row[191]) || 0,
+      zdSuf: Number(row[192]) || 0, zdExit: Number(row[193]) || 0, zdLoss: Number(row[194]) || 0,
+      zdTicks: Number(row[195]) || 0, zdLimit: Number(row[227]) || 0,
+      zdExitQty: num(row[230]), zdLimitQty: num(row[231]),
+      adjKind: row.length >= 156 ? (Number(row[154]) || 0) : 0,
+      adjGrade: row.length >= 156 ? (Number(row[155]) || 0) : 0,
     };
   }
 
@@ -252,7 +308,7 @@ const OsLayers = (() => {
 
   function judgeHandle(chart) {
     const scale = "fxjudge";
-    const layers = { state: true, fut: true, prof: true, di: true, adx: true, entry: true, release: true, resume: true, break: true, lead: true };
+    const layers = { state: true, fut: true, prof: true, di: true, adx: true, entry: true, release: true, resume: true, break: true, lead: true, turn: true };
     // 통합상태는 0선에서 세운 막대. 미래·매물은 각 높이의 얇은 가로선.
     // DI방향은 ±20의 속 빈 테두리 원. ADX는 ±10 가로선.
     function levelLine(color) {
@@ -290,6 +346,8 @@ const OsLayers = (() => {
         on: () => layers.break, value: (r) => (r.brkOn ? r.brkY : null), color: (r) => css(r.brkRgb) },
       { layer: "lead", series: dots(chart, scale, "#00b400", 4),
         on: () => layers.lead, value: (r) => (r.leadOn ? r.leadY : null), color: (r) => css(r.leadRgb) },
+      { layer: "turn", series: dots(chart, scale, "#006400", 7),
+        on: () => layers.turn, value: (r) => (r.turnOn ? r.turnY : null), color: (r) => css(r.turnRgb), width: (r) => r.turnW || 7 },
     ];
     const entryLn = lines.find((ln) => ln.layer === "entry");
     entryLn.pen = globalThis.HorizLines.dots(1);
@@ -305,7 +363,7 @@ const OsLayers = (() => {
         if (!s.applyOptions) continue;
         s.applyOptions({
           priceScaleId: next,
-          autoscaleInfoProvider: () => ({ priceRange: { minValue: -180, maxValue: 180 } }),
+          autoscaleInfoProvider: () => ({ priceRange: { minValue: -190, maxValue: 190 } }),
         });
       }
       if (typeof chart.priceScale === "function") {
@@ -609,11 +667,35 @@ const OsLayers = (() => {
     return paneHandle(chart, "right", lines, { top: 0.08, bottom: 0.08 });
   }
 
-  const BUY_NAME = ["매수", "후보매수", "돌파매수", "선행매수", "조정매수"];
-  const SELL_NAME = ["매도", "후보매도", "돌파매도", "선행매도", "조정매도"];
+  function orderName(dir, kind, grade, adjKind, adjGrade) {
+    const sell = dir < 0;
+    if (kind === 1) {
+      if (grade === 8) return sell ? "후보돌파매도" : "후보돌파매수";
+      if (grade === 7) return sell ? "후보T매도" : "후보T매수";
+      if (grade === 6) return sell ? "후보R매도" : "후보R매수";
+      if (grade === 5) return sell ? "후보S매도" : "후보S매수";
+      if (grade === 4) return sell ? "후보구조매도" : "후보구조매수";
+      if (grade === 3) return sell ? "후보A매도" : "후보A매수";
+      if (grade === 2) return sell ? "후보B매도" : "후보B매수";
+      if (grade === 1) return sell ? "후보C매도" : "후보C매수";
+      return sell ? "후보매도" : "후보매수";
+    }
+    if (kind === 2) return sell ? "돌파매도" : "돌파매수";
+    if (kind === 3) return sell ? "선행매도" : "선행매수";
+    if (kind === 5) return sell ? "전환매도" : "전환매수";
+    if (adjKind === 1 && adjGrade === 3) return sell ? "조정A매도_강" : "조정A매수_강";
+    if (adjKind === 1 && adjGrade === 2) return sell ? "조정A매도_중" : "조정A매수_중";
+    if (adjKind === 1 && adjGrade === 1) return sell ? "조정A매도_약" : "조정A매수_약";
+    if (adjKind === 2 && adjGrade === 3) return sell ? "조정B매도_강" : "조정B매수_강";
+    if (adjKind === 2 && adjGrade === 2) return sell ? "조정B매도_중" : "조정B매수_중";
+    if (adjKind === 2 && adjGrade === 1) return sell ? "조정B매도_약" : "조정B매수_약";
+    return sell ? "조정매도" : "조정매수";
+  }
 
-  function sigLabel(name) {
-    return name;
+  function exitName(sigExit) {
+    if (sigExit === 2) return "시간청산매수";
+    if (sigExit === -2) return "시간청산매도";
+    return sigExit < 0 ? "빨강청산" : "파랑청산";
   }
 
   // 시스템 주문 화살. side > 0 은 가격 아래에서 위를 가리키고, side < 0 은 위에서 아래를 가리킨다.
@@ -678,7 +760,50 @@ const OsLayers = (() => {
     };
   }
 
-  function sigHandle(chart) {
+  function groupName(dir, kind, grade) {
+    const buy = dir > 0;
+    const brk = kind === 2 || kind === 3 || (kind === 1 && (grade === 8 || grade === 7 || grade === 4));
+    const rev = kind === 5 || (kind === 1 && grade === 6);
+    if (brk) return buy ? "돌파매수" : "돌파매도";
+    if (rev) return buy ? "반전매수" : "반전매도";
+    if (kind === 4) return buy ? "조정매수" : "조정매도";
+    return buy ? "압축매수" : "압축매도";
+  }
+
+  function pairLabel(r, zd) {
+    const dir = zd ? r.zdDir : r.pairDir;
+    const kind = zd ? r.zdKind : r.pairKind;
+    const grade = zd ? r.zdGrade : r.pairGrade;
+    const ak = zd ? r.zdAk : r.pairAk;
+    const ag = zd ? r.zdAg : r.pairAg;
+    const suf = zd ? r.zdSuf : r.pairSuf;
+    const qty = zd ? r.zdQty : r.pairQty;
+    const ticks = zd ? r.zdTicks : r.pairTicks;
+    let name = zd ? groupName(dir, kind, grade) : orderName(dir, kind, grade, ak, ag);
+    if (suf === 2) name += zd ? "_약세" : "_장약세";
+    else if (suf === 1) name += zd ? "_반대" : "_반대방향";
+    else if (!zd && suf === 3) name += "_직전실패";
+    else if (!zd && suf === 4) name += "_전일실패";
+    else if (!zd && suf === 5) name += "_직전매수실패";
+    if (qty > 0) name += "\n" + qty + "계약";
+    if (ticks > 0) name += "\n1차 " + ticks + "틱";
+    return name;
+  }
+
+  function pairExitLabel(r, zd) {
+    const code = zd ? r.zdExit : r.pairExit;
+    const loss = zd ? r.zdLoss : r.pairLoss;
+    if (!zd) return exitName(code);
+    const side = code > 0 ? "매수" : "매도";
+    const kind = code === 2 || code === -2 ? "시간청산" : "색청산";
+    return kind + side + (loss ? "_손절" : "");
+  }
+
+  function quantityLabel(name, qty) {
+    return qty > 0 ? name + "\n" + qty + "계약" : name;
+  }
+
+  function sigHandle(chart, mode) {
     function markLine() {
       const s = series(chart, "right", "#969696", 1);
       s.applyOptions({ lineVisible: false, lastValueVisible: false, priceLineVisible: false });
@@ -689,23 +814,35 @@ const OsLayers = (() => {
     const buy = markLine();
     const sell = markLine();
     const exit = markLine();
+    const zd = mode === "zd";
+    const pair = mode === "pair" || zd;
+    const dirOf = (r) => (pair ? (zd ? r.zdDir : r.pairDir) : r.sigDir);
+    const exitQtyOf = (r) => (pair ? (zd ? r.zdExitQty : r.pairExitQty) : r.sigExitQty);
+    const limitQtyOf = (r) => (zd ? r.zdLimitQty : r.pairLimitQty);
+    // 구버전의 수량 누락(null)은 이름만 유지한다. 잔량 0의 가상 청산은 표시하지 않는다.
+    const exitOf = (r) => (pair && exitQtyOf(r) === 0 ? 0 : (pair ? (zd ? r.zdExit : r.pairExit) : r.sigExit));
+    const limitOf = (r) => (pair && limitQtyOf(r) !== 0 ? (zd ? r.zdLimit : r.pairLimit) : 0);
+    const markOf = (r) => exitOf(r) || limitOf(r);
     const lines = [
       { layer: "entry", series: buy.s, pen: buy.pen, on: () => true,
-        value: (r, bar) => (r.sigDir > 0 && bar ? bar.low : null),
+        value: (r, bar) => (dirOf(r) > 0 && bar ? bar.low : null),
         color: () => "#00ff00", side: () => 1,
-        text: (r) => sigLabel(BUY_NAME[r.sigKind] || BUY_NAME[0]) },
+        text: (r) => (pair ? pairLabel(r, zd) : orderName(1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade)) },
       { layer: "entry", series: sell.s, pen: sell.pen, on: () => true,
-        value: (r, bar) => (r.sigDir < 0 && bar ? bar.high : null),
+        value: (r, bar) => (dirOf(r) < 0 && bar ? bar.high : null),
         color: () => "#00ffff", side: () => -1,
-        text: (r) => sigLabel(SELL_NAME[r.sigKind] || SELL_NAME[0]) },
+        text: (r) => (pair ? pairLabel(r, zd) : orderName(-1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade)) },
       { layer: "exit", series: exit.s, pen: exit.pen, on: () => true,
-        value: (r, bar) => (r.sigExit && bar ? (r.sigExit > 0 ? bar.high : bar.low) : null),
+        value: (r, bar) => (markOf(r) && bar ? (markOf(r) > 0 ? bar.high : bar.low) : null),
         color: () => "#ffd000",
-        side: (r) => (r.sigExit > 0 ? -1 : 1),
-        text: (r) => sigLabel(
-          Math.abs(r.sigExit) === 2
-            ? (r.sigExit > 0 ? "시간청산매수" : "시간청산매도")
-            : (r.sigExit > 0 ? "파랑청산" : "빨강청산")) },
+        side: (r) => (markOf(r) > 0 ? -1 : 1),
+        text: (r) => {
+          const lines = [];
+          const hit = limitOf(r);
+          if (hit) lines.push(quantityLabel((zd ? "1차청산" : "1차목표청산") + (hit > 0 ? "매수" : "매도"), limitQtyOf(r)));
+          if (exitOf(r)) lines.push(quantityLabel(pair ? pairExitLabel(r, zd) : exitName(exitOf(r)), exitQtyOf(r)));
+          return lines.join("\n");
+        } },
     ];
     const handle = paneHandle(chart, "right", lines, { top: 0.08, bottom: 0.08 });
     const paint0 = handle.applySeed;
@@ -1011,6 +1148,72 @@ const OsLayers = (() => {
     };
   }
 
+  function posHandle(chart, which) {
+    const scale = which === 2 ? "fxpos2" : "fxpos1";
+    const pickPos = (ind) => {
+      const os = ind && ind.os;
+      return os && (which === 2 ? os.pos2 : os.pos1);
+    };
+    const line = (layer, value, color, width) => ({
+      layer, series: mark(chart, scale, ticks()), value,
+      width: width || ((r) => (r && r.openW) || 1),
+      color: typeof color === "function" ? color : () => color,
+    });
+    const wide = (pick) => (r) => (pick(r) > 0 ? pick(r) : 1);
+    const lines = [
+      line("open", (r) => (r.side !== 0 ? r.open : null), (r) => css(r.openRgb || 0x0000ff), (r) => r.openW || 1),
+      line("mfe", (r) => (r.side !== 0 && r.mfeW > 0 ? r.mfe : null), (r) => css(r.mfeRgb || 0xff0000), wide((r) => r.mfeW)),
+      line("mae", (r) => (r.side !== 0 && r.maeW > 0 ? r.mae : null), (r) => css(r.maeRgb || 0x0000ff), wide((r) => r.maeW)),
+      line("exit", (r) => (r.exitOn ? r.exit : null), "#ff0000", () => 1),
+      line("closedLong", (r) => (r.long ? r.long : null), (r) => css(r.longRgb || 0xff7f00), () => 2),
+      line("closedShort", (r) => (r.short ? r.short : null), "#6a8f23", () => 1),
+      line("p4", (r) => (r.side > 0 && r.keepMfeOn ? r.keepMfe : null), "#9aa0a6", () => 1),
+      line("p5", (r) => (r.side > 0 && r.keepMaeOn ? r.keepMae : null), "#6b7280", () => 1),
+      line("flips", (r) => (r.flips > 0 ? r.flips : null), "#b0b0b0", () => 1),
+      line("danger", (r) => (r.danger > 0 ? r.danger : null), "#ff00ff", () => 2),
+      line("total", (r) => (r.totalOn ? r.total : null), "#ff00ff", () => 2),
+    ];
+    const layers = {
+      open: true, mfe: true, mae: true, exit: true, closedLong: true, closedShort: true,
+      p4: true, p5: true, flips: true, danger: true, total: true,
+    };
+    const all = lines.map((ln) => ln.series);
+    function setAxis(id) {
+      const own = id === "right";
+      const next = own ? "right" : scale;
+      for (const s of all) {
+        if (s.applyOptions) s.applyOptions({ priceScaleId: next });
+      }
+      if (typeof chart.priceScale === "function") {
+        chart.priceScale(next).applyOptions({
+          scaleMargins: { top: 0.78, bottom: 0 }, autoScale: true, visible: own,
+        });
+      }
+    }
+    setAxis(null);
+    let ctx = null;
+    function draw() {
+      for (const ln of lines) {
+        ln.on = () => layers[ln.layer];
+        paintMarks(ln, ctx, (ind) => {
+          const p = pickPos(ind);
+          return p || null;
+        });
+      }
+    }
+    return {
+      setAxis,
+      setLayers(map) {
+        for (const k of Object.keys(layers)) if (map && k in map) layers[k] = !!map[k];
+        draw();
+      },
+      applySeed(c) { ctx = c; draw(); },
+      applyLive(p, c) { ctx = c || ctx; draw(); },
+      clear() { for (const s of all) s.setData([]); },
+      destroy() { for (const s of all) chart.removeSeries(s); },
+    };
+  }
+
   function paintHandle() {
     const layers = { bar: true };
     return {
@@ -1025,7 +1228,7 @@ const OsLayers = (() => {
 
   return {
     parse, judgeHandle, packHandle, flatHandle, flatHandleV2, adjHandle, adjHandleOf,
-    ecHandle, sigHandle, pnlHandle, paintHandle,
+    ecHandle, sigHandle, pnlHandle, posHandle, paintHandle, orderName, exitName, pairLabel, groupName,
   };
 })();
 

@@ -120,6 +120,7 @@ bool tr_fxos_init(tr_fxos_t *s, double price_scale) {
     memset(s, 0, sizeof(*s));
     s->price_scale = price_scale;
     tr_fxsig_cfg_default(&s->cfg);
+    tr_fxos_filter_cfg_default(&s->filt);
     if (!sig_fv_open(s)) {
         return false;
     }
@@ -291,11 +292,74 @@ static int dot_w(int len) {
     return 3;
 }
 
+void tr_fxos_set_synth(tr_fxos_input_t *in, const tr_fxsyn_t *s5, const tr_fxsyn_t *s15,
+                       const tr_fxsyn_t *s30) {
+    if (in == 0) {
+        return;
+    }
+    in->reg5_ok = s5 != 0 && s5->out_reg_valid ? 1 : 0;
+    in->reg15_ok = s15 != 0 && s15->out_reg_valid ? 1 : 0;
+    in->reg30_ok = s30 != 0 && s30->out_reg_valid ? 1 : 0;
+    in->reg5 = s5 != 0 ? s5->out_reg : 0;
+    in->reg15 = s15 != 0 ? s15->out_reg : 0;
+    in->reg30 = s30 != 0 ? s30->out_reg : 0;
+    in->mkt5_ok = s5 != 0 && s5->out_mkt_valid ? 1 : 0;
+    in->mkt15_ok = s15 != 0 && s15->out_mkt_valid ? 1 : 0;
+    in->mkt30_ok = s30 != 0 && s30->out_mkt_valid ? 1 : 0;
+    in->mkt5 = s5 != 0 ? s5->out_mkt : 0;
+    in->mkt15 = s15 != 0 ? s15->out_mkt : 0;
+    in->mkt30 = s30 != 0 ? s30->out_mkt : 0;
+}
+
 void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
     if (s == 0 || in == 0) {
         return;
     }
+    /* 원본은 완성 봉마다 한 번이다. 같은 봉의 재평가(진행 중 체결)는 봉 수를 올리지 않는다. */
+    if (in->is_new_bar || !s->has_bar_open) {
+        s->hist_at_open = s->hist;
+        s->pair_at_open = s->pair_st;
+        s->zd_at_open = s->zd_st;
+        s->flat_prev_open = s->flat_prev;
+        s->prev_flat_open = s->prev_flat;
+        s->prev_close_open = s->prev_close;
+        s->prev_pos_open = s->prev_pos;
+        s->prev_slope_open = s->prev_slope;
+        s->has_flat_open = s->has_flat;
+        s->prev_up_hi_open = s->prev_up_hi;
+        s->prev_up_lo_open = s->prev_up_lo;
+        s->prev_up_382_open = s->prev_up_382;
+        s->prev_up_500_open = s->prev_up_500;
+        s->prev_up_618_open = s->prev_up_618;
+        s->prev_dn_hi_open = s->prev_dn_hi;
+        s->prev_dn_lo_open = s->prev_dn_lo;
+        s->prev_dn_382_open = s->prev_dn_382;
+        s->prev_dn_500_open = s->prev_dn_500;
+        s->prev_dn_618_open = s->prev_dn_618;
+        s->has_bar_open = 1;
+    } else {
+        s->hist = s->hist_at_open;
+        s->pair_st = s->pair_at_open;
+        s->zd_st = s->zd_at_open;
+        s->flat_prev = s->flat_prev_open;
+        s->prev_flat = s->prev_flat_open;
+        s->prev_close = s->prev_close_open;
+        s->prev_pos = s->prev_pos_open;
+        s->prev_slope = s->prev_slope_open;
+        s->has_flat = s->has_flat_open;
+        s->prev_up_hi = s->prev_up_hi_open;
+        s->prev_up_lo = s->prev_up_lo_open;
+        s->prev_up_382 = s->prev_up_382_open;
+        s->prev_up_500 = s->prev_up_500_open;
+        s->prev_up_618 = s->prev_up_618_open;
+        s->prev_dn_hi = s->prev_dn_hi_open;
+        s->prev_dn_lo = s->prev_dn_lo_open;
+        s->prev_dn_382 = s->prev_dn_382_open;
+        s->prev_dn_500 = s->prev_dn_500_open;
+        s->prev_dn_618 = s->prev_dn_618_open;
+    }
     memset(&s->out, 0, sizeof(s->out));
+    s->out.rth_open = tr_fxos_rth_open((int)in->date, &s->filt);
     int reset = s->reset_bar;
     if (in->is_new_bar || s->session_bars == 0) {
         int64_t key = tr_fx_session_key_v1(in->date, in->time);
@@ -384,16 +448,8 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
         jrgb = RGB_(150, 150, 150);
     }
 
-    int pos = 0;
-    if (s->squeeze.out.profile_valid && s->squeeze.out.band_hi > s->squeeze.out.band_lo) {
-        double t = (in->close - s->squeeze.out.band_lo) /
-                   (s->squeeze.out.band_hi - s->squeeze.out.band_lo);
-        if (t >= 2.0 / 3.0) {
-            pos = 1;
-        } else if (t <= 1.0 / 3.0) {
-            pos = -1;
-        }
-    }
+    int pos = tr_fxos_box_color(in->close, s->squeeze.out.band_hi, s->squeeze.out.band_lo,
+                                s->squeeze.out.profile_valid);
     int stage = stage_of(s->squeeze.out.hold);
     int rel_w = dot_w(s->squeeze.out.release_len);
     int cf_w = dot_w(s->squeeze.out.confirm_len);
@@ -579,7 +635,7 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
     if (s->prev_adj_trend != aout.trend) {
         s->adj_done = 0;
     }
-    if (s->cfg.state_bars > 0 && adj_show && aout.sig_dir > 0 && in->time >= 70000 && in->time < s->cfg.rth_start &&
+    if (s->cfg.state_bars > 0 && adj_show && aout.sig_dir > 0 && in->time >= 70000 && in->time < s->out.rth_open &&
         s->up_i >= s->cfg.state_bars) {
         int sum = 0;
         int n = s->cfg.state_bars;
@@ -694,6 +750,129 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
         s->out.lead_on = 1;
         s->out.lead_y = lead > 0 ? -170 : 170;
         s->out.lead_rgb = lead > 0 ? RGB_(0, 180, 0) : RGB_(0, 0, 0);
+    }
+    {
+        tr_fxos_hist_in_t hin;
+        memset(&hin, 0, sizeof(hin));
+        hin.session_first = reset;
+        hin.t1 = s->sig_fv.out.persist_target[0];
+        hin.t2 = s->sig_fv.out.persist_target[1];
+        hin.t3 = s->sig_fv.out.persist_target[2];
+        hin.open = in->open;
+        hin.high = in->high;
+        hin.low = in->low;
+        hin.close = in->close;
+        hin.two_window = 240;
+        hin.two_min_bars = 3;
+        hin.flat_window = 240;
+        hin.fv_ok = 1;
+        hin.rise_hi = s->sig_fv.out.lup_high;
+        hin.rise_lo = s->sig_fv.out.lup_low;
+        hin.fall_hi = s->sig_fv.out.ldn_high;
+        hin.fall_lo = s->sig_fv.out.ldn_low;
+        hin.prev_dn_len = flat_out.prev_dn_slope;
+        hin.prev_up_len = flat_out.prev_up_slope;
+        hin.slope = flat_out.slope;
+        hin.sq_ratio = s->squeeze.out.ratio;
+        hin.sq_hold = s->squeeze.out.hold;
+        hin.sq_color = pos;
+        hin.flat_1 = s->sig_fv.out.reg_flat;
+        hin.flat_5 = in->reg5_ok ? in->reg5 : 0;
+        hin.flat_15 = in->reg15_ok ? in->reg15 : 0;
+        hin.flat_30 = in->reg30_ok ? in->reg30 : 0;
+        hin.flat_ready = s->sig_fv.out.reg_flat != 0.0 && in->reg5_ok && in->reg15_ok && in->reg30_ok;
+        hin.mkt_1 = s->sig_fv.out.market_center;
+        hin.mkt5_ok = in->mkt5_ok;
+        hin.mkt15_ok = in->mkt15_ok;
+        hin.mkt30_ok = in->mkt30_ok;
+        hin.mkt_5 = in->mkt5;
+        hin.mkt_15 = in->mkt15;
+        hin.mkt_30 = in->mkt30;
+        hin.price_scale = s->price_scale;
+        hin.slack_ticks = 1;
+        hin.prev_up_slope = flat_out.prev_up_slope;
+        hin.prev_dn_slope = flat_out.prev_dn_slope;
+        hin.unified = dec.unified;
+        tr_fxos_hist_bar(&s->hist, &hin);
+    }
+    {
+        tr_fxos_filter_in_t fin;
+        tr_fxos_filter_out_t fout;
+        memset(&fin, 0, sizeof(fin));
+        fin.unified = dec.unified;
+        fin.cand_dir = ent_dir;
+        fin.cand_grade = ent_grade;
+        fin.lead_dir = lead;
+        fin.brk_dir = brk;
+        fin.adj_dir = adj_show ? aout.sig_dir : 0;
+        fin.adj_kind = aout.sig_kind;
+        fin.adj_grade = aout.sig_grade;
+        fin.date = (int)in->date;
+        fin.time = (int)in->time;
+        fin.lead_valid = flat_out.valid ? 1 : 0;
+        fin.session_first = reset ? 1 : 0;
+        fin.slope = flat_out.slope;
+        fin.slope_prev = s->prev_slope;
+        fin.pos = flat_out.pos;
+        fin.low = in->low;
+        fin.high = in->high;
+        fin.close = in->close;
+        fin.price_unit = in->price_unit;
+        fin.three_ratio = s->hist.three_ratio;
+        fin.two_ratio = s->hist.two_ratio;
+        fin.flat_ratio = s->hist.flat_ratio;
+        fin.swing = s->hist.swing;
+        fin.prior_low = s->hist.prior_low;
+        fin.prior_high = s->hist.prior_high;
+        fin.width_seen = s->hist.width_seen;
+        fin.tall_buy = s->hist.tall_buy;
+        fin.tall_sell = s->hist.tall_sell;
+        fin.hot_up = s->hist.hot_up;
+        fin.hot_dn = s->hist.hot_dn;
+        fin.red_n = s->hist.red_n;
+        fin.bars_since_buy = s->hist.bars_since_buy;
+        fin.had_m100 = s->hist.had_m100;
+        fin.had_p100 = s->hist.had_p100;
+        fin.target1 = s->sig_fv.out.persist_target[0];
+        fin.target5 = s->sig_fv.out.persist_target[4];
+        fin.rise_hi = s->sig_fv.out.lup_high;
+        fin.rise_lo = s->sig_fv.out.lup_low;
+        fin.fall_hi = s->sig_fv.out.ldn_high;
+        fin.fall_lo = s->sig_fv.out.ldn_low;
+        fin.sq_bars = s->squeeze.out.hold;
+        fin.width_ratio = s->squeeze.out.ratio;
+        fin.amp = s->out.flat_amp;
+        fin.gray = s->hist.gray;
+        fin.prev_up = flat_out.prev_up_slope;
+        fin.prev_dn = flat_out.prev_dn_slope;
+        s->applied = fin;
+        tr_fxos_filter(&s->filt, &fin, &fout);
+        if (fout.turn_dir > 0) {
+            s->hist.bars_since_buy = 0;
+        }
+        ent_dir = fout.cand_dir;
+        brk = fout.brk_dir;
+        lead = fout.lead_dir;
+        if (fout.adj_dir == 0) {
+            adj_show = 0;
+            s->out.adj_on = 0;
+        }
+        if (ent_dir == 0) {
+            s->out.ent_on = 0;
+        }
+        if (brk == 0) {
+            s->out.brk_on = 0;
+        }
+        if (lead == 0) {
+            s->out.lead_on = 0;
+        }
+        s->out.turn_on = fout.turn_dir != 0 ? 1 : 0;
+        s->out.turn_y = fout.turn_y;
+        s->out.turn_rgb = fout.turn_rgb;
+        s->out.turn_w = fout.turn_w;
+        s->out.sig_grade = fout.cand_grade;
+        s->out.sig_adj_kind = fout.adj_kind;
+        s->out.sig_adj_grade = fout.adj_grade;
     }
 
     {
@@ -861,6 +1040,9 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
     if (adj_show) {
         s->out.paint_rgb = aout.sig_dir > 0 ? RGB_(255, 140, 0) : RGB_(150, 0, 220);
     }
+    if (s->out.turn_on) {
+        s->out.paint_rgb = s->out.turn_y < 0 ? RGB_(0, 100, 0) : RGB_(150, 0, 80);
+    }
     if (lead != 0) {
         s->out.paint_rgb = lead > 0 ? RGB_(150, 75, 0) : RGB_(0, 0, 0);
     }
@@ -886,6 +1068,10 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
         sig = aout.sig_dir;
         kind = 4;
     }
+    if (s->out.turn_on) {
+        sig = s->out.turn_y < 0 ? 1 : -1;
+        kind = 5;
+    }
     if (lead != 0) {
         sig = lead;
         kind = 3;
@@ -902,28 +1088,36 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
     int qty = s->cfg.order_qty > 0 ? s->cfg.order_qty : 1;
     if (s->mkt > 0 && color_dir == -1 && s->prev_color_dir != -1) {
         s->out.sig_exit = 1;
+        s->out.exit_qty = s->contracts;
         s->mkt = 0;
         s->contracts = 0;
         s->avg_entry = 0;
     }
     if (s->mkt < 0 && color_dir == 1 && s->prev_color_dir != 1) {
         s->out.sig_exit = -1;
+        s->out.exit_qty = s->contracts;
         s->mkt = 0;
         s->contracts = 0;
         s->avg_entry = 0;
     }
     if (!trade_time && s->mkt > 0) {
         s->out.sig_exit = 2;
+        s->out.exit_qty = s->contracts;
         s->mkt = 0;
         s->contracts = 0;
         s->avg_entry = 0;
     }
     if (!trade_time && s->mkt < 0) {
         s->out.sig_exit = -2;
+        s->out.exit_qty = s->contracts;
         s->mkt = 0;
         s->contracts = 0;
         s->avg_entry = 0;
     }
+    s->out.raw_dir = sig;
+    s->out.raw_kind = kind;
+    s->out.color_dir = color_dir;
+    s->out.session_first = reset;
     if (trade_time && sig == 1 && s->mkt != 1) {
         s->mkt = 1;
         s->contracts = qty;
@@ -992,14 +1186,94 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
         s->out.pnl_short_on = pout.closed_short_on;
         s->out.pnl_exit = pout.exit_pts;
         s->out.pnl_exit_on = pout.exit_on;
+        {
+            tr_fxpos_in_t xin;
+            memset(&xin, 0, sizeof(xin));
+            xin.date = in->date;
+            xin.time = in->time;
+            xin.high = in->high;
+            xin.low = in->low;
+            xin.close = in->close;
+            xin.price_scale = s->price_scale;
+            xin.tick_mult = 1;
+            xin.partial_ticks = 10;
+            xin.market = s->mkt;
+            xin.contracts = s->contracts;
+            xin.avg = s->avg_entry;
+            tr_fxpos_eval(&s->pos1, &xin, &s->out.pos_v1);
+            xin.v2 = 1;
+            tr_fxpos_eval(&s->pos2, &xin, &s->out.pos_v2);
+        }
+        {
+            tr_fxpair_in_t pin;
+            tr_fxpair_out_t pout;
+            memset(&pin, 0, sizeof(pin));
+            pin.dir = s->out.raw_dir;
+            pin.kind = s->out.raw_kind;
+            pin.grade = s->out.sig_grade;
+            pin.adj_kind = s->out.sig_adj_kind;
+            pin.adj_grade = s->out.sig_adj_grade;
+            pin.unified = s->out.judge;
+            pin.slope = s->out.flat_slope;
+            pin.pos = s->out.flat_pos;
+            pin.lead_valid = s->out.flat_on;
+            pin.time_hms = (int)in->time;
+            pin.rth_hms = s->out.rth_open;
+            pin.session_first = s->out.session_first;
+            pin.color_dir = s->out.color_dir;
+            pin.high = in->high;
+            pin.low = in->low;
+            pin.close = in->close;
+            pin.price_scale = s->price_scale > 0 ? s->price_scale : 1;
+            pin.price_unit = in->price_unit;
+            pin.di = s->out.di;
+            pin.prev_dn = flat_out.prev_dn_slope;
+            pin.three_ratio = s->applied.three_ratio;
+            pin.sq_hold = s->applied.sq_bars;
+            pin.width_ratio = s->applied.width_ratio;
+            pin.swing = s->applied.swing;
+            pin.rise_hi = s->applied.rise_hi;
+            pin.rise_lo = s->applied.rise_lo;
+            pin.fall_hi = s->applied.fall_hi;
+            pin.fall_lo = s->applied.fall_lo;
+            s->pair_st.v68 = 0;
+            tr_fxpair_on_bar(&s->pair_st, &pin, &pout);
+            s->out.pair_dir = pout.entry_dir;
+            s->out.pair_kind = pin.kind;
+            s->out.pair_grade = pin.grade;
+            s->out.pair_ak = pin.adj_kind;
+            s->out.pair_ag = pin.adj_grade;
+            s->out.pair_qty = pout.entry_qty;
+            s->out.pair_suf = pout.suf;
+            s->out.pair_exit = pout.exit_code;
+            s->out.pair_loss = pout.exit_loss;
+            s->out.pair_ticks = s->pair_st.first_ticks;
+            s->out.pair_limit = pout.limit_hit;
+            s->out.pair_exit_qty = pout.exit_qty;
+            s->out.pair_limit_qty = pout.limit_hit_qty;
+            s->zd_st.v68 = 1;
+            tr_fxpair_on_bar(&s->zd_st, &pin, &pout);
+            s->out.zd_dir = pout.entry_dir;
+            s->out.zd_kind = pin.kind;
+            s->out.zd_grade = pin.grade;
+            s->out.zd_ak = pin.adj_kind;
+            s->out.zd_ag = pin.adj_grade;
+            s->out.zd_qty = pout.entry_qty;
+            s->out.zd_suf = pout.suf;
+            s->out.zd_exit = pout.exit_code;
+            s->out.zd_loss = pout.exit_loss;
+            s->out.zd_ticks = s->zd_st.first_ticks;
+            s->out.zd_limit = pout.limit_hit;
+            s->out.zd_exit_qty = pout.exit_qty;
+            s->out.zd_limit_qty = pout.limit_hit_qty;
+        }
         s->out.pnl_flips = pout.flips;
         s->out.pnl_danger = pout.danger;
         s->out.pnl_p26_on = pout.p26_on;
         s->out.pnl_p27_on = pout.p27_on;
     }
 
-    if (in->is_new_bar || !s->has_flat) {
-        s->flat_prev = flat_out;
+    s->flat_prev = flat_out;
         s->prev_flat = flat;
         s->prev_close = in->close;
         s->prev_pos = flat_out.pos;
@@ -1017,7 +1291,6 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
             s->prev_dn_618 = fv->ldn_618;
         }
         s->has_flat = 1;
-    }
 }
 
 int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o) {
@@ -1063,18 +1336,43 @@ int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o) {
         m += n;
     }
     {
-        int n = snprintf(buf + m, cap - (size_t)m, ",%d,%.10g,%u,%d,%d,%.10g,%u,%d,%.10g,%u,%d,%d,%.10g,%u,%u,%d,%.10g,%u,%d,%d,%d,%d,%d,%.10g,%d,%.10g,%d,%d,%d,%d,%d,%.10g",
+        int n = snprintf(buf + m, cap - (size_t)m, ",%d,%.10g,%u,%d,%d,%.10g,%u,%d,%.10g,%u,%d,%d,%.10g,%u,%u,%d,%.10g,%u,%d,%d,%d,%d,%d,%.10g,%d,%.10g,%d,%d,%d,%d,%d,%.10g,%d,%d,%d,%u,%d,%d,%d,%d,%d,%.10g,%.10g,%.10g,%d,%.10g,%.10g,%.10g,%d,%d,%d,%.10g,%.10g,%.10g,%d,%.10g,%.10g,%.10g,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%d,%u,%u,%u,%u,%d,%d,%d,%d,%.10g,%d,%.10g,%d,%d,%d,%.10g,%d,%d,%d,%.10g,%d,%.10g,%d,%d,%d,%.10g,%d,%d",
                          o->ec_on, o->ec_px, o->ec_rgb, o->ec_w, o->ec_line_on, o->ec_line, o->ec_line_rgb,
                          o->rs_on, o->rs_px, o->rs_rgb, o->rs_w,
                          o->bk_on, o->bk_px, o->bk_rgb, o->os_paint,
                          o->pnl_long_on, o->pnl_long, o->pnl_long_rgb, o->sig_kind,
                          o->sig_qty, o->exit_qty,
                          o->pnl_side, o->pnl_short_on, o->pnl_short, o->pnl_exit_on, o->pnl_exit,
-                         o->flat_on, o->flat_up_pos, o->flat_dn_pos, o->flat_up_slope, o->flat_dn_slope, o->flat_amp);
+                         o->flat_on, o->flat_up_pos, o->flat_dn_pos, o->flat_up_slope, o->flat_dn_slope, o->flat_amp,
+                         o->rth_open, o->turn_on, o->turn_y, o->turn_rgb, o->turn_w,
+                         o->sig_grade, o->sig_adj_kind, o->sig_adj_grade,
+                         o->pos_v1.side, o->pos_v1.open_ticks, o->pos_v1.mfe_ticks, o->pos_v1.mae_ticks,
+                         o->pos_v1.exit_on, o->pos_v1.exit_ticks, o->pos_v1.closed_long, o->pos_v1.closed_short,
+                         o->pos_v1.wins, o->pos_v1.losses,
+                         o->pos_v2.side, o->pos_v2.open_ticks, o->pos_v2.mfe_ticks, o->pos_v2.mae_ticks,
+                         o->pos_v2.exit_on, o->pos_v2.exit_ticks, o->pos_v2.closed_long, o->pos_v2.closed_short,
+                         o->pos_v2.wins, o->pos_v2.losses,
+                         o->pair_dir, o->pair_kind, o->pair_grade, o->pair_ak, o->pair_ag,
+                         o->pair_qty, o->pair_suf, o->pair_exit, o->pair_loss, o->pair_ticks,
+                         o->zd_dir, o->zd_kind, o->zd_grade, o->zd_ak, o->zd_ag,
+                         o->zd_qty, o->zd_suf, o->zd_exit, o->zd_loss, o->zd_ticks,
+                         o->pos_v1.open_rgb, o->pos_v1.mfe_rgb, o->pos_v1.mae_rgb, o->pos_v1.long_rgb, o->pos_v1.open_w,
+                         o->pos_v2.open_rgb, o->pos_v2.mfe_rgb, o->pos_v2.mae_rgb, o->pos_v2.long_rgb, o->pos_v2.open_w,
+                         o->pos_v1.mfe_w, o->pos_v1.mae_w, o->pos_v1.keep_mfe_on, o->pos_v1.keep_mfe,
+                         o->pos_v1.keep_mae_on, o->pos_v1.keep_mae, o->pos_v1.flips, o->pos_v1.danger,
+                         o->pos_v1.total_on, o->pos_v1.total_ticks,
+                         o->pos_v2.mfe_w, o->pos_v2.mae_w, o->pos_v2.keep_mfe_on, o->pos_v2.keep_mfe,
+                         o->pos_v2.keep_mae_on, o->pos_v2.keep_mae, o->pos_v2.flips, o->pos_v2.danger,
+                         o->pos_v2.total_on, o->pos_v2.total_ticks,
+                         o->pair_limit, o->zd_limit);
         if (n < 0 || (size_t)m + (size_t)n >= cap) {
             return -1;
         }
         m += n;
     }
-    return m;
+    /* 기존 칸을 유지하고 청산 수량을 뒤에 추가한다 (228~231). */
+    int n = snprintf(buf + m, cap - (size_t)m, ",%d,%d,%d,%d",
+                     o->pair_exit_qty, o->pair_limit_qty, o->zd_exit_qty, o->zd_limit_qty);
+    if (n < 0 || (size_t)m + (size_t)n >= cap) return -1;
+    return m + n;
 }

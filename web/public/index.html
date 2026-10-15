@@ -23,6 +23,20 @@
   #mirae-badges { display: inline-flex; gap: 12px; align-items: baseline; }
   #mirae-badges[hidden] { display: none; }
   #panes { position: relative; width: 100vw; height: calc(100vh - 110px); display: flex; flex-direction: column; overflow: hidden; }
+  body.sysmon-on #panes { height: calc(100vh - 110px - 320px); }
+  #sysmon-open[aria-pressed="true"], #port-open[aria-pressed="true"] { border-color: #26a69a; color: #26a69a; }
+  #sysmon { height: 320px; display: flex; flex-direction: column; background: #1c2330; border-top: 1px solid #2a2e39; }
+  #sysmon[hidden] { display: none; }
+  .sysmon-bar { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid #2a2e39; flex: none; }
+  .sysmon-bar button.on { background: #14282c; color: #26a69a; border-color: #26a69a; }
+  .sysmon-grow { flex: 1; }
+  .sysmon-sheet { overflow: auto; flex: 1 1 0; min-height: 0; }
+  #sysmon table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #sysmon th, #sysmon td { padding: 3px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid #2a2e39; }
+  #sysmon th { position: sticky; top: 0; background: #1c2330; color: #8a919c; font-weight: 600; }
+  #sysmon .muted { color: #8a919c; }
+  #sysmon-portfolio td.num, #sysmon-portfolio th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #sysmon-portfolio td:first-child, #sysmon-portfolio th:first-child { position: sticky; left: 0; background: #1c2330; }
   .pane-row { display: flex; flex-direction: row; width: 100%; min-height: 0; flex: none; position: relative; }
   .frame { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: none; height: 100%; box-sizing: border-box; border-right: 1px solid #2a2e39; border-bottom: 1px solid #2a2e39; }
   .frame-tools { position: relative; z-index: 6; flex: none; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 3px 6px; background: #18202c; border-bottom: 1px solid #2a2e39; }
@@ -195,6 +209,8 @@
     <button id="screen-new" title="빈 차트 하나로 새 화면을 시작한다">새화면</button>
     <button id="row-add" title="맨 아래에 화면틀 행을 추가한다">행추가</button>
     <button id="col-add" title="맨 오른쪽에 화면틀 열을 추가한다">열추가</button>
+    <button id="sysmon-open" type="button" aria-pressed="false" title="켜 둔 신호의 진입과 청산을 표로 본다">시스템모니터</button>
+    <button id="port-open" type="button" aria-pressed="false" title="시스템 포트폴리오 분석. 손익, 승률, 최대손실폭">포트폴리오</button>
   </span>
   <label class="hint" for="bar-cap">상한</label>
   <input id="bar-cap" type="number" min="16" max="8192" step="1" value="2560" title="차트가 다루는 1분봉 개수. 값을 바꾸면 과거 봉을 이 개수까지 다시 받습니다">
@@ -211,6 +227,18 @@
   <span id="hint">※ 예측선은 미래 가격이 아니라 생성 시점의 계산 결과입니다</span>
 </header>
 <div id="panes"></div>
+<section id="sysmon" hidden>
+  <div class="sysmon-bar">
+    <button type="button" id="sysmon-tab-systems" class="on">시스템</button>
+    <button type="button" id="sysmon-tab-signals">발생신호</button>
+    <button type="button" id="sysmon-tab-port">포트폴리오</button>
+    <span class="sysmon-grow"></span>
+    <button type="button" id="sysmon-close">닫기</button>
+  </div>
+  <div id="sysmon-systems" class="sysmon-sheet"></div>
+  <div id="sysmon-signals" class="sysmon-sheet" hidden></div>
+  <div id="sysmon-portfolio" class="sysmon-sheet" hidden></div>
+</section>
 <script src="lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script src="mirae-layers.js"></script>
 <script src="sma-layers.js"></script>
@@ -240,6 +268,7 @@
 <script src="symbol-browse.js"></script>
 <script src="symbol-browse-nh.js?v=cme"></script>
 <script src="overlay-ratio.js"></script>
-<script src="app.js?v=sigshare"></script>
+<script src="sysmon.js?v=2"></script>
+<script src="app.js?v=sysmon2"></script>
 </body>
 </html>

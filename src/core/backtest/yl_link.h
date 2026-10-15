@@ -7,11 +7,14 @@
 
 #include "core/backtest/yl_fill.h"
 #include "core/indicators/fx_os_scope.h"
+#include "core/indicators/fx_sig_pair.h"
 
 /* 이미 연 봉에 식의 주문만 넣는다. 청산이 먼저, 진입이 다음이다. 넣은 주문 수. */
-int tr_yl_fxsig_emit(tr_yl_book_t *book, int sig_dir, int sig_exit, int sig_kind, int qty);
+int tr_yl_fxsig_emit(tr_yl_book_t *book, int sig_dir, int sig_exit, int sig_kind, int qty,
+                     int grade, int adj_kind, int adj_grade);
 
 /* 봉을 열고 식을 돌린 뒤 종가 주문으로 닫는다. 이번 봉에서 넣은 주문 수. 실패 시 -1. */
 int tr_yl_fxsig_bar(tr_yl_book_t *book, tr_fxos_t *scope, const tr_fxos_input_t *in);
+int tr_yl_fxpair_bar(tr_yl_book_t *book, tr_fxos_t *scope, tr_fxpair_t *pair, const tr_fxos_input_t *in);
 
 #endif

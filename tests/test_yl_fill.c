@@ -277,7 +277,7 @@ static void test_fxsig_onclose_name_and_position(void) {
     tr_yl_bar_t b = bar(20, 10.0, 11.0, 9.0, 10.5);
     tr_yl_book_init(&book, 1, 0.25);
     tr_yl_book_open(&book, &b);
-    expect_i(tr_yl_fxsig_emit(&book, 1, 0, 1, 1), 1, "emit buy");
+    expect_i(tr_yl_fxsig_emit(&book, 1, 0, 1, 1, 0, 0, 0), 1, "emit buy");
     tr_yl_book_close(&book);
     expect_i(strcmp(tr_yl_book_trade(&book, 0)->name, "후보매수"), 0, "fx name");
     expect_i(tr_yl_book_trade(&book, 0)->filled, 1, "fx filled");

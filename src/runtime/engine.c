@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/model/civil_time.h"
@@ -38,24 +39,57 @@ void tr_engine_replay_os(tr_pipeline_t *p) {
     tr_fxec_use_cfg(&p->os_scope.entry, &entry_cfg);
     tr_fxadx_init(&p->os_scope.adx, entry_cfg.adx_period > 1 ? entry_cfg.adx_period : 14);
     n = tr_ring_count(&p->bb.bars);
+    {
+    tr_fxmirae_t *replay_fx = (tr_fxmirae_t *)calloc(1, sizeof(*replay_fx));
+    tr_fxmirae_config_t mcfg;
+    tr_candle_t prev;
+    int has_prev = 0;
+    tr_fxmirae_default_config(&mcfg, tick_scale(p));
+    if (replay_fx == 0 || !tr_fxmirae_init(replay_fx, &mcfg)) {
+        free(replay_fx);
+        return;
+    }
     for (back = n; back-- > 0;) {
         tr_candle_t bar;
         tr_fxos_input_t oin;
+        tr_fxmirae_input_t min;
         size_t ns;
         size_t sb;
         if (!tr_ring_at(&p->bb.bars, back, &bar)) {
             continue;
         }
         memset(&oin, 0, sizeof(oin));
+        memset(&min, 0, sizeof(min));
         civil_stamp(bar.open_time_us, p->session.utc_offset_min, &oin.date, &oin.time);
         oin.bar_open = bar.open_time_us;
+        oin.open = (double)bar.open;
         oin.high = (double)bar.high;
         oin.low = (double)bar.low;
         oin.close = (double)bar.close;
         oin.volume = (double)bar.volume;
+        oin.price_unit = 100.0;
         oin.is_new_bar = 1;
-        oin.fv = &p->fx.fv.out;
+        min.bar.date = oin.date;
+        min.bar.time = oin.time;
+        min.bar.bar_open = bar.open_time_us;
+        min.bar.high = oin.high;
+        min.bar.low = oin.low;
+        min.bar.close = oin.close;
+        min.bar.volume = oin.volume;
+        if (has_prev) {
+            min.has_prev = true;
+            civil_stamp(prev.open_time_us, p->session.utc_offset_min, &min.prev_date, &min.prev_time);
+            min.prev_h = (double)prev.high;
+            min.prev_l = (double)prev.low;
+            min.prev_c = (double)prev.close;
+            min.prev_v = (double)prev.volume;
+        }
+        tr_fxmirae_eval(replay_fx, &min);
+        oin.fv = &replay_fx->fv.out;
+        tr_fxos_set_synth(&oin, &replay_fx->syn5, &replay_fx->syn15, &replay_fx->syn30);
         tr_fxos_eval(&p->os_scope, &oin);
+        prev = bar;
+        has_prev = 1;
         if (!p->status_ring_on) {
             continue;
         }
@@ -68,6 +102,8 @@ void tr_engine_replay_os(tr_pipeline_t *p) {
                 break;
             }
         }
+    }
+    free(replay_fx);
     }
 }
 
@@ -1422,12 +1458,15 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         memset(&oin, 0, sizeof(oin));
         civil_stamp(bar->open_time_us, p->session.utc_offset_min, &oin.date, &oin.time);
         oin.bar_open = bar->open_time_us;
+        oin.open = (double)bar->open;
         oin.high = (double)bar->high;
         oin.low = (double)bar->low;
         oin.close = (double)bar->close;
         oin.volume = (double)bar->volume;
+        oin.price_unit = 100.0;
         oin.is_new_bar = is_new_bar;
         oin.fv = &p->fx.fv.out;
+        tr_fxos_set_synth(&oin, &p->fx.syn5, &p->fx.syn15, &p->fx.syn30);
         oin.session_first = session_first;
         oin.htf_dir = p->htf.direction;
         oin.reg_valid = p->lr3.reg_valid ? 1 : 0;

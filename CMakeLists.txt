@@ -92,6 +92,10 @@ add_library(core STATIC
     src/core/functions/fx_flat_count_v2.c
     src/core/functions/fx_wave_adj_v6.c
     src/core/indicators/fx_os_scope.c
+    src/core/indicators/fx_os_filter.c
+    src/core/indicators/fx_os_hist.c
+    src/core/indicators/fx_sig_pair.c
+    src/core/indicators/fx_posmon.c
     src/core/indicators/fx_pnl_2023.c
     src/core/indicators/fx_curve_os.c
     src/core/indicators/fx_entry_cand.c
@@ -404,7 +408,7 @@ endif()
 enable_testing()
 
 # 0개 테스트 실행을 통과로 간주하지 않는다(계획서 §25).
-foreach(t IN ITEMS clog ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict fx_curve fx_swing fx_future fx_synthetic ks_session ks_synthetic ks_values ks_score wpair wplot fx_mirae fx_mirae_v3 fx_persist_gap fx_yangmae fx_sniper osf_flow fx_trend_state fx_align fx_adx fx_gap fx_market fx_trend fx_session_profile fx_decision fx_squeeze fx_os_scope fx_flat fx_wave fx_pnl fx_curve_os fx_sniper_co fx_entry_cand yl_fill)
+foreach(t IN ITEMS clog ring var units model civil_time session bar_builder aggregator linreg htf_curve lp4 obd2 lr3 past_prediction memory_lines market score1m dlrt1 dalign2 gap1 dtl1 dmp1 adx1 sma fx_session_key fx_reg fx_predict fx_curve fx_swing fx_future fx_synthetic ks_session ks_synthetic ks_values ks_score wpair wplot fx_mirae fx_mirae_v3 fx_persist_gap fx_yangmae fx_sniper osf_flow fx_trend_state fx_align fx_adx fx_gap fx_market fx_trend fx_session_profile fx_decision fx_squeeze fx_os_scope fx_os_filter fx_os_hist fx_sig_pair fx_posmon fx_flat fx_wave fx_pnl fx_curve_os fx_sniper_co fx_entry_cand yl_fill)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE core)
     target_compile_options(test_${t} PRIVATE ${TR_WARNINGS})

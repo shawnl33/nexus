@@ -15,8 +15,8 @@ const char *nh_exch_for_symbol(const char *sym);
 /* 해외 틱. 포인트 ×100. 거래소가 없으면 0. */
 double nh_tick_raw(const char *sym);
 
-/* 응답 JSON을 시간 오름차순 봉으로 푼다. 시각은 KST. 수량은 누적값의 증가분이고
- * 페이지에서 가장 오래된 봉은 0이다. 0이면 성공. */
+/* 응답 JSON을 시간 오름차순 봉으로 푼다. 시각은 KST.
+ * occurs1_cum_trd_qty는 해당 봉 거래량으로 그대로 사용한다. 0이면 성공. */
 int nh_chart_parse_minutes(const char *json, size_t len, uint64_t instrument_id,
                            tr_candle_t *out, size_t cap, size_t *out_count, char *nxt_key,
                            size_t nxt_cap);

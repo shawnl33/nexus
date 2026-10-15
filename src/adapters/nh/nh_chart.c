@@ -177,6 +177,7 @@ int nh_chart_parse_minutes(const char *json, size_t len, uint64_t instrument_id,
         c->high = price_raw(yyjson_obj_get(row, "occurs1_high_pric"));
         c->low = price_raw(yyjson_obj_get(row, "occurs1_low_pric"));
         c->close = price_raw(yyjson_obj_get(row, "occurs1_close_pric"));
+        /* chart-minute의 cum_trd_qty는 해당 봉 안의 거래량이다. */
         c->volume = qty_of(yyjson_obj_get(row, "occurs1_cum_trd_qty"));
         c->state = TR_CANDLE_CLOSED;
         c->source_id = 4;
@@ -186,16 +187,6 @@ int nh_chart_parse_minutes(const char *json, size_t len, uint64_t instrument_id,
         tr_candle_t tmp = out[i];
         out[i] = out[n - 1 - i];
         out[n - 1 - i] = tmp;
-    }
-    /* 이제 오름차순. volume 필드는 아직 누적이다. 가장 오래된 봉은 기준이 없어 0. */
-    int64_t prev = n > 0 ? out[0].volume : 0;
-    if (n > 0) {
-        out[0].volume = 0;
-    }
-    for (size_t i = 1; i < n; i++) {
-        int64_t cum = out[i].volume;
-        out[i].volume = cum >= prev ? cum - prev : 0;
-        prev = cum;
     }
     *out_count = n;
     return 0;

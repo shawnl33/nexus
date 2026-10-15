@@ -963,6 +963,36 @@ static const char SNAP_IND_MANIFEST_B[] =
     "{\"id\":\"fx_sig_v6\",\"name\":\"진입신호\",\"layers\":["
     "{\"id\":\"entry\",\"name\":\"진입\",\"defaultOn\":true},"
     "{\"id\":\"exit\",\"name\":\"청산\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_sig_pair\",\"name\":\"진입신호짝\",\"layers\":["
+    "{\"id\":\"entry\",\"name\":\"진입\",\"defaultOn\":true},"
+    "{\"id\":\"exit\",\"name\":\"청산\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_sig_zd\",\"name\":\"제로데이진입\",\"layers\":["
+    "{\"id\":\"entry\",\"name\":\"진입\",\"defaultOn\":true},"
+    "{\"id\":\"exit\",\"name\":\"청산\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_pos_v1\",\"name\":\"포지션감시V1\",\"layers\":["
+    "{\"id\":\"open\",\"name\":\"진입손익\",\"defaultOn\":true},"
+    "{\"id\":\"mfe\",\"name\":\"진입수익\",\"defaultOn\":true},"
+    "{\"id\":\"mae\",\"name\":\"진입손실\",\"defaultOn\":true},"
+    "{\"id\":\"exit\",\"name\":\"일부청산\",\"defaultOn\":true},"
+    "{\"id\":\"closedLong\",\"name\":\"최종청산_매수\",\"defaultOn\":true},"
+    "{\"id\":\"closedShort\",\"name\":\"최종청산_매도\",\"defaultOn\":true},"
+    "{\"id\":\"p4\",\"name\":\"진입수익x0.7\",\"defaultOn\":true},"
+    "{\"id\":\"p5\",\"name\":\"진입손실x0.7\",\"defaultOn\":true},"
+    "{\"id\":\"flips\",\"name\":\"수익전환_회수\",\"defaultOn\":true},"
+    "{\"id\":\"danger\",\"name\":\"위험수익전환_회수\",\"defaultOn\":true},"
+    "{\"id\":\"total\",\"name\":\"총손익\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_pos_v2\",\"name\":\"포지션감시V2\",\"layers\":["
+    "{\"id\":\"open\",\"name\":\"진입손익\",\"defaultOn\":true},"
+    "{\"id\":\"mfe\",\"name\":\"진입수익\",\"defaultOn\":true},"
+    "{\"id\":\"mae\",\"name\":\"진입손실\",\"defaultOn\":true},"
+    "{\"id\":\"exit\",\"name\":\"일부청산\",\"defaultOn\":true},"
+    "{\"id\":\"closedLong\",\"name\":\"최종청산_매수\",\"defaultOn\":true},"
+    "{\"id\":\"closedShort\",\"name\":\"최종청산_매도\",\"defaultOn\":true},"
+    "{\"id\":\"p4\",\"name\":\"진입수익x0.7\",\"defaultOn\":true},"
+    "{\"id\":\"p5\",\"name\":\"진입손실x0.7\",\"defaultOn\":true},"
+    "{\"id\":\"flips\",\"name\":\"수익전환_회수\",\"defaultOn\":true},"
+    "{\"id\":\"danger\",\"name\":\"위험수익전환_회수\",\"defaultOn\":true},"
+    "{\"id\":\"total\",\"name\":\"총손익\",\"defaultOn\":true}]},"
     "{\"id\":\"fx_pnl\",\"name\":\"수익관리\",\"layers\":["
     "{\"id\":\"mfeLong\",\"name\":\"진입수익_매수\",\"defaultOn\":true},"
     "{\"id\":\"maeLong\",\"name\":\"진입손실_매수\",\"defaultOn\":true},"
@@ -1147,7 +1177,7 @@ static void pair_apply_user_cfg(tr_wpair_config_t *cfg, yyjson_val *raw) {
     if (pair_cfg_num(raw, "저수익청산비율", &n)) cfg->low_cut_pct = n;
 }
 
-static void sig_apply_cfg(tr_fxsig_cfg_t *cfg, yyjson_val *raw) {
+static void sig_apply_cfg(tr_fxsig_cfg_t *cfg, tr_fxos_filter_cfg_t *filt, yyjson_val *raw) {
     double n;
     if (cfg == 0) {
         return;
@@ -1164,6 +1194,27 @@ static void sig_apply_cfg(tr_fxsig_cfg_t *cfg, yyjson_val *raw) {
     if (pair_cfg_num(raw, "조정매도통합100", &n)) cfg->sell_u100 = (int)n;
     if (pair_cfg_num(raw, "조정매도저점근접비", &n)) cfg->sell_low = n;
     if (pair_cfg_num(raw, "선행통합100", &n)) cfg->lead_u100 = (int)n;
+    if (filt != 0) {
+        static const char *keys[] = {
+            "서머타임자동", "본장시작시각", "서머타임본장", "표준시본장", "본장전제한분",
+            "조정매도허용분", "후보S매수허용분", "후보S매도허용분", "후보S매수압축중금지",
+            "후보B삼선상한", "후보B두구간상한", "후보B매수본장전금지",
+            "후보매도위치기준", "후보매도폭비율기준", "후보매도감싸기통합", "돌파매도목표5여유",
+            "후보매도감싸기삼선두구간", "후보매도두구간기준", "장대봉필터", "장대진폭율기준",
+            "조정매수직전상승제한", "조정매도스윙폭제한", "조정매수스윙폭제한", "조정매도기울기기준",
+            "조정매수감싸기금지", "조정매수하락감싸기금지", "조정매수감싸기삼선",
+            "조정매수두구간평탄", "조정매수두구간기준", "조정매수평탄기준",
+            "전환매수사용", "전환매도사용", "전환위치하한", "전환스윙폭상한", "전환두구간상한",
+            "전환제외사용", "전환압축봉수제한", "전환삼선회색금지", "전환압축색봉수",
+            "전환반대금지봉수", "전환매도통합기준", "전환매도직전100봉수", "전환매수직전100봉수",
+        };
+        size_t i;
+        for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+            if (pair_cfg_num(raw, keys[i], &n)) {
+                tr_fxos_filter_cfg_set(filt, keys[i], n);
+            }
+        }
+    }
     if (pair_cfg_num(raw, "기울기기준", &n)) cfg->slope_min = (int)n;
     if (pair_cfg_num(raw, "직전기울기제한", &n)) cfg->slope_limit = (int)n;
     if (pair_cfg_num(raw, "제한등급", &n)) cfg->grade_limit = (int)n;
@@ -1315,7 +1366,8 @@ static void sig_cfg_command(tr_ipc_command_t *cmd, const char *p) {
     tr_fxec_default_cfg(&entry);
     if (data != 0) {
         yyjson_val *raw = yyjson_obj_get(data, "cfg");
-        sig_apply_cfg(&cfg, raw);
+        tr_fxos_filter_cfg_default(&pipe->os_scope.filt);
+        sig_apply_cfg(&cfg, &pipe->os_scope.filt, raw);
         sig_apply_entry(&entry, raw);
     }
     if (doc != 0) {

@@ -16,9 +16,9 @@
       "overlayScale": "shared",
       "panels": [
         {
-          "height": 0.28503315910088173,
+          "height": 0.7152149058927705,
           "symbol": "ESZ26",
-          "panelOpen": false,
+          "panelOpen": true,
           "data2": "NQZ26",
           "candles": true,
           "barStyle": "bar",
@@ -35,7 +35,7 @@
               }
             },
             {
-              "id": "fx_sig_v6",
+              "id": "fx_sig_zd",
               "layers": {
                 "entry": true,
                 "exit": true
@@ -58,7 +58,7 @@
           }
         },
         {
-          "height": 0.11197484938147279,
+          "height": 0.047228522316072045,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -102,7 +102,7 @@
           }
         },
         {
-          "height": 0.15509259399175468,
+          "height": 0.047228522316072045,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -141,7 +141,7 @@
           }
         },
         {
-          "height": 0.11270730104657403,
+          "height": 0.04722847053285314,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -180,7 +180,7 @@
           }
         },
         {
-          "height": 0.1,
+          "height": 0.047228574099290946,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -212,7 +212,7 @@
           }
         },
         {
-          "height": 0.1,
+          "height": 0.04722847053285314,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -244,7 +244,7 @@
           }
         },
         {
-          "height": 0.13519209647931682,
+          "height": 0.04864253431008826,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
