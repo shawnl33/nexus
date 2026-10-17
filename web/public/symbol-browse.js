@@ -103,6 +103,7 @@ const SymbolBrowse = (() => {
     root.hidden = true;
     const card = el("div", "sym-browse-card");
     const head = el("div", "sym-browse-head");
+    head.append(el("span", "sym-browse-tag", "LS"));
     const tabs = ["stock", "index", "opt"].map((id) => {
       const btn = el("button", "sym-tab", id === "stock" ? "주식" : id === "index" ? "지수" : "옵션");
       btn.type = "button";

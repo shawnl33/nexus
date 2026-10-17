@@ -29,6 +29,10 @@ static bool keys_nh_paper(const char *name, void *ctx) {
     return key_is(name, ctx, "NH_PAPER_OVERSEAS_APP_KEY", "NH_PAPER_OVERSEAS_SECRET_KEY");
 }
 
+static bool keys_nh_dom_paper(const char *name, void *ctx) {
+    return key_is(name, ctx, "NH_PAPER_DOMESTIC_APP_KEY", "NH_PAPER_DOMESTIC_SECRET_KEY");
+}
+
 static bool keys_nh_and_ls(const char *name, void *ctx) {
     return keys_both_ls(name, ctx) || keys_nh_live(name, ctx) || keys_nh_paper(name, ctx);
 }
@@ -52,8 +56,21 @@ static void test_ports(void) {
     TR_CHECK(nh_paper != 0 && nh_live != 0);
     TR_CHECK(strcmp(nh_live->app_key_env, "NH_OVERSEAS_APP_KEY") == 0);
     TR_CHECK(strcmp(nh_live->secret_env, "NH_OVERSEAS_SECRET_KEY") == 0);
+    TR_CHECK(strcmp(nh_paper->label, "NH 해외 모의") == 0);
+    TR_CHECK(strcmp(nh_live->label, "NH 해외 실전") == 0);
     TR_CHECK(strcmp(nh_paper->app_key_env, "NH_PAPER_OVERSEAS_APP_KEY") == 0);
     TR_CHECK(strcmp(nh_paper->secret_env, "NH_PAPER_OVERSEAS_SECRET_KEY") == 0);
+    const tr_broker_profile_t *dom_live = tr_broker_profile_find("nh-dom-live");
+    const tr_broker_profile_t *dom_paper = tr_broker_profile_find("nh-dom-paper");
+    TR_CHECK(dom_live != 0 && dom_paper != 0);
+    TR_CHECK(strcmp(dom_live->label, "NH 국내 실전") == 0);
+    TR_CHECK(strcmp(dom_paper->label, "NH 국내 모의") == 0);
+    TR_CHECK(strcmp(dom_live->app_key_env, "NH_DOMESTIC_APP_KEY") == 0);
+    TR_CHECK(strcmp(dom_live->secret_env, "NH_DOMESTIC_SECRET_KEY") == 0);
+    TR_CHECK(strcmp(dom_paper->app_key_env, "NH_PAPER_DOMESTIC_APP_KEY") == 0);
+    TR_CHECK(strcmp(dom_paper->secret_env, "NH_PAPER_DOMESTIC_SECRET_KEY") == 0);
+    TR_CHECK(strcmp(dom_live->rest_base, nh_live->rest_base) == 0);
+    TR_CHECK(strcmp(dom_paper->rest_base, nh_paper->rest_base) == 0);
     TR_CHECK(strstr(paper->rest_base, ":8080") != 0);
     TR_CHECK(strstr(live->rest_base, ":8080") != 0);
     TR_CHECK(strstr(paper->ws_url, ":29443/") != 0);
@@ -89,6 +106,11 @@ static void test_choose(void) {
 
     p = tr_broker_profile_choose(0, keys_nh_live, 0);
     TR_CHECK(p != 0 && strcmp(p->id, "nh-live") == 0);
+
+    p = tr_broker_profile_choose(0, keys_nh_dom_paper, 0);
+    TR_CHECK(p != 0 && strcmp(p->id, "nh-dom-paper") == 0);
+    p = tr_broker_profile_choose("nh-dom-live", keys_nh_and_ls, 0);
+    TR_CHECK(p != 0 && strcmp(p->id, "nh-paper") == 0);
     p = tr_broker_profile_choose("ls-live", keys_ls_and_nh, 0);
     TR_CHECK(p != 0 && strcmp(p->id, "ls-live") == 0);
     TR_CHECK(tr_broker_profile_choose(0, keys_none, 0) == 0);

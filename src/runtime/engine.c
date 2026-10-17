@@ -810,7 +810,7 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
         "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g,\"tick\":%g,\"day\":%lld,"
         "\"sma\":[%d,%.10g,%.10g,%.10g],%s%s%s%s%s%s%s%s%s%s%s%s\"vb\":%u,"
         "\"session\":{\"offset\":%d,\"open\":%u,\"close\":%u,\"days\":%u},\"shcode\":\"%s\"}",
-        (long long)tr_hts_time_us(bar->open_time_us), closed_v,
+        (long long)bar->open_time_us, closed_v,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         reg_valid_v ? 1 : 0, line_v, slope_v, r2_v,
         pred_v[0], pred_v[1], pred_v[2],
@@ -913,7 +913,7 @@ int tr_bar_status_format_mem(const tr_bar_status_t *st, bool first, char *buf, s
     }
     return snprintf(buf, cap,
                     "%s[%lld,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d]",
-                    first ? "" : ",", (long long)tr_hts_time_us(st->open_time_us),
+                    first ? "" : ",", (long long)st->open_time_us,
                     st->mem_valid ? 1 : 0, st->mem_dir, st->mem_price,
                     st->mem_target[0], st->mem_target[1], st->mem_target[2],
                     st->mem_upper[0], st->mem_upper[1], st->mem_upper[2],

@@ -29,7 +29,7 @@ bool tr_broker_profile_usable(const tr_broker_profile_t *profile,
                               bool (*key_present)(const char *env_name, void *ctx), void *ctx);
 
 /* saved_id가 아직 쓸 수 있으면 그 프로필.
- * 저장이 없으면 NH 모의, 없으면 NH 실전, LS는 그 다음.
+ * 저장이 없으면 NH 해외 모의, 없으면 NH 해외 실전, LS는 그 다음.
  * 없으면 NULL. */
 const tr_broker_profile_t *tr_broker_profile_choose(
     const char *saved_id, bool (*key_present)(const char *env_name, void *ctx), void *ctx);

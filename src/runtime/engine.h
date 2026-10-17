@@ -15,13 +15,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* HTS 봉 눈금이 저장 시각보다 60초 늦다. 계산에 쓰는 시각은 그대로 두고
- * 화면으로 나가는 시각만 60초 뒤로 민다. 15:45 단일가는 15:46으로 보인다. */
-#define TR_HTS_TIME_SHIFT_US (INT64_C(60000000))
-static inline int64_t tr_hts_time_us(int64_t open_us) {
-    return open_us + TR_HTS_TIME_SHIFT_US;
-}
-
 #include "adapters/ipc/ipc.h"
 #include "core/functions/daily_align_v2.h"
 #include "core/functions/daily_trend_link_v1.h"

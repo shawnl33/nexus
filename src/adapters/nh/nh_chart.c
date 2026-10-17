@@ -240,3 +240,52 @@ int nh_chart_fetch_minutes(nh_auth_t *auth, const char *sym, const char *exch, i
     }
     return rc;
 }
+
+int nh_chart_fetch_domestic_minutes(nh_auth_t *auth, const char *sym, int req_qty, const char *nxt_in,
+                                    uint64_t instrument_id, tr_candle_t *out, size_t cap,
+                                    size_t *out_count, char *nxt_out, size_t nxt_cap, char *err,
+                                    size_t err_cap) {
+    if (out_count != 0) {
+        *out_count = 0;
+    }
+    if (auth == 0 || sym == 0 || out == 0 || out_count == 0) {
+        return -1;
+    }
+    if (req_qty < 1) {
+        req_qty = 1;
+    }
+    if (req_qty > 9999) {
+        req_qty = 9999;
+    }
+    const char *token = 0;
+    if (!nh_auth_ensure(auth, &token)) {
+        if (err != 0 && err_cap > 0) {
+            snprintf(err, err_cap, "%s", auth->last_error);
+        }
+        return -1;
+    }
+    char body[640];
+    snprintf(body, sizeof(body),
+             "{\"nght_tp\":\"1\",\"sym\":\"%s\",\"inq_strt_dt\":\"00000000\",\"strt_tm\":\"000000\","
+             "\"inq_ed_dt\":\"99999999\",\"ed_tm\":\"235959\",\"req_qty\":\"%d\",\"dcnt\":\"1\","
+             "\"cidx_yn\":\"0\",\"nxt_key\":\"%s\",\"fut_cidx_exp_mod\":\"0\"}",
+             sym, req_qty, (nxt_in != 0 && nxt_in[0] != '\0') ? nxt_in : "99999999");
+    char url[200];
+    snprintf(url, sizeof(url), "%s/trade/v1/domestic/chart-minute", auth->base);
+    nh_http_resp_t resp;
+    if (nh_http_post_json(url, token, body, 20000, &resp) != 0 || resp.http_status != 200 ||
+        resp.body.data == 0) {
+        if (err != 0 && err_cap > 0) {
+            snprintf(err, err_cap, "NH chart HTTP %ld", resp.http_status);
+        }
+        nh_http_resp_free(&resp);
+        return -1;
+    }
+    int rc = nh_chart_parse_minutes(resp.body.data, resp.body.len, instrument_id, out, cap, out_count,
+                                    nxt_out, nxt_cap);
+    nh_http_resp_free(&resp);
+    if (rc != 0 && err != 0 && err_cap > 0) {
+        snprintf(err, err_cap, "NH chart parse failed");
+    }
+    return rc;
+}

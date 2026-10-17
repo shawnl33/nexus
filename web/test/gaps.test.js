@@ -168,8 +168,8 @@ test("withWhitespace: 봉이 하나도 없는 날은 붙인다", () => {
 test("withWhitespace: 15:45 단일가 앞의 빈 10분은 붙인다", () => {
   const kst = (h, m) => Date.UTC(2026, 9, 16, h - 9, m) / 1000;
   const session = { offset: 540, open: 8 * 60 + 45, close: 15 * 60 + 46, days: 0x3e };
-  const mixed = Gaps.withWhitespace([bar(kst(15, 36)), bar(kst(15, 46))], session);
-  assert.deepEqual(times(mixed), [kst(15, 36), kst(15, 46)]);
+  const mixed = Gaps.withWhitespace([bar(kst(15, 35)), bar(kst(15, 45))], session);
+  assert.deepEqual(times(mixed), [kst(15, 35), kst(15, 45)]);
 });
 
 test("withWhitespace: 봉과 겹치는 포인트는 구조적으로 만들어지지 않는다 (중복 time 없음)", () => {

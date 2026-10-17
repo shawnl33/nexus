@@ -342,14 +342,14 @@ static void test_pack(void) {
     lr[1] = (tr_wplot_pt_t){1060, 4.5};
     lr[2] = (tr_wplot_pt_t){1120, -1.0};
     TR_CHECK(tr_wplot_pack(buf, sizeof(buf), 1000, 1120, ll, 3, lr, 3, 0, 0, 0, 0) == 0);
-    TR_CHECK(strcmp(buf, "{\"ll\":[[1060,1180,9.5]],\"lr\":[[1060,0,4.5,-1]],\"sl\":[],\"sr\":[],"
+    TR_CHECK(strcmp(buf, "{\"ll\":[[1000,1120,9.5]],\"lr\":[[1000,0,4.5,-1]],\"sl\":[],\"sr\":[],"
                          "\"t0\":1000,\"t1\":1120}") == 0);
 
     gap[0] = (tr_wplot_pt_t){1000, 1.0};
     gap[1] = (tr_wplot_pt_t){1060, 2.0};
     gap[2] = (tr_wplot_pt_t){1180, 3.0};
     TR_CHECK(tr_wplot_pack(buf, sizeof(buf), 1000, 1180, 0, 0, gap, 3, 0, 0, 0, 0) == 0);
-    TR_CHECK(strstr(buf, "\"lr\":[[1060,1,2],[1240,3]]") != 0);
+    TR_CHECK(strstr(buf, "\"lr\":[[1000,1,2],[1180,3]]") != 0);
 
     for (int i = 0; i < 30; i++) {
         many[i].time_sec = 1700000000 + (int64_t)i * 60;
@@ -369,7 +369,7 @@ static void test_pack(void) {
         TR_CHECK(nslice < sizeof(slice));
         memcpy(slice, lrj, nslice);
         slice[nslice] = '\0';
-        TR_CHECK(strstr(slice, "1700000060") == 0);
+        TR_CHECK(strstr(slice, "1700000000") == 0);
         TR_CHECK(strstr(slice, "29") != 0);
     }
     TR_CHECK(tr_wplot_pack(buf, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) == -1);

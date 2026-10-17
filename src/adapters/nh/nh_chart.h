@@ -27,4 +27,10 @@ int nh_chart_fetch_minutes(nh_auth_t *auth, const char *sym, const char *exch, i
                            size_t cap, size_t *out_count, char *nxt_out, size_t nxt_cap,
                            char *err, size_t err_cap);
 
+/* 국내 1분봉. POST /trade/v1/domestic/chart-minute. nght_tp 1은 주간이다. */
+int nh_chart_fetch_domestic_minutes(nh_auth_t *auth, const char *sym, int req_qty,
+                                    const char *nxt_in, uint64_t instrument_id, tr_candle_t *out,
+                                    size_t cap, size_t *out_count, char *nxt_out, size_t nxt_cap,
+                                    char *err, size_t err_cap);
+
 #endif

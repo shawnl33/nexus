@@ -59,7 +59,7 @@ const Gaps = (() => {
     const off = Number(session.offset) || 0;
     const d = new Date((unixSec + off * 60) * 1000);
     const min = d.getUTCHours() * 60 + d.getUTCMinutes();
-    return min >= 15 * 60 + 37 && min < 15 * 60 + 46;
+    return min >= 15 * 60 + 36 && min < 15 * 60 + 45;
   }
 
   // prev와 cur 사이(양쪽 제외)에서 빈 칸으로 남길 시각.

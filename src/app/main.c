@@ -401,9 +401,10 @@ static nh_auth_t g_nh;
 static nh_rt_t *g_nh_rt = 0;
 
 static bool broker_is_nh(void);
+static bool nh_profile_domestic(void);
 
 static void nh_watch_realtime(const char *code, uint64_t id) {
-    if (!broker_is_nh() || nh_exch_for_symbol(code) == 0) {
+    if (!broker_is_nh() || (nh_exch_for_symbol(code) == 0 && !nh_profile_domestic())) {
         return;
     }
     if (g_nh_rt == 0) {
@@ -420,6 +421,10 @@ static nh_master_t *g_nh_master = 0;
 
 static bool broker_is_nh(void) {
     return g_broker != 0 && strcmp(g_broker->broker, "nh") == 0;
+}
+
+static bool nh_profile_domestic(void) {
+    return g_broker != 0 && strncmp(g_broker->id, "nh-dom-", 7) == 0;
 }
 
 static int backfill_minute_bars(ls_auth_t *auth, tr_engine_t *eng, tr_pipeline_t *pipe,
@@ -464,7 +469,7 @@ static size_t nh_fetch_covering(const char *shcode, const char *exch, uint64_t i
     tr_time_us_t prev_oldest = 0;
     int page;
     nxt[0] = '\0';
-    if (dst == 0 || cap == 0 || shcode == 0 || exch == 0) {
+    if (dst == 0 || cap == 0 || shcode == 0 || (exch == 0 && !nh_profile_domestic())) {
         return 0;
     }
     for (page = 0; page < 12 && n < cap; page++) {
@@ -474,9 +479,14 @@ static size_t nh_fetch_covering(const char *shcode, const char *exch, uint64_t i
         tr_time_us_t oldest;
         err[0] = '\0';
         next[0] = '\0';
-        if (nh_chart_fetch_minutes(&g_nh, shcode, exch, 999, nxt, id, g_page,
-                                   sizeof(g_page) / sizeof(g_page[0]), &got, next, sizeof(next), err,
-                                   sizeof(err)) != 0 ||
+        int fetched = nh_profile_domestic()
+                          ? nh_chart_fetch_domestic_minutes(&g_nh, shcode, 999, nxt, id, g_page,
+                                                            sizeof(g_page) / sizeof(g_page[0]), &got,
+                                                            next, sizeof(next), err, sizeof(err))
+                          : nh_chart_fetch_minutes(&g_nh, shcode, exch, 999, nxt, id, g_page,
+                                                   sizeof(g_page) / sizeof(g_page[0]), &got, next,
+                                                   sizeof(next), err, sizeof(err));
+        if (fetched != 0 ||
             got == 0) {
             if (page == 0 && err[0] != '\0') {
                 tr_clog("봉", "%s  실패  %s", shcode, err);
@@ -527,7 +537,7 @@ static int backfill_nh_minutes(tr_engine_t *eng, tr_pipeline_t *pipe, const char
     size_t n;
     size_t i;
     const tr_candle_t *src;
-    if (exch == 0) {
+    if (exch == 0 && !nh_profile_domestic()) {
         tr_clog("봉", "%s  건너뜀", shcode != 0 ? shcode : "");
         return 0;
     }
@@ -1684,7 +1694,7 @@ static void pair_sim_command(tr_ipc_command_t *cmd, const char *p) {
         const char *name = pair_name_ok(e->name) ? e->name : "";
         off += snprintf(g_pair_json + off, sizeof(g_pair_json) - (size_t)off,
                         "%s{\"t\":%lld,\"k\":%d,\"r\":%d,\"q\":%d,\"p\":%d,\"c\":%d,\"n\":\"%s\"}",
-                        i > 0 ? "," : "", (long long)(e->time_sec + 60), e->kind, e->reason, (int)e->qty,
+                        i > 0 ? "," : "", (long long)e->time_sec, e->kind, e->reason, (int)e->qty,
                         e->pending, (int)e->contracts, name);
         SNAP_CLAMP(g_pair_json, off);
     }
@@ -1836,7 +1846,7 @@ static void vbstr_sim_command(tr_ipc_command_t *cmd, const char *p) {
         const char *name = e->name != 0 ? e->name : "";
         off += snprintf(g_vb_json + off, sizeof(g_vb_json) - (size_t)off,
                         "%s{\"t\":%lld,\"k\":%d,\"n\":\"%s\"}", i > 0 ? "," : "",
-                        (long long)(e->time_sec + 60), e->kind, name);
+                        (long long)e->time_sec, e->kind, name);
         SNAP_CLAMP(g_vb_json, off);
     }
     off += snprintf(g_vb_json + off, sizeof(g_vb_json) - (size_t)off, "]}");
@@ -1929,8 +1939,8 @@ static void pair_plots_command(tr_ipc_command_t *cmd, const char *p) {
         return;
     }
     if (nself > 0) {
-        t0 = tr_hts_time_us(g_pair_self[0].open_us) / INT64_C(1000000);
-        t1 = tr_hts_time_us(g_pair_self[nself - 1].open_us) / INT64_C(1000000);
+        t0 = g_pair_self[0].open_us / INT64_C(1000000);
+        t1 = g_pair_self[nself - 1].open_us / INT64_C(1000000);
     }
     if (tr_wplot_pack(g_wplot_json, sizeof(g_wplot_json), t0, t1, g_wplot_ll, nll, g_wplot_lr, nlr,
                       g_wplot_sl, nsl, g_wplot_sr, nsr) != 0) {
@@ -2666,8 +2676,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         for (size_t gi = 0; gi < ngaps; gi++) {
             gaps_len += snprintf(gaps_buf + gaps_len, sizeof(gaps_buf) - (size_t)gaps_len,
                                  "%s[%lld,%lld]", gi > 0 ? "," : "",
-                                 (long long)tr_hts_time_us(gap_pairs[gi][0]),
-                                 (long long)tr_hts_time_us(gap_pairs[gi][1]));
+                                 (long long)gap_pairs[gi][0], (long long)gap_pairs[gi][1]);
         }
         gaps_len += snprintf(gaps_buf + gaps_len, sizeof(gaps_buf) - (size_t)gaps_len, "],");
         SNAP_CLAMP(gaps_buf, gaps_len);
@@ -2685,7 +2694,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             tr_candle_t c;
             tr_ring_at(&pipe->bb.bars, k, &c);
             off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s[%lld,%lld,%lld,%lld,%lld,%lld]",
-                            first ? "" : ",", (long long)tr_hts_time_us(c.open_time_us),
+                            first ? "" : ",", (long long)c.open_time_us,
                             (long long)c.open, (long long)c.high, (long long)c.low,
                             (long long)c.close, (long long)c.volume);
             SNAP_CLAMP(buf, off);
@@ -2740,7 +2749,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             }
             off += snprintf(buf + off, sizeof(buf) - (size_t)off,
                             "%s[%lld,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g]",
-                            first ? "" : ",", (long long)tr_hts_time_us(st.open_time_us),
+                            first ? "" : ",", (long long)st.open_time_us,
                             st.pst_valid ? 1 : 0, st.pst_dir,
                             st.pst_target[0], st.pst_target[1], st.pst_target[2],
                             st.pst_upper[0], st.pst_upper[1], st.pst_upper[2],
@@ -3186,7 +3195,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
 
 static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const char *pub_ep,
                     const char *pidfile) {
-    /* 1) 인증. 저장된 프로필이 있으면 그것. 없으면 NH 모의, NH 실전, LS 순. */
+    /* 1) 인증. 저장된 프로필이 있으면 그것. 없으면 NH 해외 모의, NH 해외 실전, LS 순. */
     char saved_profile[40];
     read_broker_profile_id(saved_profile, sizeof(saved_profile));
     g_broker = tr_broker_profile_choose(saved_profile[0] != '\0' ? saved_profile : 0,
@@ -3530,15 +3539,21 @@ static int run_live(const char *shcode, bool is_fut, const char *cmd_ep, const c
                 watch_entry_t *w = &g_live_ctx.watches[i];
                 const char *exch = nh_exch_for_symbol(w->shcode);
                 tr_pipeline_t *pipe = tr_engine_pipe_find(&engine, w->instrument_id);
-                if (exch == 0 || pipe == 0) {
+                if (pipe == 0 || (exch == 0 && !nh_profile_domestic())) {
                     continue;
                 }
                 tried++;
                 char nerr[128] = {0};
                 char nxt[80] = {0};
                 size_t n = 0;
-                if (nh_chart_fetch_minutes(&g_nh, w->shcode, exch, 2, "", w->instrument_id, g_page, 8,
-                                           &n, nxt, sizeof(nxt), nerr, sizeof(nerr)) == 0 &&
+                int polled = nh_profile_domestic()
+                                 ? nh_chart_fetch_domestic_minutes(&g_nh, w->shcode, 2, "",
+                                                                   w->instrument_id, g_page, 8, &n, nxt,
+                                                                   sizeof(nxt), nerr, sizeof(nerr))
+                                 : nh_chart_fetch_minutes(&g_nh, w->shcode, exch, 2, "", w->instrument_id,
+                                                          g_page, 8, &n, nxt, sizeof(nxt), nerr,
+                                                          sizeof(nerr));
+                if (polled == 0 &&
                     n > 0) {
                     tr_engine_pipe_merge_bars(&engine, w->instrument_id, g_page, n,
                                               (tr_time_us_t)now_sec * TR_US_PER_SEC, g_merge_bars,

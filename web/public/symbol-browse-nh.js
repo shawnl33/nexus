@@ -3,6 +3,7 @@
 "use strict";
 
 const NH_OPTION_PRODUCTS = ["O_SPW", "O_SPX", "O_NDX"];
+const NH_DOM_OPTION_PRODUCTS = ["코스피위클리", "코스피200", "미니코스피", "코스피위클리M", "코스닥150", "코스닥위클리", "코스닥위클리M"];
 
 const SymbolBrowseNh = (() => {
   function el(tag, cls, text) {
@@ -41,12 +42,19 @@ const SymbolBrowseNh = (() => {
     return date;
   }
 
-  function mount(parent) {
+  function futMonth(name) {
+    const m = String(name || "").match(/^(.*?)\s+F\s+(\d{6})\b/);
+    if (!m) return null;
+    return { product: m[1].trim(), yymm: m[2] };
+  }
+
+  function mount(parent, market) {
+    const domestic = market === "dom";
     const root = el("div", "sym-browse sym-browse-nh");
     root.hidden = true;
     const card = el("div", "sym-browse-card");
     const head = el("div", "sym-browse-head");
-    head.append(el("span", "sym-browse-tag", "NH"));
+    head.append(el("span", "sym-browse-tag", domestic ? "NH 국내" : "NH 해외"));
     const tabs = [
       ["fut", "선물"],
       ["opt", "옵션"],
@@ -67,7 +75,7 @@ const SymbolBrowseNh = (() => {
     parent.append(root);
 
     let onPick = null;
-    let tab = "opt";
+    let tab = domestic ? "fut" : "opt";
     const chains = new Map();
     let expiryRows = null;
 
@@ -107,7 +115,52 @@ const SymbolBrowseNh = (() => {
       return btn;
     }
 
+    async function paintDomFut() {
+      showMessage("불러오는 중");
+      try {
+        const payload = await loadMarket({ kind: "1", limit: "200" });
+        const groups = new Map();
+        for (const it of payload.items || []) {
+          const month = futMonth(it.name);
+          const product = month ? month.product : (it.name || it.shcode);
+          if (!groups.has(product)) groups.set(product, []);
+          groups.get(product).push(it);
+        }
+        body.replaceChildren();
+        if (groups.size === 0) {
+          showMessage("국내 선물이 없습니다");
+          return;
+        }
+        const order = [...groups.keys()].sort((a, b) => {
+          const ia = NH_DOM_OPTION_PRODUCTS.indexOf(a);
+          const ib = NH_DOM_OPTION_PRODUCTS.indexOf(b);
+          return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || (a < b ? -1 : a > b ? 1 : 0);
+        });
+        for (const product of order) {
+          body.append(el("h3", "", product));
+          const grid = el("div", "sym-card-grid");
+          const items = groups.get(product).slice().sort((a, b) => {
+            const ma = futMonth(a.name);
+            const mb = futMonth(b.name);
+            return (ma ? ma.yymm : "").localeCompare(mb ? mb.yymm : "");
+          });
+          for (const it of items) {
+            const month = futMonth(it.name);
+            const title = month ? `${month.yymm.slice(0, 4)}-${month.yymm.slice(4)}` : (it.name || it.shcode);
+            grid.append(cardButton(title, it.shcode, it.name));
+          }
+          body.append(grid);
+        }
+      } catch (err) {
+        showMessage(err.message);
+      }
+    }
+
     async function paintFut() {
+      if (domestic) {
+        paintDomFut();
+        return;
+      }
       showMessage("불러오는 중");
       try {
         const [cme, cboe] = await Promise.all([
@@ -195,13 +248,15 @@ const SymbolBrowseNh = (() => {
           const grouped = new Map();
           for (const key of payload.expiries || []) {
             const part = splitExpiry(key);
-            if (!NH_OPTION_PRODUCTS.includes(part.product)) continue;
+            const overseas = NH_OPTION_PRODUCTS.includes(part.product);
+            if (domestic ? overseas : !overseas) continue;
             if (!grouped.has(part.product)) grouped.set(part.product, []);
             grouped.get(part.product).push({ key, date: part.date });
           }
+          const order = domestic ? NH_DOM_OPTION_PRODUCTS : NH_OPTION_PRODUCTS;
           expiryRows = [...grouped.entries()].sort((a, b) => {
-            const ia = NH_OPTION_PRODUCTS.indexOf(a[0]);
-            const ib = NH_OPTION_PRODUCTS.indexOf(b[0]);
+            const ia = order.indexOf(a[0]);
+            const ib = order.indexOf(b[0]);
             return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
           });
         }
@@ -217,7 +272,8 @@ const SymbolBrowseNh = (() => {
         strike.inputMode = "decimal";
         body.append(products, dates, el("div", "opt-tools"));
         body.querySelector(".opt-tools").append(strike);
-        let product = expiryRows.some((row) => row[0] === "O_SPW") ? "O_SPW" : expiryRows[0][0];
+        const preferred = domestic ? "코스피위클리" : "O_SPW";
+        let product = expiryRows.some((row) => row[0] === preferred) ? preferred : expiryRows[0][0];
         function paintDates() {
           dates.replaceChildren();
           const row = expiryRows.find((item) => item[0] === product);
@@ -291,7 +347,7 @@ const SymbolBrowseNh = (() => {
     };
   }
 
-  return { splitExpiry, dateLabel, chainRows, mount };
+  return { splitExpiry, dateLabel, chainRows, futMonth, mount };
 })();
 
 if (typeof globalThis !== "undefined") {

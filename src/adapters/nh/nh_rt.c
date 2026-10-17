@@ -1,5 +1,7 @@
 #include "adapters/nh/nh_rt.h"
 
+#include "adapters/nh/nh_chart.h"
+
 #include <curl/curl.h>
 #include <libwebsockets.h>
 #include <math.h>
@@ -18,6 +20,7 @@
 
 typedef struct {
     char sym[40];
+    char action[8]; /* FA 해외, KA 국내 주간 */
     uint64_t instrument_id;
 } nh_sub_t;
 
@@ -267,7 +270,7 @@ static void handle_text(nh_rt_t *rt, nh_sock *sk, const char *text, size_t len) 
     if (action == 0) {
         action = code; /* 체결 푸시는 루트 code가 FA인 경우도 있다 */
     }
-    if (body != 0 && action != 0 && strcmp(action, "FA") == 0) {
+    if (body != 0 && action != 0 && (strcmp(action, "FA") == 0 || strcmp(action, "KA") == 0)) {
         const char *sym = yyjson_get_str(yyjson_obj_get(body, "sym"));
         if (sym == 0 && header != 0) {
             sym = yyjson_get_str(yyjson_obj_get(header, "action_sym"));
@@ -331,8 +334,8 @@ static void send_subs(nh_rt_t *rt, nh_sock *sk) {
         char msg[256];
         snprintf(msg, sizeof(msg),
                  "{\"header\":{\"api_ver\":\"1\",\"action\":\"A\"},"
-                 "\"body\":{\"action_code\":\"FA\",\"action_sym\":\"%s\"}}",
-                 rt->subs[i].sym);
+                 "\"body\":{\"action_code\":\"%s\",\"action_sym\":\"%s\"}}",
+                 rt->subs[i].action[0] != '\0' ? rt->subs[i].action : "FA", rt->subs[i].sym);
         if (send_text(sk->wsi, msg)) {
             sk->sent[i] = true;
             if (is_feed(rt, sk)) {
@@ -645,6 +648,7 @@ bool nh_rt_subscribe(nh_rt_t *rt, const char *sym, uint64_t instrument_id) {
     nh_sub_t *s = &rt->subs[idx];
     memset(s, 0, sizeof(*s));
     snprintf(s->sym, sizeof(s->sym), "%s", sym);
+    snprintf(s->action, sizeof(s->action), "%s", nh_exch_for_symbol(sym) != 0 ? "FA" : "KA");
     s->instrument_id = instrument_id;
     for (int n = 0; n < 2; n++) {
         rt->sock[n].sent[idx] = false;

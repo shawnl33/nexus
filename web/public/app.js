@@ -1199,15 +1199,25 @@ function buildFramePicker(frame) {
 }
 
 let symbolBrowseLs = null;
-let symbolBrowseNh = null;
+let symbolBrowseNhOvs = null;
+let symbolBrowseNhDom = null;
+function symbolBrowseMode() {
+  const id = typeof brokerProfileId === "string" ? brokerProfileId : "";
+  if (id.startsWith("nh-dom")) return "dom";
+  if (id.startsWith("nh")) return "ovs";
+  return "ls";
+}
 function openSymbolBrowse(frame) {
   hideFrameResults(frame);
-  const nh = typeof brokerProfileId === "string" && brokerProfileId.startsWith("nh");
-  const other = nh ? symbolBrowseLs : symbolBrowseNh;
-  if (other && other.isOpen()) other.close();
-  const browse = nh
-    ? (symbolBrowseNh || (symbolBrowseNh = SymbolBrowseNh.mount(document.body)))
-    : (symbolBrowseLs || (symbolBrowseLs = SymbolBrowse.mount(document.body)));
+  const mode = symbolBrowseMode();
+  const browse = mode === "dom"
+    ? (symbolBrowseNhDom || (symbolBrowseNhDom = SymbolBrowseNh.mount(document.body, "dom")))
+    : mode === "ovs"
+      ? (symbolBrowseNhOvs || (symbolBrowseNhOvs = SymbolBrowseNh.mount(document.body, "ovs")))
+      : (symbolBrowseLs || (symbolBrowseLs = SymbolBrowse.mount(document.body)));
+  for (const other of [symbolBrowseLs, symbolBrowseNhOvs, symbolBrowseNhDom]) {
+    if (other && other !== browse && other.isOpen()) other.close();
+  }
   browse.open((code, name) => applyFrameCode(frame, code, name));
 }
 
