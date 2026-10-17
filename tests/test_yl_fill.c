@@ -300,6 +300,71 @@ static void test_fxsig_onclose_name_and_position(void) {
     expect_d(scope.avg_entry, 10.5, "formula avg");
 }
 
+/* 1차는 한 계약만. 틱이 줄어도 이전 지정가가 남아 잔량까지 청산하지 않는다.
+ * 잔량 0인 청산은 넣지 않고, 색청산은 가상포지션 잔량만 닫는다. */
+static void test_virt_first_target_once_then_remainder(void) {
+    tr_yl_book_t book;
+    tr_fxpair_out_t out;
+    tr_yl_bar_t b1 = bar(1, 100, 100, 100, 100);
+    tr_yl_bar_t b2 = bar(2, 100, 103, 100, 102);
+    tr_yl_bar_t b3 = bar(3, 102, 104, 101, 103.5);
+    tr_yl_bar_t b4 = bar(4, 103.5, 110, 103, 106);
+    const tr_yl_trade_t *t;
+    tr_yl_book_init(&book, 2, 0.25);
+    tr_yl_book_open(&book, &b1);
+    memset(&out, 0, sizeof(out));
+    out.entry_dir = 1;
+    out.entry_qty = 2;
+    out.entry_name = "돌파매수";
+    out.limit_dir = 1;
+    out.limit_px = 103.75;
+    out.limit_qty = 1;
+    out.limit_name = "1차청산매수";
+    expect_i(tr_yl_fxpair_orders(&book, &out, 0) > 0, 1, "entry accepted");
+    tr_yl_book_close(&book);
+    expect_i(tr_yl_book_pos(&book).contracts, 2, "entry qty");
+
+    tr_yl_book_open(&book, &b2);
+    out.entry_dir = 0;
+    out.limit_px = 102.5;
+    tr_yl_fxpair_orders(&book, &out, 0);
+    tr_yl_book_close(&book);
+    expect_i(tr_yl_book_trade_count(&book), 1, "far limit dies");
+    expect_i(tr_yl_book_pos(&book).contracts, 2, "still two");
+
+    tr_yl_book_open(&book, &b3);
+    expect_i(tr_yl_book_pos(&book).contracts, 1, "one first target");
+    t = tr_yl_book_trade(&book, 1);
+    expect_d(t->price, 102.5, "shrunk limit price");
+    expect_i(t->qty, 1, "first target qty");
+    expect_i(strcmp(t->name, "1차청산매수"), 0, "first target name");
+    out.limit_hit = 1;
+    tr_yl_fxpair_orders(&book, &out, 1);
+    tr_yl_book_close(&book);
+
+    tr_yl_book_open(&book, &b4);
+    tr_yl_book_close(&book);
+    expect_i(tr_yl_book_trade_count(&book), 2, "no second first target");
+    expect_i(tr_yl_book_pos(&book).contracts, 1, "remainder stays");
+
+    memset(&out, 0, sizeof(out));
+    out.exit_code = 1;
+    out.exit_qty = 0;
+    out.exit_name = "색청산매수";
+    tr_yl_fxpair_orders(&book, &out, 1);
+    tr_yl_book_close(&book);
+    expect_i(tr_yl_book_pos(&book).contracts, 1, "zero exit qty is not a flatten");
+
+    out.exit_qty = 1;
+    tr_yl_fxpair_orders(&book, &out, 1);
+    tr_yl_book_close(&book);
+    expect_i(tr_yl_book_pos(&book).contracts, 0, "color exit flats remainder");
+    expect_i(tr_yl_book_trade_count(&book), 3, "entry, first, color");
+    t = tr_yl_book_trade(&book, 2);
+    expect_i(strcmp(t->name, "색청산매수"), 0, "color name");
+    expect_i(t->qty, 1, "color qty");
+}
+
 static void test_negative_qty_rejected(void) {
     tr_yl_book_t book;
     tr_yl_bar_t b = bar(1, 10, 10, 10, 10);
@@ -322,6 +387,7 @@ int main(void) {
     test_reverse_entry_pnl_is_closed_qty();
     test_pair_book_matches_replay();
     test_fxsig_onclose_name_and_position();
+    test_virt_first_target_once_then_remainder();
     test_negative_qty_rejected();
     if (fails != 0) {
         fprintf(stderr, "%d failed\n", fails);

@@ -324,8 +324,8 @@ static int emit_links(char *buf, size_t cap, int off, const tr_wplot_pt_t *pt, s
         while (j < n && pt[j].time_sec == pt[j - 1].time_sec + 60 && same_val(pt[j].value, pt[i].value)) {
             j++;
         }
-        off = appendf(buf, cap, off, "%s[%lld,%lld,%.8g]", any ? "," : "", (long long)pt[i].time_sec,
-                      (long long)pt[j - 1].time_sec, pt[i].value);
+        off = appendf(buf, cap, off, "%s[%lld,%lld,%.8g]", any ? "," : "", (long long)(pt[i].time_sec + 60),
+                      (long long)(pt[j - 1].time_sec + 60), pt[i].value);
         if (off < 0) {
             return -1;
         }
@@ -343,7 +343,7 @@ static int emit_rets(char *buf, size_t cap, int off, const tr_wplot_pt_t *pt, si
         while (j < n && pt[j].time_sec == pt[j - 1].time_sec + 60) {
             j++;
         }
-        off = appendf(buf, cap, off, "%s[%lld", any ? "," : "", (long long)pt[i].time_sec);
+        off = appendf(buf, cap, off, "%s[%lld", any ? "," : "", (long long)(pt[i].time_sec + 60));
         if (off < 0) {
             return -1;
         }

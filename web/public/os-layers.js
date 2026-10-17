@@ -698,6 +698,56 @@ const OsLayers = (() => {
     return sigExit < 0 ? "빨강청산" : "파랑청산";
   }
 
+  // 봉 위·아래 글자. 백테스트 화살은 라이브러리가 그리고, 계약수는 여기서 다음 줄에 적는다.
+  function labelMarks() {
+    let series = null;
+    let chart = null;
+    let points = [];
+    return {
+      setPoints(next) { points = next || []; },
+      attached(param) { series = param.series; chart = param.chart; },
+      detached() { series = null; chart = null; },
+      updateAllViews() {},
+      paneViews() {
+        return [{
+          renderer() {
+            return {
+              draw(target) {
+                if (!series || !chart || !points.length) return;
+                target.useBitmapCoordinateSpace((scope) => {
+                  const ctx = scope.context;
+                  const hr = scope.horizontalPixelRatio;
+                  const vr = scope.verticalPixelRatio;
+                  const xOf = (t) => chart.timeScale().timeToCoordinate(t);
+                  ctx.textAlign = "center";
+                  ctx.font = `${Math.round(11 * hr)}px sans-serif`;
+                  for (const p of points) {
+                    if (!p || !p.text || !Number.isFinite(p.value)) continue;
+                    const mx = xOf(p.time);
+                    const my = series.priceToCoordinate(p.value);
+                    if (mx == null || my == null) continue;
+                    const x = mx * hr;
+                    const y = my * vr;
+                    const above = p.position === "aboveBar";
+                    const lines = String(p.text).split("\n");
+                    const step = 12 * vr;
+                    const gap = 16 * vr;
+                    ctx.fillStyle = p.color || "#d4ff4a";
+                    ctx.textBaseline = above ? "bottom" : "top";
+                    lines.forEach((line, i) => {
+                      const ty = above ? y - gap - (lines.length - 1 - i) * step : y + gap + i * step;
+                      ctx.fillText(line, x, ty);
+                    });
+                  }
+                });
+              },
+            };
+          },
+        }];
+      },
+    };
+  }
+
   // 시스템 주문 화살. side > 0 은 가격 아래에서 위를 가리키고, side < 0 은 위에서 아래를 가리킨다.
   function orderMarks() {
     let series = null;
@@ -1229,6 +1279,7 @@ const OsLayers = (() => {
   return {
     parse, judgeHandle, packHandle, flatHandle, flatHandleV2, adjHandle, adjHandleOf,
     ecHandle, sigHandle, pnlHandle, posHandle, paintHandle, orderName, exitName, pairLabel, groupName,
+    labelMarks,
   };
 })();
 

@@ -1,0 +1,151 @@
+// =====================================================================
+//  BG_VolBurst_Strangle_V3 - 예스트레이더 시스템(신호)식 (1분봉, 2단계)
+//  사용 : 예스랭귀지 편집기에서 '시스템'으로 새로 만들어 아래 차트에 적용
+//
+//  차트 구성 (순서 중요)
+//    Data1 : 코스피200 선물 1분봉   (기본 종목, 변동성 신호 계산)
+//    Data2 : 콜옵션 1분봉           (위클리, 직접 고른 행사가)
+//    Data3 : 풋옵션 1분봉           (위클리, 직접 고른 행사가)
+//
+//  흐름
+//    1) 변동성 신호(강/중) 발생 → 진입대기 상태 (진입대기는 강조식 페인트바로 확인)
+//    2) 진입대기 중 콜/풋 가격 차이가 DiffPct% 이내 → "양매수진입"
+//    3) 합산수익률 = (콜현재 + 풋현재) / (콜진입 + 풋진입) - 1
+//         ≥ +TakePct% → "익절" / ≤ -StopPct% → "손절"
+//    4) 그 전에 하늘색 구간이 끝나면 "변동성소멸청산", 장 마감 전이면 "시간종료"
+//    5) 구간이 끝날 때까지 진입 조건이 안 맞으면 진입 없이 대기 해제
+//
+//  주의
+//    - 선물 차트 위 "표시용" 신호입니다. 자동주문은 반드시 끄세요.
+//      성과보고서의 손익은 선물 기준이라 의미가 없습니다.
+//    - 콜/풋 1:1 같은 수량 매수를 가정합니다.
+//    - 진입가는 신호봉의 콜/풋 종가로 기록합니다 (실제 체결가와 다를 수 있음).
+//    - 강조식과 변동성 입력값을 똑같이 맞추세요.
+// =====================================================================
+
+Input : RVLen(20), ATRLen(10), LongLen(390), RangeLen(30),
+        StrongRV(2.5), StrongVol(1.2),
+        MidVol(1.3), MidRange(8), MidRV(1.5),
+        Cooldown(30), SigStart(90000), SigEnd(150000),
+        EntryBars(3), HoldBars(30),
+        AftOn(1), AftStart(123000), AftLen(120), AftRV(2.0),
+        DiffPct(10),          // 콜/풋 가격차 허용 % (평균가 대비)
+        MinPrice(0.1),        // 콜/풋 최소 가격 (너무 싼 옵션 제외)
+        TakePct(15),          // 익절 합산수익률 %
+        StopPct(10),          // 손절 합산수익률 % (양수로 입력)
+        UseVolExit(1),        // 1=하늘색 구간 끝나면 변동성소멸청산
+        ReEntry(0),           // 1=같은 구간에서 청산 후 재진입 허용
+        UseTimeExit(1), ExitTime(153000),
+        DebugMode(0);
+
+Var : BarCnt(0), TRv(0), ATRv(0), ATRLong(0), VolReg(0), RelV(0), RVAvg(0),
+      Rng30(0), RngN(0), InTime(0), Level(0), LastSig(-9999), TT(0), LastLvl(0), Since(0),
+      ATRAft(0), BaseATR(0), IsAft(0), SRV(0),
+      InZone(0), ZoneEnd(0), Traded(0),
+      CallC(0), PutC(0), AvgP(0), DiffP(0), PriceOK(0),
+      CallIn(0), PutIn(0), CallRet(0), PutRet(0), TotRet(0);
+
+BarCnt = BarCnt + 1;
+TT = sTime;
+
+// ===== 1. 변동성 신호 계산 (강조식과 동일, Data1 기준) =====
+If BarCnt > 1 Then TRv = Max(H, C[1]) - Min(L, C[1]);
+Else TRv = H - L;
+
+If BarCnt == 1 Then ATRv = TRv;
+Else ATRv = ATRv + (TRv - ATRv) / ATRLen;
+
+ATRLong = ma(ATRv, LongLen);
+ATRAft = ma(ATRv, AftLen);
+
+IsAft = 0;
+If AftOn == 1 and TT >= AftStart and TT < SigEnd Then IsAft = 1;
+
+If IsAft == 1 Then { BaseATR = ATRAft; SRV = AftRV; }
+Else { BaseATR = ATRLong; SRV = StrongRV; }
+
+VolReg = 0;
+RngN = 0;
+If BaseATR > 0 Then VolReg = ATRv / BaseATR;
+
+RVAvg = ma(V, RVLen);
+If BarCnt > 1 and RVAvg[1] > 0 Then RelV = V / RVAvg[1];
+
+Rng30 = Highest(H, RangeLen) - Lowest(L, RangeLen);
+If BaseATR > 0 Then RngN = Rng30 / BaseATR;
+
+InTime = 0;
+If SigStart < SigEnd Then { If TT >= SigStart and TT < SigEnd Then InTime = 1; }
+Else { If TT >= SigStart or TT < SigEnd Then InTime = 1; }
+
+Level = 0;
+If BarCnt > LongLen and InTime == 1 and BarCnt - LastSig >= Cooldown Then {
+    If RelV >= SRV and VolReg >= StrongVol Then Level = 2;
+    Else {
+        If VolReg >= MidVol and RngN >= MidRange and RelV >= MidRV Then Level = 1;
+    }
+    If Level > 0 Then { LastSig = BarCnt; LastLvl = Level; }
+}
+
+// ===== 2. 진입대기 구간 (신호봉 ~ 하늘색 끝) =====
+Since = BarCnt - LastSig;
+InZone = 0;
+If LastSig > -9999 and Since >= 0 and Since <= HoldBars Then InZone = 1;
+
+ZoneEnd = 0;
+If BarCnt > 1 and InZone[1] == 1 and InZone == 0 Then ZoneEnd = 1;
+
+// 새 구간이 시작되면 진입 기록 초기화 (구간 연장은 새 구간으로 보지 않음)
+If InZone == 1 and (BarCnt == 1 or InZone[1] == 0) Then Traded = 0;
+
+// ===== 3. 콜/풋 가격 비교 (Data2=콜, Data3=풋) =====
+CallC = Data2(C);
+PutC = Data3(C);
+
+AvgP = (CallC + PutC) / 2;
+DiffP = 999;
+If AvgP > 0 Then DiffP = Abs(CallC - PutC) / AvgP * 100;
+
+PriceOK = 0;
+If CallC >= MinPrice and PutC >= MinPrice and DiffP <= DiffPct Then PriceOK = 1;
+
+// ===== 4. 진입 =====
+If MarketPosition == 0 and InZone == 1 and PriceOK == 1
+   and (Traded == 0 or ReEntry == 1)
+   and (UseTimeExit == 0 or TT < ExitTime) Then {
+    Buy("양매수진입");
+    CallIn = CallC;
+    PutIn = PutC;
+    Traded = 1;
+}
+
+// ===== 5. 청산 =====
+CallRet = 0;
+PutRet = 0;
+TotRet = 0;
+If MarketPosition == 1 and CallIn > 0 and PutIn > 0 Then {
+    CallRet = (CallC / CallIn - 1) * 100;
+    PutRet = (PutC / PutIn - 1) * 100;
+    TotRet = ((CallC + PutC) / (CallIn + PutIn) - 1) * 100;
+
+    If TotRet >= TakePct Then ExitLong("익절");
+    Else {
+        If TotRet <= -StopPct Then ExitLong("손절");
+        Else {
+            If UseVolExit == 1 and ZoneEnd == 1 Then ExitLong("변동성소멸청산");
+            Else {
+                If UseTimeExit == 1 and SigStart < SigEnd and TT >= ExitTime Then
+                    ExitLong("시간종료");
+            }
+        }
+    }
+}
+
+// ===== 6. 디버그 (DebugMode=1) =====
+If DebugMode == 1 and (InZone == 1 or MarketPosition == 1) Then {
+    MessageLog("T=%06.0f ZONE=%.0f CALL=%.2f PUT=%.2f DIFF=%.1f OK=%.0f POS=%.0f CRET=%.1f PRET=%.1f TOT=%.1f",
+               TT, InZone, CallC, PutC, DiffP, PriceOK, MarketPosition, CallRet, PutRet, TotRet);
+}
+
+// 최소 1000봉을 불러온 1분봉 차트에 적용하세요.
+// 예스트레이더 컴파일 및 실제 차트에서는 아직 검증하지 못했습니다.

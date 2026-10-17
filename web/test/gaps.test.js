@@ -135,6 +135,43 @@ test("withWhitespace: 세션 경계 봉(야간 20:00) 전후의 공백도 같은
   assert.equal(mixed[mixed.length - 2].time, kst(2, 8, 54)); // 다음 봉 직전까지
 });
 
+test("withWhitespace: 거래시간 밖은 붙이고 장중 빈 분만 남긴다", () => {
+  const kst = (d, h, m) => Date.UTC(2026, 9, d, h - 9, m) / 1000;
+  const session = { offset: 540, open: 8 * 60 + 45, close: 15 * 60 + 45, days: 0x3e };
+  const fri = kst(16, 15, 35); // 2026-10-16 금
+  const mon = kst(19, 8, 46);  // 2026-10-19 월
+  const mixed = Gaps.withWhitespace([bar(fri), bar(mon)], session);
+  // 금 15:36–15:44(장중)와 월 08:45만 빈 칸. 밤·주말은 붙인다.
+  assert.equal(mixed.length, 2 + 9 + 1);
+  assert.equal(mixed[1].time, kst(16, 15, 36));
+  assert.equal(mixed[9].time, kst(16, 15, 44));
+  assert.equal(mixed[10].time, kst(19, 8, 45));
+  assert.equal(mixed[11].time, mon);
+  const hole = Gaps.withWhitespace([bar(kst(16, 9, 0)), bar(kst(16, 9, 3))], session);
+  assert.deepEqual(times(hole), [kst(16, 9, 0), kst(16, 9, 1), kst(16, 9, 2), kst(16, 9, 3)]);
+});
+
+test("withWhitespace: 봉이 하나도 없는 날은 붙인다", () => {
+  const kst = (d, h, m) => Date.UTC(2026, 9, d, h - 9, m) / 1000;
+  const session = { offset: 540, open: 8 * 60 + 45, close: 15 * 60 + 45, days: 0x3e };
+  const thu = kst(8, 15, 35); // 2026-10-08 목
+  const mon = kst(12, 8, 46); // 2026-10-12 월. 9일 금은 봉이 없다
+  const mixed = Gaps.withWhitespace([bar(thu), bar(mon)], session);
+  assert.equal(mixed.length, 2 + 9 + 1);
+  assert.equal(mixed[1].time, kst(8, 15, 36));
+  assert.equal(mixed[9].time, kst(8, 15, 44));
+  assert.equal(mixed[10].time, kst(12, 8, 45));
+  assert.equal(mixed[11].time, mon);
+  assert.ok(mixed.every((row) => new Date((row.time + 540 * 60) * 1000).getUTCDate() !== 9));
+});
+
+test("withWhitespace: 15:45 단일가 앞의 빈 10분은 붙인다", () => {
+  const kst = (h, m) => Date.UTC(2026, 9, 16, h - 9, m) / 1000;
+  const session = { offset: 540, open: 8 * 60 + 45, close: 15 * 60 + 46, days: 0x3e };
+  const mixed = Gaps.withWhitespace([bar(kst(15, 36)), bar(kst(15, 46))], session);
+  assert.deepEqual(times(mixed), [kst(15, 36), kst(15, 46)]);
+});
+
 test("withWhitespace: 봉과 겹치는 포인트는 구조적으로 만들어지지 않는다 (중복 time 없음)", () => {
   const bars = [0, 60, 180].map(bar);
   const mixed = Gaps.withWhitespace(bars);

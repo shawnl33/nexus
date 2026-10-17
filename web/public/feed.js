@@ -107,7 +107,15 @@ const Feed = (() => {
         // 자연히 멱등이다 (현재 엔진은 TR_NO_TRADE_SKIP — src/app/main.c의 ecfg.no_trade).
         // 호출자(app.js)는 같은 분 목록을 새 봉 앞에 차트 update()로 붙인다.
         if (st.length > 0) {
-          for (let wt = st[st.length - 1] + MIN_SEC; wt < t; wt += MIN_SEC) {
+          const gapApi = globalThis.Gaps;
+          const gaps = gapApi && gapApi.gapMinutes
+            ? gapApi.gapMinutes(st[st.length - 1], t, cache.session)
+            : null;
+          const fill = gaps || [];
+          if (!gaps) {
+            for (let wt = st[st.length - 1] + MIN_SEC; wt < t; wt += MIN_SEC) fill.push(wt);
+          }
+          for (const wt of fill) {
             st.push(wt);
             cache.wsCount++;
           }

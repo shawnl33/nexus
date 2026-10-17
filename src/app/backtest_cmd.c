@@ -11,6 +11,7 @@
 #endif
 
 #include "adapters/nh/nh_auth.h"
+#include "adapters/nh/nh_chart.h"
 #include "adapters/nh/nh_http.h"
 #include "adapters/storage/live_bars.h"
 #include "core/backtest/bar_fill.h"
@@ -24,6 +25,14 @@
 
 #define BT_CAP 100000
 #define KST_MIN 540
+
+double tr_bt_price_scale(const char *symbol) {
+    double raw = nh_tick_raw(symbol);
+    if (raw <= 0.0) {
+        raw = 5.0;
+    }
+    return raw / 100.0;
+}
 
 static uint64_t id_of(const char *code) {
     uint64_t h = 1469598103934665603ULL;
@@ -387,8 +396,13 @@ int tr_backtest_run(const char *payload, char *out, size_t cap) {
         if (is_pair) {
             pair = (tr_fxpair_t *)calloc(1, sizeof(*pair));
         }
-        tr_fxmirae_default_config(&mcfg, 100.0);
-        if (nself == 0 || scope == 0 || fx == 0 || (is_pair && pair == 0) || !tr_fxos_init(scope, 100.0) ||
+        {
+            double tick = tr_bt_price_scale(symbol);
+            book.tick = tick;
+            tr_fxmirae_default_config(&mcfg, tick);
+        }
+        if (nself == 0 || scope == 0 || fx == 0 || (is_pair && pair == 0) ||
+            !tr_fxos_init(scope, tr_bt_price_scale(symbol)) ||
             !tr_fxmirae_init(fx, &mcfg)) {
             free(pair);
             free(fx);
@@ -431,6 +445,7 @@ int tr_backtest_run(const char *payload, char *out, size_t cap) {
             in.low = self[i].low;
             in.close = self[i].close;
             in.volume = self[i].volume;
+            in.price_unit = 1.0;
             in.is_new_bar = true;
             tr_fxos_set_synth(&in, &fx->syn5, &fx->syn15, &fx->syn30);
             if (is_pair) {

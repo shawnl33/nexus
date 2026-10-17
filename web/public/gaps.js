@@ -1,9 +1,8 @@
-// 시간축 균일 분 그리드 — 모든 칸의 시리즈를 매분 1칸으로 채운다 (2026-10-01 확정,
-// 2026-09-30 RT 공백 사건 후속 G2의 재설계).
-// 연속 봉 사이의 1분 초과 공백을 전부 분당 1칸 whitespace({time}만 있는 항목)로 펼쳐
-// 캔들 사이에 섞는다 — 밤·주말·프리마켓·무틱 공백을 가리지 않는다. lightweight-charts
-// whitespace 항목은 가격 필드가 없다. 그 칸은 캔들 없이 남는다. 체결이 없는 분이지
-// 데이터 없음이 아니므로 사선이나 "데이터 없음" 글씨는 그리지 않는다.
+// 시간축 분 그리드. 세션이 있으면 거래시간 밖의 분(야간·주말·장 마감 이후)과
+// 봉이 하나도 없는 날(휴장일)은 빈 칸으로 펼치지 않고 다음 봉에 붙인다.
+// 봉이 있는 날의 장중 빈 분만 whitespace로 남긴다.
+// 세션이 없으면 연속 봉 사이 1분 초과 공백을 전부 분당 1칸으로 채운다 (구 계약).
+// whitespace 항목은 가격 필드가 없다. 그 칸은 캔들 없이 남는다.
 //
 // 왜 엔진 gaps 페이로드를 쓰지 않는가: 종목마다 구멍 채움 정책이 달라(선물은 쉬는
 // 시간을 분당 1칸으로 채우지만 밤은 1칸으로 압축, 주식은 밤 전체가 1칸) 엔진 gaps는
@@ -13,10 +12,8 @@
 // 상위 집합이라(엔진 구멍은 연속 봉 공백의 부분집합) 표시 경로에서는 엔진 gaps를 더
 // 쓰지 않는다 — 페이로드 수신·보관은 유지한다 (app.js seedSymbolNow 참조).
 //
-// 불변식 (1칸=1분): 반환 배열에서 첫 봉~마지막 봉 사이의 인접 항목 시각 차는 항상
-// 정확히 60초다. 그래서 모든 칸에서 logicalAt/timeAt(pane-sync)이 기울기 60초의
-// 아핀 변환이 되고, 창 가장자리가 같은 시계 창이면 모든 공유 시각의 x가 픽셀 단위로
-// 일치한다 — 다중 차트 칸 시간축 동기화(엄밀 시각 정렬)가 이 성질에 기댄다.
+// 세션이 없으면 인접 항목 시각 차는 60초다. 세션이 있으면 휴장·무자료 날은 건너뛰므로
+// 그 경계에서 시각이 60초보다 크게 뛴다. pane-sync는 seriesTimes로 시각을 환산한다.
 // 첫 봉 이전과 마지막 봉 이후는 채우지 않는다 (스팬 남부만 — 스팬은 데이터가 정한다).
 // 라이브 꼬리는 feed.js noteBar가 같은 규칙으로 채우며 시리즈를 민다.
 // DOM 없는 순수 로직 (node:test 단위 테스트 대상).
@@ -33,13 +30,61 @@ const Gaps = (() => {
   //   생기지 않는다 (같은 time이 두 번이면 setData가 거부하므로 구조적으로 방어).
   // - 반환 길이 − bars.length = whitespace 수. pane-sync의 getLength가 시리즈 길이
   //   (봉 + whitespace)를 돌려주는 데 이 차이(wsCount)를 쓴다 (app.js 주석 참조).
-  function withWhitespace(bars) {
+  // 엔진 tr_session_span과 같다. session = { offset, open, close, days }.
+  // days 비트: bit0=일요일 .. bit6=토요일. close <= open 이면 익일 폐장.
+  function inSession(unixSec, session) {
+    if (!session) return true;
+    const off = Number(session.offset) || 0;
+    const d = new Date((unixSec + off * 60) * 1000);
+    const wd = d.getUTCDay();
+    const min = d.getUTCHours() * 60 + d.getUTCMinutes();
+    const open = session.open;
+    const close = session.close;
+    const days = session.days >>> 0;
+    const overnight = close <= open;
+    if ((days & (1 << wd)) !== 0 && min >= open && (overnight || min < close)) return true;
+    if (overnight && (days & (1 << ((wd + 6) % 7))) !== 0 && min < close) return true;
+    return false;
+  }
+
+  function localDateKey(unixSec, session) {
+    const off = session ? (Number(session.offset) || 0) : 0;
+    const d = new Date((unixSec + off * 60) * 1000);
+    return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+  }
+
+  // 선물 마감 단일가 직전 10분. 체결이 없어 빈 칸으로 두지 않고 15:45 봉에 붙인다.
+  function closingAuctionQuiet(unixSec, session) {
+    if (!session || session.open !== 8 * 60 + 45 || session.close !== 15 * 60 + 46) return false;
+    const off = Number(session.offset) || 0;
+    const d = new Date((unixSec + off * 60) * 1000);
+    const min = d.getUTCHours() * 60 + d.getUTCMinutes();
+    return min >= 15 * 60 + 37 && min < 15 * 60 + 46;
+  }
+
+  // prev와 cur 사이(양쪽 제외)에서 빈 칸으로 남길 시각.
+  // 거래시간 밖은 뺀다. 세션이 있으면, 양끝 봉의 날짜가 아닌 날은 봉이 없으므로 붙인다.
+  function gapMinutes(prev, cur, session) {
+    const out = [];
+    if (!Number.isFinite(prev) || !Number.isFinite(cur) || cur <= prev + MIN_SEC) return out;
+    const prevDay = session ? localDateKey(prev, session) : null;
+    const curDay = session ? localDateKey(cur, session) : null;
+    for (let t = prev + MIN_SEC; t < cur; t += MIN_SEC) {
+      if (!inSession(t, session)) continue;
+      if (closingAuctionQuiet(t, session)) continue;
+      if (session && localDateKey(t, session) !== prevDay && localDateKey(t, session) !== curDay) continue;
+      out.push(t);
+    }
+    return out;
+  }
+
+  function withWhitespace(bars, session) {
     if (!Array.isArray(bars) || bars.length < 2) return Array.isArray(bars) ? bars.slice() : [];
     const sorted = bars.slice().sort((x, y) => x.time - y.time); // 방어 — 호출 측은 이미 오름차순
     const out = [sorted[0]];
     for (let i = 1; i < sorted.length; i++) {
       const prev = sorted[i - 1].time, cur = sorted[i].time;
-      for (let t = prev + MIN_SEC; t < cur; t += MIN_SEC) out.push({ time: t });
+      for (const t of gapMinutes(prev, cur, session)) out.push({ time: t });
       out.push(sorted[i]);
     }
     return out;
@@ -68,7 +113,7 @@ const Gaps = (() => {
     return runs;
   }
 
-  return { withWhitespace, whitespaceRuns, MIN_SEC };
+  return { withWhitespace, whitespaceRuns, gapMinutes, inSession, MIN_SEC };
 })();
 
 if (typeof globalThis !== "undefined") {

@@ -1,0 +1,107 @@
+# =====================================================================
+#  VolBurst_Paint_PM  -  예스트레이더 강조식 (1분봉, 양매수용 변동성 폭발 신호 - 캔들 색칠)
+#  사용 : 수식 편집기에서 '강조'로 새로 만들어 가격차트에 적용 (지표식으로 만들면 오류)
+#
+#  바탕 : 원장님 VolBurst_Paint 원본 그대로. 오전(AftStart 이전)은 원본과 100% 동일하게 동작.
+#  [오후 추가] AftStart 이후에만 아래 두 가지를 바꾼다.
+#    1) 변동성 비교 기준 : 최근 390봉 평균 → 최근 AftLen봉(기본 120봉 = 2시간) 평균
+#       → 오전 급등락이 기준선을 부풀려 오후 신호가 막히던 문제 해결
+#       (VolReg와 직전 30분 변동폭 RngN 모두 이 기준으로 계산)
+#    2) 강신호 상대거래량 기준 : 2.5 → AftRV(기본 2.0)
+#       → 오후는 거래량이 한 봉에 폭발하기보다 몇 봉에 걸쳐 늘어나는 경우가 많아서
+#  AftOn = 0 으로 두면 완전히 원본과 같아진다.
+#
+#  표시 : 신호 봉        - 강: 보라 / 중: 주황 캔들
+#         진입 구간       - 신호 다음 EntryBars 봉: 강 분홍 / 중 노랑 캔들
+#         변동성 기대 구간 - 그 이후 HoldBars 봉까지: 하늘색 캔들 (ShowHold=1일 때)
+#  목적 : 방향과 무관하게 "향후 30분 큰 움직임" 확률이 높아지는 순간 표시
+#  근거 : 코스피200 선물 2026.01~10 / S&P500 선물 1분봉 분석 (원본 기준)
+#         - 신호 발생 시 향후 30분 큰 움직임(평소 상위 20%) 확률 약 50~55% (평소 20%)
+#         - 같은 시간대끼리 비교: 09시대 1.2배, 10시대 1.8배, 11시 이후 4.2배
+#  신호 :
+#    강(2) : 상대거래량 ≥ 2.5 (오후 2.0)  그리고  변동성국면(ATR/기준ATR) ≥ 1.2
+#    중(1) : 변동성국면 ≥ 1.3  그리고  직전 30분 변동폭 ≥ 기준ATR×8  그리고  상대거래량 ≥ 1.5
+#  한 번 신호가 뜨면 Cooldown 봉 동안 재신호 없음
+# =====================================================================
+
+Input : RVLen(20),            # 상대거래량 평균 기간
+        ATRLen(10),           # 단기 ATR (RMA)
+        LongLen(390),         # 장기 ATR 평균 기간 (1분봉 390개 ≒ 하루)
+        RangeLen(30),         # 직전 변동폭 측정 봉수
+        StrongRV(2.5), StrongVol(1.2),
+        MidVol(1.3), MidRange(8), MidRV(1.5),
+        Cooldown(30),         # 재신호 금지 봉수
+        SigStart(90000), SigEnd(150000),   # 신호 허용 시간
+        EntryBars(3),         # 신호 후 진입 구간 봉수 (색칠)
+        HoldBars(30),         # 변동성 기대 구간 (신호 후 봉수)
+        ShowHold(1),          # 1=기대 구간도 색칠, 0=안 함
+        AftOn(1),             # [오후 추가] 1=오후 보정 사용, 0=원본과 동일
+        AftStart(123000),     # [오후 추가] 오후 보정 시작 시각
+        AftLen(120),          # [오후 추가] 오후 기준 ATR 평균 기간 (120봉 = 2시간)
+        AftRV(2.0);           # [오후 추가] 오후 강신호 상대거래량 기준
+
+Var : BarCnt(0), TRv(0), ATRv(0), ATRLong(0), VolReg(0), RelV(0), RVAvg(0),
+      Rng30(0), RngN(0), InTime(0), Level(0), LastSig(-9999), TT(0), LastLvl(0), Since(0),
+      ATRAft(0), BaseATR(0), IsAft(0), SRV(0);
+
+BarCnt = BarCnt + 1;
+TT = sTime;
+
+If BarCnt > 1 Then TRv = Max(H, C[1]) - Min(L, C[1]);
+Else TRv = H - L;
+
+If BarCnt == 1 Then ATRv = TRv;
+Else ATRv = ATRv + (TRv - ATRv) / ATRLen;
+
+ATRLong = ma(ATRv, LongLen);
+ATRAft = ma(ATRv, AftLen);                     # [오후 추가]
+
+# [오후 추가] 오후면 기준 ATR과 강신호 거래량 기준을 바꿈
+IsAft = 0;
+If AftOn == 1 and TT >= AftStart and TT < SigEnd Then IsAft = 1;
+
+If IsAft == 1 Then { BaseATR = ATRAft; SRV = AftRV; }
+Else { BaseATR = ATRLong; SRV = StrongRV; }
+
+VolReg = 0;
+RngN = 0;
+If BaseATR > 0 Then VolReg = ATRv / BaseATR;
+
+RVAvg = ma(V, RVLen);
+If BarCnt > 1 and RVAvg[1] > 0 Then RelV = V / RVAvg[1];
+
+Rng30 = Highest(H, RangeLen) - Lowest(L, RangeLen);
+If BaseATR > 0 Then RngN = Rng30 / BaseATR;
+
+InTime = 0;
+If SigStart < SigEnd Then { If TT >= SigStart and TT < SigEnd Then InTime = 1; }
+Else { If TT >= SigStart or TT < SigEnd Then InTime = 1; }
+
+Level = 0;
+If BarCnt > LongLen and InTime == 1 and BarCnt - LastSig >= Cooldown Then {
+    If RelV >= SRV and VolReg >= StrongVol Then Level = 2;
+    Else {
+        If VolReg >= MidVol and RngN >= MidRange and RelV >= MidRV Then Level = 1;
+    }
+    If Level > 0 Then { LastSig = BarCnt; LastLvl = Level; }
+}
+
+# ---------------------------------------------------------------------
+# 캔들 색칠 (원본과 동일)
+# ---------------------------------------------------------------------
+Since = BarCnt - LastSig;     # 신호 봉 = 0
+
+If Since == 0 Then {
+    If LastLvl == 2 Then PlotPaintBar(H, L, O, C, "신호봉", RGB(160, 0, 255));
+    Else PlotPaintBar(H, L, O, C, "신호봉", RGB(255, 140, 0));
+}
+Else {
+    If Since >= 1 and Since <= EntryBars Then {
+        If LastLvl == 2 Then PlotPaintBar(H, L, O, C, "신호봉", RGB(255, 150, 200));
+        Else PlotPaintBar(H, L, O, C, "신호봉", RGB(255, 230, 0));
+    }
+    Else {
+        If ShowHold == 1 and Since > EntryBars and Since <= HoldBars Then
+            PlotPaintBar(H, L, O, C, "신호봉", RGB(120, 200, 255));
+    }
+}

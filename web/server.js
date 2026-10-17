@@ -415,6 +415,21 @@ const server = createServer(async (req, res) => {
       return json(res, code, reply);
     }
 
+    if (req.method === "GET" && path === "/api/vbstr/sim") {
+      const fut = (url.searchParams.get("fut") ?? "").trim().toUpperCase();
+      const call = (url.searchParams.get("call") ?? "").trim().toUpperCase();
+      const put = (url.searchParams.get("put") ?? "").trim().toUpperCase();
+      if (!isValidShcode(fut) || !isValidShcode(call) || !isValidShcode(put)) {
+        return json(res, 400, { error: "invalid_symbol" });
+      }
+      const payload = { fut, call, put };
+      const cfg = readPairCfg(url.searchParams.get("cfg"));
+      if (cfg) payload.cfg = cfg;
+      const reply = await engineCommand(`dash-vbstr-${reqSeq}`, "vbstr.sim", JSON.stringify(payload));
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
     if (req.method === "GET" && path === "/api/pair/plots") {
       // 읽기 전용. 자기·상대·선물 1분봉으로 위클리 합산수익률과 프라이스링크를 그린다.
       const self = (url.searchParams.get("self") ?? "").trim().toUpperCase();

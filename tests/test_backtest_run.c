@@ -45,6 +45,11 @@ static void put(const char *code, int64_t open_us, int price) {
 
 int main(void) {
     char err[128] = {0};
+    /* 봉 가격은 포인트. ES 1틱은 0.25, 표를 모르면 선물 자동 0.05. */
+    TR_CHECK((int)(tr_bt_price_scale("ESZ26") * 100.0 + 0.5) == 25);
+    TR_CHECK((int)(tr_bt_price_scale("NQZ26") * 100.0 + 0.5) == 25);
+    TR_CHECK((int)(tr_bt_price_scale("RTYZ26") * 100.0 + 0.5) == 10);
+    TR_CHECK((int)(tr_bt_price_scale("UNKNOWN") * 100.0 + 0.5) == 5);
     char out[8192];
     const char *payload =
         "{\"type\":\"backtest.run\",\"data\":{\"signal\":\"pair-short\",\"start\":\"2024-10-01\","

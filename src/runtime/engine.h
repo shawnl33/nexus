@@ -15,6 +15,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* HTS 봉 눈금이 저장 시각보다 60초 늦다. 계산에 쓰는 시각은 그대로 두고
+ * 화면으로 나가는 시각만 60초 뒤로 민다. 15:45 단일가는 15:46으로 보인다. */
+#define TR_HTS_TIME_SHIFT_US (INT64_C(60000000))
+static inline int64_t tr_hts_time_us(int64_t open_us) {
+    return open_us + TR_HTS_TIME_SHIFT_US;
+}
+
 #include "adapters/ipc/ipc.h"
 #include "core/functions/daily_align_v2.h"
 #include "core/functions/daily_trend_link_v1.h"
@@ -35,6 +42,7 @@
 #include "core/indicators/fx_os_scope.h"
 #include "core/indicators/fx_curve_os.h"
 #include "core/indicators/fx_sniper_co.h"
+#include "core/indicators/volburst_paint.h"
 #include "core/functions/ks_score_v1.h"
 #include "core/market/bar_builder.h"
 
@@ -182,6 +190,8 @@ typedef struct {
     double snco_v[TR_SNCO_PLOTS];
     uint32_t snco_rgb[TR_SNCO_PLOTS];
     uint8_t snco_w[TR_SNCO_PLOTS];
+    /* #BG_Vol_burst_V2 캔들 색. 0이면 칠하지 않는다. */
+    uint32_t vb_rgb;
 } tr_bar_status_t;
 
 typedef struct tr_engine tr_engine_t;
@@ -244,6 +254,7 @@ typedef struct {
     int32_t ks_day_index;
     int32_t ks_current;
     bool ks_has_date;
+    tr_vb_t vb; /* #BG_Vol_burst_V2. 1분봉에서만 평가한다 */
 } tr_pipeline_t;
 
 #define TR_ENGINE_MAX_PIPES 8 /* 동시 관측 종목 상한 (더 필요하면 상수만 올린다) */
@@ -316,6 +327,7 @@ struct tr_engine {
             int32_t ks_day_index;
             int32_t ks_current;
             bool ks_has_date;
+            tr_vb_t vb;
         };
     };
     tr_pipeline_t pipe_slots[TR_ENGINE_MAX_PIPES - 1]; /* pipes[1..] 내장 저장소 */
@@ -379,6 +391,7 @@ TR_ENGINE_PIPE_LAYOUT_CHECK(ks_bdate);
 TR_ENGINE_PIPE_LAYOUT_CHECK(ks_day_index);
 TR_ENGINE_PIPE_LAYOUT_CHECK(ks_current);
 TR_ENGINE_PIPE_LAYOUT_CHECK(ks_has_date);
+TR_ENGINE_PIPE_LAYOUT_CHECK(vb);
 #undef TR_ENGINE_PIPE_LAYOUT_CHECK
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,

@@ -83,6 +83,7 @@ const RENDERERS = {
   fx_ec20: { createHandle: (chart) => OsLayers.ecHandle(chart, true) },
   fx_paint_v12: { createHandle: () => OsLayers.paintHandle() },
   fx_paint_os: { createHandle: () => OsLayers.paintHandle() },
+  vb_paint: { createHandle: () => OsLayers.paintHandle() },
   fx_sig_v6: { createHandle: (chart) => OsLayers.sigHandle(chart) },
   fx_sig_pair: { createHandle: (chart) => OsLayers.sigHandle(chart, "pair") },
   fx_sig_zd: { createHandle: (chart) => OsLayers.sigHandle(chart, "zd") },
@@ -597,12 +598,17 @@ function hexRgb(rgb) {
   return "#" + (Number(rgb) >>> 0).toString(16).padStart(6, "0");
 }
 
-// 1분봉용 페인트바가 켜지면 그 봉색을 쓴다. 꺼져 있고 미래곡선만 켜지면 통합판정색이다.
+function barLayerOn(entry) {
+  return entry && (typeof entry.handle?.wantsBar !== "function" || entry.handle.wantsBar());
+}
+
+// VolBurst 강조가 색을 내면 그 색을 쓴다. 없으면 1분봉용 페인트바, 그것도 없으면 통합판정색.
 function curveStageTint(pane, time) {
   const ind = paneCache(pane)?.barInd?.get(time);
+  const vb = pane?.active?.get("vb_paint");
+  if (barLayerOn(vb) && ind?.vb) return hexRgb(ind.vb);
   const paint = pane?.active?.get("fx_paint_os");
-  const paintOn = paint && (typeof paint.handle?.wantsBar !== "function" || paint.handle.wantsBar());
-  if (paintOn && ind?.os?.osPaint) return hexRgb(ind.os.osPaint);
+  if (barLayerOn(paint) && ind?.os?.osPaint) return hexRgb(ind.os.osPaint);
   if (!pane?.active?.has("fx_curve_os")) return "";
   const rgb = ind?.os?.judgeRgb;
   if (!Number.isFinite(Number(rgb))) return "";
@@ -768,7 +774,7 @@ function setBarStyle(pane, style) {
   if (pane.barDraw !== draw) {
     const cache = feed.get(pane.symbol);
     const bars = cache ? cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean) : [];
-    const rows = bars.length ? Gaps.withWhitespace(bars).map((r) => candlePoint(pane, r, draw)) : [];
+    const rows = bars.length ? Gaps.withWhitespace(bars, cache.session).map((r) => candlePoint(pane, r, draw)) : [];
     mutePaneRange(pane);
     if (pane.candleSeries) pane.chart.removeSeries(pane.candleSeries);
     pane.candleBorder = null;
@@ -1739,7 +1745,7 @@ function paintPairSeries(pane, series, key, marks) {
 }
 
 function applyPairMarkers(pane) {
-  const markers = PairMarkers.fromEvents(pane.pairEvents);
+  const markers = PairMarkers.fromEvents([...(pane.pairEvents || []), ...(pane.vbEvents || [])]);
   const groups = new Map();
   for (const mark of markers) {
     const key = mark.symbol || pane.symbol || "";
@@ -1778,11 +1784,17 @@ function framePairOrderOn(frame) {
     (pane.systems && pane.systems.size > 0) || WPLOT_IDS.some((id) => pane.active.has(id)));
 }
 
-// 페어를 쓰는 화면틀만 첫 종목부터 지수, 콜, 풋으로 보여 준다.
+function frameHasSystem(frame, id) {
+  return (frame?.panes || []).some((pane) => pane.systems?.has(id));
+}
+
+// 페어는 지수·콜·풋, 스트랭글은 선물·콜·풋. 순서는 메인, 첫 추가, 둘째 추가다.
 function orderChipRole(frame, code) {
   if (!code || !framePairOrderOn(frame)) return "";
   const codes = frameSymbolCodes(frame);
-  if (codes[0] === code) return "지수";
+  const vb = frameHasSystem(frame, "vb-strangle");
+  const pair = frameHasSystem(frame, "pair-long") || frameHasSystem(frame, "pair-short");
+  if (codes[0] === code) return vb && !pair ? "선물" : "지수";
   if (codes[1] === code) return "콜";
   if (codes[2] === code) return "풋";
   return "";
@@ -1840,7 +1852,45 @@ function setWeeklySide(pane, ids, payload) {
   }
 }
 
+async function refreshVbStrangle(pane) {
+  if (!pane?.systems?.has("vb-strangle")) {
+    if (pane?.vbEvents?.length) {
+      pane.vbEvents = [];
+      applyPairMarkers(pane);
+    }
+    return;
+  }
+  const codes = frameSymbolCodes(pane.frame);
+  const fut = codes[0] || "";
+  const call = codes[1] || "";
+  const put = codes[2] || "";
+  if (fut.length < 4 || call.length < 4 || put.length < 4) {
+    pane.vbEvents = [];
+    applyPairMarkers(pane);
+    return;
+  }
+  const seq = (pane.vbSeq = (pane.vbSeq || 0) + 1);
+  try {
+    const q = new URLSearchParams({ fut, call, put });
+    const vars = frameVarBag(pane.frame, "vb-strangle");
+    if (vars && Object.keys(vars).length) q.set("cfg", JSON.stringify(vars));
+    const res = await fetch(`/api/vbstr/sim?${q}`);
+    const data = await res.json().catch(() => ({}));
+    if (pane.vbSeq !== seq) return;
+    const events = res.ok && data.payload && Array.isArray(data.payload.events) ? data.payload.events : [];
+    pane.vbEvents = events.map((ev) => ({ t: ev.t, k: ev.k, n: ev.n, side: 1, q: 1, symbol: fut }));
+    applyPairMarkers(pane);
+  } catch (err) {
+    console.error(err);
+    if (pane.vbSeq === seq) {
+      pane.vbEvents = [];
+      applyPairMarkers(pane);
+    }
+  }
+}
+
 function refreshWeeklyPlots(pane) {
+  refreshVbStrangle(pane);
   if (!pane) return;
   clearTimeout(pane.wplotTimer);
   if (!paneWantsWeekly(pane)) {
@@ -2101,7 +2151,7 @@ function buildSystemNode(pane, item, locked) {
 
 const GEAR_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.22-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.39-.96c.5.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.22 1.13-.54 1.63-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>`;
 
-const FRAME_VAR_IDS = new Set(["fx_sig_v6", "pair-long", "pair-short", "fx_pnl"]);
+const FRAME_VAR_IDS = new Set(["fx_sig_v6", "pair-long", "pair-short", "fx_pnl", "vb-strangle"]);
 
 function frameVarBag(frame, id) {
   const panes = frame?.panes || [];
@@ -2335,6 +2385,10 @@ function buildIndNode(pane, meta, source, locked) {
         if (locked) return;
         entry.layers[layer.id] = lbox.checked;
         entry.handle.setLayers({ [layer.id]: lbox.checked });
+        if (layer.id === "bar" && pane.symbol) {
+          const cache = feed.get(pane.symbol);
+          if (cache) rebuildPaneCandles(pane, cache);
+        }
       };
       lrow.append(lbox, document.createTextNode(layer.name ?? layer.id));
       layersBox.append(lrow);
@@ -2368,7 +2422,7 @@ function activateIndicator(pane, indId, savedLayers) {
     const cache = pane.symbol ? feed.get(pane.symbol) : undefined;
     if (cache) handle.applySeed(ctxFor(cache));
   }
-  if (indId === "fx_curve_os" && pane.symbol) {
+  if ((indId === "fx_curve_os" || indId === "vb_paint") && pane.symbol) {
     const cache = feed.get(pane.symbol);
     if (cache) rebuildPaneCandles(pane, cache);
   }
@@ -2382,7 +2436,7 @@ function deactivateIndicator(pane, indId) {
   pane.active.delete(indId);
   if (typeof entry.handle.destroy === "function") entry.handle.destroy();
   else entry.handle.clear();
-  if (indId === "fx_curve_os" && pane.symbol) {
+  if ((indId === "fx_curve_os" || indId === "vb_paint") && pane.symbol) {
     const cache = feed.get(pane.symbol);
     if (cache) rebuildPaneCandles(pane, cache);
   }
@@ -2464,6 +2518,14 @@ function applyStatus(msg) {
   // (구 엔진·리플레이)는 기존 동작대로 기본 캐시에 쌓고 그 캐시를 보는 칸(미선택 칸)에 반영한다.
   const sh = typeof p.shcode === "string" && p.shcode !== "" ? p.shcode : legacyShcode();
   const cache = feed.forSymbol(sh);
+  if (p.session && Number.isFinite(p.session.open) && Number.isFinite(p.session.close)) {
+    cache.session = {
+      offset: Number(p.session.offset) || 0,
+      open: p.session.open,
+      close: p.session.close,
+      days: p.session.days >>> 0,
+    };
+  }
   // 세대 교체: 이 종목의 이력만 비우고 새로 쌓는다 (shcode+generation 조합, 계획서 §18)
   if (feed.noteGeneration(cache, p.generation)) {
     feed.reset(cache);
@@ -2492,7 +2554,7 @@ function applyStatus(msg) {
   // 칸 반영 시 새 봉 앞에 같은 순서로 update()한다 (아래 isTail 분기 주석 참조).
   const liveWs = [];
   if (barCode === 1 && prevTail !== undefined) {
-    for (let wt = prevTail + 60; wt < t; wt += 60) liveWs.push({ time: wt });
+    for (const wt of Gaps.gapMinutes(prevTail, t, cache.session)) liveWs.push({ time: wt });
   }
   const isTail = cache.barSeq[cache.barSeq.length - 1] === t;
   if (barCode >= 0) {
@@ -2544,6 +2606,7 @@ function applyStatus(msg) {
   ind.ymae = YmaeLayers.parseYmae(p.ymae);
   ind.sniper = SniperLayers.parseSniper(p.sniper);
   ind.os = OsLayers.parse(p.os);
+  ind.vb = Number(p.vb) || 0;
   ind.cu = CuLayers.parse(p.cu);
   ind.snco = SncoLayers.parse(p.snco);
   ind.pvc = PvcLayers.parsePvc(p.pvc);
@@ -2557,7 +2620,8 @@ function applyStatus(msg) {
     const painted = cache.bars.get(t);
     if (painted) {
       for (const pane of panes) {
-        if (pane.symbol !== sh || !pane.active.has("fx_curve_os") || !pane.candleSeries) continue;
+        if (pane.symbol !== sh || !pane.candleSeries) continue;
+        if (!pane.active.has("fx_curve_os") && !pane.active.has("vb_paint") && !pane.active.has("fx_paint_os")) continue;
         try { pane.candleSeries.update(candlePoint(pane, painted)); }
         catch { /* 과거 시각은 아래 재구성이 맡는다 */ }
       }
@@ -2614,6 +2678,14 @@ function applyStatus(msg) {
       else entry.handle.applyLive(p, ctx);
     } catch (err) {
       console.error(`[${sh}] 국내선물 Data2 반영 실패 t=${t}`, err);
+    }
+  }
+
+  if (barCode === 1 && !seedingNow) {
+    for (const pane of panes) {
+      if (!pane.systems?.has("vb-strangle")) continue;
+      const codes = frameSymbolCodes(pane.frame);
+      if (codes[0] === sh || codes[1] === sh || codes[2] === sh) refreshVbStrangle(pane);
     }
   }
 
@@ -2711,7 +2783,7 @@ function clampBarCap(n) {
 // renderSymbolPanes와 달리 스크롤 애니메이션이 없어 프레임 뮤트(mutePaneRange)로 충분하다.
 function rebuildPaneCandles(pane, cache) {
   const bars = cache.barSeq.map((t) => cache.bars.get(t)).filter(Boolean);
-  const rows = Gaps.withWhitespace(bars); // 균일 분 그리드 — renderSymbolPanes와 같은 계약
+  const rows = Gaps.withWhitespace(bars, cache.session);
   const range = pane.chart.timeScale().getVisibleRange(); // 시각 창 (데이터 없으면 null)
   mutePaneRange(pane);
   pane.candleSeries.setData(rows.map((r) => candlePoint(pane, r)));
@@ -2740,7 +2812,7 @@ function renderSymbolPanes(shcode) {
   // 구멍 채움 정책 차이로 1칸의 시간이 구간마다 달라 칸 간 x가 어긋났기 때문이다
   // (gaps.js 헤더의 2026-10-01 실측 참조). 라이브 꼬리는 noteBar/applyStatus가 같은
   // 규칙으로 채운다 (applyStatus 주석 참조).
-  const rows = Gaps.withWhitespace(bars);
+  const rows = Gaps.withWhitespace(bars, cache.session);
   // 보이는 창은 setData 전에, 그 칸이 속한 화면틀에서만 읽는다. seriesTimes를 바꾼 뒤
   // 논리 인덱스를 읽으면 이전 창과 어긋나고, 다른 화면틀의 창을 가져오면 시간축이 섞인다.
   const frameViews = new Map();
@@ -3335,6 +3407,7 @@ async function seedSymbolNow(shcode) {
     noteSeed(shcode, 0, pageLimit); // 리셋으로 다시 받으면 이 종목만 0으로 되돌린다
     try {
       const all = [];
+      let seedSession = null;
       const memEvents = [];
       const pstEvents = [];
       const gapsSec = []; // 구멍 구간 누적 (µs → 초) — 페이지 경계 구멍은 엔진이 경계 쌍까지 검사해 준다
@@ -3352,8 +3425,20 @@ async function seedSymbolNow(shcode) {
         feed.noteGeneration(cache, p.generation);
         // 지표 매니페스트: 첫 페이지에서 한 번 받아 칸 지표 패널을 구성한다
         if (pages === 0 && Array.isArray(p.indicators)) setIndicatorManifest(p.indicators);
+        if (p.session && Number.isFinite(p.session.open) && Number.isFinite(p.session.close)) {
+          seedSession = {
+            offset: Number(p.session.offset) || 0,
+            open: p.session.open,
+            close: p.session.close,
+            days: p.session.days >>> 0,
+          };
+        }
         const rows = p.bars ?? [];
         const inds = p.ind ?? [];
+        const vbAt = {};
+        for (const pair of p.vb ?? []) {
+          if (Array.isArray(pair)) vbAt[pair[0]] = Number(pair[1]) || 0;
+        }
         for (let ri = 0; ri < rows.length; ri++) {
           const [t, o, h, l, c] = rows[ri];
           const fx3rows = p.fx3 ?? [];
@@ -3370,7 +3455,7 @@ async function seedSymbolNow(shcode) {
             time: Number(t) / 1e6, open: o, high: h, low: l, close: c,
             ind: inds[ri], fx3: fx3rows[ri], pgap: pgrows[ri], rgap: rgrows[ri],
             mgap: mgrows[ri], ymae: ymrows[ri], sniper: snrows[ri], pvc: pvcrows[ri],
-            os: osrows[ri], cu: curows[ri], snco: sncorows[ri],
+            os: osrows[ri], cu: curows[ri], snco: sncorows[ri], vb: vbAt[ri] || 0,
           });
         }
         // ⑥⑦ 갱신·저장 이벤트 (희소) — 페이지 경계에서 중복되지 않게 시각으로 모은다
@@ -3382,6 +3467,7 @@ async function seedSymbolNow(shcode) {
       }
       if (cache.seedToken !== seedTok) continue; // 시딩 중 리셋 — 새 기준으로 다시 가져온다
       feed.reset(cache); // 시딩 중 라이브로 쌓인 봉과 혼합하지 않는다 (스냅샷 기준으로 다시 쌓음)
+      if (seedSession) cache.session = seedSession;
       cache.gaps = gapsSec; // 수신·보관만 한다 — 표시용 채움은 균일 분 그리드(엔진 gaps의
                             // 상위 집합)가 담당하므로 표시 경로는 읽지 않는다 (gaps.js 헤더 참조).
                             // reset 이후에 넣어야 지워지지 않는다
@@ -3407,6 +3493,7 @@ async function seedSymbolNow(shcode) {
         ind.ymae = YmaeLayers.parseYmae(b.ymae);
         ind.sniper = SniperLayers.parseSniper(b.sniper);
         ind.os = OsLayers.parse(b.os);
+        ind.vb = Number(b.vb) || 0;
         ind.cu = CuLayers.parse(b.cu);
         ind.snco = SncoLayers.parse(b.snco);
         ind.pvc = PvcLayers.parsePvc(b.pvc);

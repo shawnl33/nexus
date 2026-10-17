@@ -202,6 +202,10 @@ static void test_fut_daily_parse(void) {
     TR_CHECK(bars[0].low == 109150);
     TR_CHECK(bars[1].high == 109435);
     TR_CHECK(bars[1].low == 109365);
+    TR_CHECK(bars[0].close == 109250);
+    TR_CHECK(bars[0].volume == 120000);
+    TR_CHECK(bars[1].close == 109400);
+    TR_CHECK(bars[1].volume == 137000);
 }
 
 static void test_daily_empty_is_not_error(void) {

@@ -256,6 +256,13 @@ static bool pipe_init(tr_engine_t *e, tr_pipeline_t *p, const tr_engine_config_t
             return false;
         }
     }
+    {
+        tr_vb_cfg_t vcfg;
+        tr_vb_default_cfg(&vcfg);
+        if (!tr_vb_init(&p->vb, &vcfg)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -523,7 +530,8 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
                            const uint32_t *cu_rgb, const uint8_t *cu_w,
                            int snco_n, const uint16_t *snco_id, const double *snco_v,
                            const uint32_t *snco_rgb, const uint8_t *snco_w,
-                           int ob_valid, double ob_score, const tr_bar_status_t *frozen) {
+                           int ob_valid, double ob_score, uint32_t vb_rgb,
+                           const tr_bar_status_t *frozen) {
     const tr_lr3_t *r = &p->lr3;
     const tr_score1m_t *sc = &p->score;
     const tr_market_t *m = &p->mkt;
@@ -800,8 +808,9 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
         "\"mem\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"pst\":[%d,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g],"
         "\"final\":[%d,%d,%d,%d],\"reg_flat\":%.10g,\"tick\":%g,\"day\":%lld,"
-        "\"sma\":[%d,%.10g,%.10g,%.10g],%s%s%s%s%s%s%s%s%s%s%s%s\"shcode\":\"%s\"}",
-        (long long)bar->open_time_us, closed_v,
+        "\"sma\":[%d,%.10g,%.10g,%.10g],%s%s%s%s%s%s%s%s%s%s%s%s\"vb\":%u,"
+        "\"session\":{\"offset\":%d,\"open\":%u,\"close\":%u,\"days\":%u},\"shcode\":\"%s\"}",
+        (long long)tr_hts_time_us(bar->open_time_us), closed_v,
         (long long)bar->open, (long long)bar->high, (long long)bar->low, (long long)bar->close,
         reg_valid_v ? 1 : 0, line_v, slope_v, r2_v,
         pred_v[0], pred_v[1], pred_v[2],
@@ -821,7 +830,9 @@ static void publish_status(tr_engine_t *e, tr_pipeline_t *p, const tr_candle_t *
         pst_l[0], pst_l[1], pst_l[2],
         final_valid_v, final_dir_v, final_state_v, final_strength_v,
         reg_flat, tick_scale(p), (long long)day_v,
-        sma_ok, sma_v[0], sma_v[1], sma_v[2], fxbuf, fx3buf, pgbuf, rgbuf, mgbuf, ymbuf, snbuf, pvcbuf, raybuf, osbuf, cubuf, scbuf, p->shcode);
+        sma_ok, sma_v[0], sma_v[1], sma_v[2], fxbuf, fx3buf, pgbuf, rgbuf, mgbuf, ymbuf, snbuf, pvcbuf, raybuf, osbuf, cubuf, scbuf, vb_rgb,
+        (int)p->session.utc_offset_min, p->session.open_min, p->session.close_min,
+        (unsigned)p->session.days_mask, p->shcode);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return;
     }
@@ -902,7 +913,7 @@ int tr_bar_status_format_mem(const tr_bar_status_t *st, bool first, char *buf, s
     }
     return snprintf(buf, cap,
                     "%s[%lld,%d,%d,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%d,%d,%d,%d]",
-                    first ? "" : ",", (long long)st->open_time_us,
+                    first ? "" : ",", (long long)tr_hts_time_us(st->open_time_us),
                     st->mem_valid ? 1 : 0, st->mem_dir, st->mem_price,
                     st->mem_target[0], st->mem_target[1], st->mem_target[2],
                     st->mem_upper[0], st->mem_upper[1], st->mem_upper[2],
@@ -1726,6 +1737,25 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         }
     }
 
+    /* VolBurst 강조. 1분봉에서만 봉 수를 올린다. 정정 봉은 적어 둔 색을 유지한다. */
+    uint32_t vb_rgb = 0;
+    if (e->cfg.timeframe_sec == 60 && !is_correction) {
+        tr_vb_bar_t vin;
+        int64_t ymd = 0;
+        int64_t tod = 0;
+        memset(&vin, 0, sizeof(vin));
+        civil_stamp(bar->open_time_us, p->session.utc_offset_min, &ymd, &tod);
+        vin.time = tod;
+        vin.high = (double)bar->high;
+        vin.low = (double)bar->low;
+        vin.close = (double)bar->close;
+        vin.volume = (double)bar->volume;
+        vin.is_new_bar = is_new_bar ? 1 : 0;
+        vb_rgb = tr_vb_on_bar(&p->vb, &vin);
+    } else if (have_frozen) {
+        vb_rgb = frozen.vb_rgb;
+    }
+
     /* 봉 링과 open_time 기준으로 정합을 맞춰 봉별 지표를 기록한다 (스냅샷 복원용).
      * 새 봉이면 push, 현재 봉 갱신이면 최신 교체, 늦은 정정은 해당 슬롯만 고친다. */
     if (p->status_ring_on) {
@@ -1912,6 +1942,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         memcpy(st.snco_v, snco_v, sizeof(st.snco_v));
         memcpy(st.snco_rgb, snco_rgb, sizeof(st.snco_rgb));
         memcpy(st.snco_w, snco_w, sizeof(st.snco_w));
+        st.vb_rgb = vb_rgb;
         /* 정정은 지금 계산으로 과거 슬롯을 덮지 않는다. 적어 둔 지표를 그대로 둔다. */
         if (have_frozen) {
             st = frozen;
@@ -1973,7 +2004,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
                    ovs_scope ? cu_rgb : 0, ovs_scope ? cu_w : 0,
                    ovs_scope ? snco_n : 0, ovs_scope ? snco_id : 0, ovs_scope ? snco_v : 0,
                    ovs_scope ? snco_rgb : 0, ovs_scope ? snco_w : 0,
-                   bar_ob_valid, bar_ob_score, have_frozen ? &frozen : 0);
+                   bar_ob_valid, bar_ob_score, vb_rgb, have_frozen ? &frozen : 0);
 
     /* 스트림 위치 마커는 현재 봉 이벤트에서만 전진한다. 과거 봉 정정(늦은 틱)이
      * trading day·봉 위치를 되돌리면 다음 현재 봉이 세션 첫 봉/새 봉으로 오인되어

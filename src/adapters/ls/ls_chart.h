@@ -91,6 +91,8 @@ typedef struct {
     int64_t day;   /* 거래일 (date 필드, days since epoch, KST 날짜) */
     int64_t high;  /* ×100 스케일 raw (분봉과 동일 규칙) */
     int64_t low;
+    int64_t close;
+    int64_t volume; /* jdiff_vol. 없으면 0 */
 } ls_daily_bar_t;
 
 /* 일봉 응답 파서 (테스트 가능하도록 분리). 두 kind 모두 OutBlock1이 오름차순(과거→최신)임을

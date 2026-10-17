@@ -31,6 +31,7 @@ const BtSide = (() => {
     fx_ec20: { createHandle: (chart) => OsLayers.ecHandle(chart, true) },
     fx_paint_v12: { createHandle: () => OsLayers.paintHandle() },
     fx_paint_os: { createHandle: () => OsLayers.paintHandle() },
+    vb_paint: { createHandle: () => OsLayers.paintHandle() },
     fx_sig_v6: { createHandle: (chart) => OsLayers.sigHandle(chart) },
     fx_sig_pair: { createHandle: (chart) => OsLayers.sigHandle(chart, "pair") },
     fx_sig_zd: { createHandle: (chart) => OsLayers.sigHandle(chart, "zd") },

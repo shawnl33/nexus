@@ -544,11 +544,14 @@ int ls_chart_parse_daily(const char *body, size_t body_len, ls_chart_kind_t kind
             break;
         }
         ls_daily_bar_t *b = &out[n];
+        memset(b, 0, sizeof(*b));
         if (!parse_date_day(yyjson_get_str(yyjson_obj_get(bar, "date")), &b->day) ||
             !parse_price_scaled(yyjson_obj_get(bar, "high"), &b->high) ||
-            !parse_price_scaled(yyjson_obj_get(bar, "low"), &b->low)) {
+            !parse_price_scaled(yyjson_obj_get(bar, "low"), &b->low) ||
+            !parse_price_scaled(yyjson_obj_get(bar, "close"), &b->close)) {
             continue;
         }
+        b->volume = parse_volume(yyjson_obj_get(bar, "jdiff_vol"));
         n++;
     }
     yyjson_doc_free(doc);

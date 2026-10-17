@@ -14,15 +14,55 @@
 #include "adapters/ls/ls_chart.h"
 #include "adapters/ls/ls_http.h"
 #include "adapters/ls/ls_master.h"
+#include "core/market/session.h"
 #include "core/model/civil_time.h"
 
 /* src/app/main.c 정의 — 테스트에서는 extern 선언으로 링크한다. */
 bool tr_backfill_keep_bar(tr_time_us_t open_us, tr_time_us_t now_us, uint32_t timeframe_sec);
 bool tr_backfill_marks_rt_only(int kind, int chart_rc);
 bool tr_backfill_page_extends(tr_time_us_t page_oldest, bool have_bars, tr_time_us_t held_oldest);
+tr_time_us_t tr_backfill_cover_until(const tr_time_us_t *opens, size_t n);
+bool tr_nh_catchup_due(tr_time_us_t last_us, tr_time_us_t now_us);
+tr_session_policy_t tr_ks_fut_session(void);
 
 #define TF1M_SEC 60u
 #define TF1M_US ((tr_time_us_t)TF1M_SEC * TR_US_PER_SEC)
+
+static tr_time_us_t kst(int y, unsigned mo, unsigned d, unsigned h, unsigned mi) {
+    tr_civil_t c = {y, mo, d, h, mi, 0};
+    tr_time_us_t t = -1;
+    TR_CHECK(tr_time_us_from_civil(&c, 540, &t));
+    return t;
+}
+
+static void test_nh_catchup_due_after_two_minutes(void) {
+    tr_time_us_t t = kst(2026, 10, 14, 1, 57);
+    TR_CHECK(!tr_nh_catchup_due(0, t));
+    TR_CHECK(!tr_nh_catchup_due(t, t + 120 * TR_US_PER_SEC));
+    TR_CHECK(tr_nh_catchup_due(t, t + 121 * TR_US_PER_SEC));
+}
+
+static void test_cover_until_reaches_past_the_long_hole(void) {
+    tr_time_us_t opens[5];
+    opens[0] = kst(2026, 10, 14, 1, 56);
+    opens[1] = kst(2026, 10, 14, 1, 57);
+    opens[2] = kst(2026, 10, 14, 13, 12);
+    opens[3] = kst(2026, 10, 14, 13, 13);
+    opens[4] = kst(2026, 10, 14, 13, 15);
+    TR_CHECK(tr_backfill_cover_until(opens, 5) == opens[1]);
+}
+
+static void test_cover_until_skips_halt_and_weekend(void) {
+    tr_time_us_t halt[2];
+    halt[0] = kst(2026, 10, 15, 5, 59);
+    halt[1] = kst(2026, 10, 15, 7, 0);
+    TR_CHECK(tr_backfill_cover_until(halt, 2) == 0);
+    tr_time_us_t weekend[2];
+    weekend[0] = kst(2026, 10, 9, 6, 0);
+    weekend[1] = kst(2026, 10, 12, 7, 0);
+    TR_CHECK(tr_backfill_cover_until(weekend, 2) == 0);
+    TR_CHECK(tr_backfill_cover_until(halt, 1) == 0);
+}
 
 static tr_time_us_t utc(int y, unsigned mo, unsigned d, unsigned h, unsigned mi, unsigned s) {
     tr_civil_t c = {y, mo, d, h, mi, s};
@@ -78,6 +118,18 @@ static void test_page_extends_only_when_older(void) {
     TR_CHECK(!tr_backfill_page_extends(newer, true, held));
 }
 
+static void test_ks_fut_session_is_day_only(void) {
+    tr_session_policy_t s = tr_ks_fut_session();
+    TR_CHECK(s.open_min == 8 * 60 + 45);
+    TR_CHECK(s.close_min == 15 * 60 + 46);
+    TR_CHECK(tr_session_span(&s, kst(2026, 10, 16, 9, 0), 0, 0));
+    TR_CHECK(tr_session_span(&s, kst(2026, 10, 16, 15, 44), 0, 0));
+    TR_CHECK(tr_session_span(&s, kst(2026, 10, 16, 15, 45), 0, 0));
+    TR_CHECK(!tr_session_span(&s, kst(2026, 10, 16, 15, 46), 0, 0));
+    TR_CHECK(!tr_session_span(&s, kst(2026, 10, 16, 18, 1), 0, 0));
+    TR_CHECK(!tr_session_span(&s, kst(2026, 10, 17, 3, 0), 0, 0));
+}
+
 static void test_rt_only_classification(void) {
     TR_CHECK(tr_backfill_marks_rt_only(LS_MARKET_OVS_FUT, LS_CHART_EMPTY));
     TR_CHECK(!tr_backfill_marks_rt_only(LS_MARKET_OVS_FUT, LS_HTTP_OK));
@@ -94,6 +146,10 @@ int main(void) {
     test_boundary_one_bar_slack();
     test_timeframe_parameterized();
     test_page_extends_only_when_older();
+    test_ks_fut_session_is_day_only();
     test_rt_only_classification();
+    test_nh_catchup_due_after_two_minutes();
+    test_cover_until_reaches_past_the_long_hole();
+    test_cover_until_skips_halt_and_weekend();
     TR_TEST_SUMMARY();
 }

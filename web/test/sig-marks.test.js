@@ -138,6 +138,19 @@ test("포지션감시 줄은 수익전환과 총손익을 읽는다", () => {
   assert.equal(parsed.pos1.total, 20);
 });
 
+test("백테스트 체결 글자는 이름 아래에 계약수를 그린다", () => {
+  const chart = fakeChart();
+  const s = chart.addLineSeries();
+  const pen = Os.labelMarks();
+  s.attachPrimitive(pen);
+  pen.setPoints([
+    { time: 1000, value: 90, position: "belowBar", color: "#d4ff4a", text: "돌파매수\n2계약" },
+    { time: 1060, value: 110, position: "aboveBar", color: "#ff8c00", text: "색청산매수" },
+  ]);
+  const texts = drawAll(chart).filter((c) => c[0] === "text").map((c) => c[1]);
+  assert.deepEqual(texts, ["돌파매수", "2계약", "색청산매수"]);
+});
+
 test("짝 화살은 계약수와 1차 틱을 적는다", () => {
   assert.equal(Os.pairLabel({
     pairDir: 1, pairKind: 1, pairGrade: 8, pairAk: 0, pairAg: 0,

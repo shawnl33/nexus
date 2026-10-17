@@ -156,22 +156,35 @@ function draw(host, bars, trades, barStyle) {
   data.sort((a, b) => a.time - b.time);
   if (data.length) series.setData(data);
   if (style !== "none" && kind !== "line" && trades) {
-    const marks = trades.filter((t) => t.status === "체결" && seen.has(t.t)).map((t) => ({
-      time: t.t,
-      position: t.name.includes("청산") ? "aboveBar" : "belowBar",
-      color: t.name.includes("청산") ? "#ff8c00" : "#d4ff4a",
-      shape: t.name.includes("청산") ? "arrowDown" : "arrowUp",
-      text: t.name,
-    }));
+    const byTime = new Map(data.map((b) => [b.time, b]));
+    const marks = [];
+    const labels = [];
+    for (const t of trades) {
+      if (t.status !== "체결" || !seen.has(t.t)) continue;
+      const exit = String(t.name || "").includes("청산");
+      const position = exit ? "aboveBar" : "belowBar";
+      const color = exit ? "#ff8c00" : "#d4ff4a";
+      marks.push({ time: t.t, position, color, shape: exit ? "arrowDown" : "arrowUp" });
+      const bar = byTime.get(t.t);
+      const value = bar ? (exit ? bar.high : bar.low) : null;
+      const qty = Number(t.qty);
+      const text = qty > 0 ? `${t.name}\n${qty}계약` : (t.name || "");
+      if (text && Number.isFinite(value)) labels.push({ time: t.t, value, position, color, text });
+    }
     if (typeof LightweightCharts.createSeriesMarkers === "function") LightweightCharts.createSeriesMarkers(series, marks);
     else series.setMarkers(marks);
+    if (labels.length && typeof series.attachPrimitive === "function" && globalThis.OsLayers?.labelMarks) {
+      const pen = OsLayers.labelMarks();
+      series.attachPrimitive(pen);
+      pen.setPoints(labels);
+    }
   }
   series.applyOptions({ visible: style !== "none" });
   chart.timeScale().fitContent();
   const w = host.clientWidth;
   const h = host.clientHeight;
   if (w > 0 && h > 0) chart.applyOptions({ width: w, height: h });
-  return { chart, series };
+  return { chart: v4Chart(chart, LightweightCharts), series };
 }
 
 function showResult(payload) {

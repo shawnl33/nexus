@@ -82,6 +82,65 @@ static void submit_named(tr_yl_book_t *book, int action, int price_type, double 
     tr_yl_book_submit(book, &o);
 }
 
+static const char *exit_fallback(int code) {
+    if (code == -1) {
+        return "빨강청산";
+    }
+    if (code == 2) {
+        return "시간청산매수";
+    }
+    if (code == -2) {
+        return "시간청산매도";
+    }
+    return "파랑청산";
+}
+
+static void drop_limits(tr_yl_book_t *book) {
+    int i = 0;
+    while (i < book->queue_n) {
+        if (book->queue[i].price_type != TR_YL_LIMIT) {
+            i++;
+            continue;
+        }
+        {
+            int n = book->queue_n - i - 1;
+            if (n > 0) {
+                memmove(&book->queue[i], &book->queue[i + 1], (size_t)n * sizeof(book->queue[0]));
+            }
+            book->queue_n--;
+        }
+    }
+}
+
+int tr_yl_fxpair_orders(tr_yl_book_t *book, const tr_fxpair_out_t *out, int limit_filled) {
+    int n = 0;
+    if (book == 0 || out == 0) {
+        return -1;
+    }
+    if (out->exit_code != 0 && out->exit_qty > 0) {
+        int action = out->exit_code > 0 ? TR_YL_EXIT_LONG : TR_YL_EXIT_SHORT;
+        submit_named(book, action, TR_YL_ONCLOSE, 0, out->exit_qty,
+                     out->exit_name != 0 ? out->exit_name : exit_fallback(out->exit_code));
+        n++;
+    }
+    if (out->entry_dir != 0) {
+        submit_named(book, out->entry_dir > 0 ? TR_YL_BUY : TR_YL_SELL, TR_YL_ONCLOSE, 0, out->entry_qty, out->entry_name);
+        n++;
+    }
+    /* 1차는 하나만 대기한다. 체결된 뒤에는 다시 넣지 않아 잔량이 남는다. */
+    if (limit_filled) {
+        drop_limits(book);
+    } else if (out->limit_dir != 0 && out->limit_qty > 0) {
+        const char *lname = out->limit_name != 0 ? out->limit_name
+                            : (out->limit_dir > 0 ? "1차목표청산매수" : "1차목표청산매도");
+        drop_limits(book);
+        submit_named(book, out->limit_dir > 0 ? TR_YL_EXIT_LONG : TR_YL_EXIT_SHORT, TR_YL_LIMIT, out->limit_px,
+                     out->limit_qty, lname);
+        n++;
+    }
+    return n;
+}
+
 int tr_yl_fxpair_bar(tr_yl_book_t *book, tr_fxos_t *scope, tr_fxpair_t *pair, const tr_fxos_input_t *in) {
     tr_yl_bar_t bar;
     tr_fxpair_in_t pin;
@@ -130,31 +189,9 @@ int tr_yl_fxpair_bar(tr_yl_book_t *book, tr_fxos_t *scope, tr_fxpair_t *pair, co
     pin.prev_dn = scope->out.flat_dn_slope < 0 ? -scope->out.flat_dn_slope : scope->out.flat_dn_slope;
     pin.three_ratio = scope->applied.three_ratio;
     pin.sq_hold = scope->applied.sq_bars;
-    pin.has_market = 1;
-    pin.market = book->pos.side;
     tr_fxpair_on_bar(pair, &pin, &pout);
     before = tr_yl_book_trade_count(book);
-    if (pout.exit_code != 0) {
-        int action = pout.exit_code > 0 ? TR_YL_EXIT_LONG : TR_YL_EXIT_SHORT;
-        const char *name = "파랑청산";
-        if (pout.exit_code == -1) {
-            name = "빨강청산";
-        } else if (pout.exit_code == 2) {
-            name = "시간청산매수";
-        } else if (pout.exit_code == -2) {
-            name = "시간청산매도";
-        }
-        submit_named(book, action, TR_YL_ONCLOSE, 0, 0, pout.exit_name != 0 ? pout.exit_name : name);
-    }
-    if (pout.entry_dir != 0) {
-        submit_named(book, pout.entry_dir > 0 ? TR_YL_BUY : TR_YL_SELL, TR_YL_ONCLOSE, 0, pout.entry_qty, pout.entry_name);
-    }
-    if (pout.limit_dir != 0 && pout.limit_qty > 0) {
-        const char *lname = pout.limit_name != 0 ? pout.limit_name
-                            : (pout.limit_dir > 0 ? "1차목표청산매수" : "1차목표청산매도");
-        submit_named(book, pout.limit_dir > 0 ? TR_YL_EXIT_LONG : TR_YL_EXIT_SHORT, TR_YL_LIMIT, pout.limit_px,
-                     pout.limit_qty, lname);
-    }
+    tr_yl_fxpair_orders(book, &pout, pair->limit_filled);
     tr_yl_book_close(book);
     return tr_yl_book_trade_count(book) - before;
 }

@@ -17,4 +17,8 @@ int tr_yl_fxsig_emit(tr_yl_book_t *book, int sig_dir, int sig_exit, int sig_kind
 int tr_yl_fxsig_bar(tr_yl_book_t *book, tr_fxos_t *scope, const tr_fxos_input_t *in);
 int tr_yl_fxpair_bar(tr_yl_book_t *book, tr_fxos_t *scope, tr_fxpair_t *pair, const tr_fxos_input_t *in);
 
+/* 가상포지션 주문을 장부에 넣는다. limit_filled 이면 1차를 다시 넣지 않는다.
+ * 청산 수량이 0이면 넣지 않는다. 넣은 주문 수. 인자가 없으면 -1. */
+int tr_yl_fxpair_orders(tr_yl_book_t *book, const tr_fxpair_out_t *out, int limit_filled);
+
 #endif
