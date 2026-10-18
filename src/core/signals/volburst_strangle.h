@@ -12,7 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "core/indicators/volburst_paint.h"
+#include "core/paintbar/volburst_paint.h"
 
 #define TR_VBSTR_ENTRY 1
 #define TR_VBSTR_EXIT 3

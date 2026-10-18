@@ -12,6 +12,7 @@
 |---|---|
 | `src/core/functions/` | 예스랭귀지 함수 |
 | `src/core/indicators/` | 지표와 해외선물 진입 스코프 |
+| `src/core/paintbar/` | 강조식. 캔들 색 |
 | `src/core/signals/` | 위클리 페어 |
 | `src/core/market/` | 봉, 링, 시계열 `yl_var` |
 | `src/core/model/` | 시간, 단위, 종목 |

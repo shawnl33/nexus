@@ -106,7 +106,7 @@ add_library(core STATIC
     src/core/indicators/past_prediction.c
     src/core/indicators/score_1m.c
     src/core/indicators/weekly_plot_v1.c
-    src/core/indicators/volburst_paint.c
+    src/core/paintbar/volburst_paint.c
     src/core/signals/volburst_strangle.c
     src/core/signals/weekly_pair_v1.c
     src/core/model/civil_time.c

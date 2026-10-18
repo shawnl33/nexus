@@ -2,7 +2,7 @@
 
 #include "test_util.h"
 
-#include "core/indicators/volburst_paint.h"
+#include "core/paintbar/volburst_paint.h"
 
 static tr_vb_cfg_t short_cfg(void) {
     tr_vb_cfg_t c;

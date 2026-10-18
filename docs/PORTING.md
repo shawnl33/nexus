@@ -10,6 +10,7 @@ C로 옮긴 코어를 다른 대시보드에 붙이는 절차는 [CORE_PORT.md](
 |---|---|---|
 | 함수 | `functions/` | `functions/` |
 | 지표 | `indicators/` | `indicators/` |
+| 강조식 | `paintbar/` | `paintbar/` |
 | 시그널 | `signals/` | `signals/` |
 | 전략 | `strategies/` | `strategies/` |
 

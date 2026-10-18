@@ -35,7 +35,7 @@
 #include "core/indicators/fx_os_scope.h"
 #include "core/indicators/fx_curve_os.h"
 #include "core/indicators/fx_sniper_co.h"
-#include "core/indicators/volburst_paint.h"
+#include "core/paintbar/volburst_paint.h"
 #include "core/functions/ks_score_v1.h"
 #include "core/market/bar_builder.h"
 

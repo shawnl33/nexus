@@ -8,7 +8,7 @@
 
 이 자료는 해당 프로젝트의 구현 참고용이다. 원본을 수정할 때에는 별도 작업 파일과 변경 이력을 사용한다. 설명용 HTML과 같은 내용의 zip 묶음은 두지 않는다.
 
-원본 폴더 이름을 C 포팅 폴더 이름으로 그대로 쓴다. 함수는 `yeslanguage/functions/`, 지표는 `yeslanguage/indicators/`, 시그널은 `yeslanguage/signals/`, 전략은 `yeslanguage/strategies/`이며, C 쪽은 `src/core/` 아래 같은 이름이다(규약은 [docs/PORTING.md](../docs/PORTING.md)). 시그널 원본을 전략 폴더로 옮기지 않는다.
+원본 폴더 이름을 C 포팅 폴더 이름으로 그대로 쓴다. 함수는 `yeslanguage/functions/`, 지표는 `yeslanguage/indicators/`, 강조식은 `yeslanguage/paintbar/`, 시그널은 `yeslanguage/signals/`, 전략은 `yeslanguage/strategies/`이며, C 쪽은 `src/core/` 아래 같은 이름이다(규약은 [docs/PORTING.md](../docs/PORTING.md)). 시그널 원본을 전략 폴더로 옮기지 않는다. 강조식 원본을 지표 폴더로 옮기지 않는다.
 
 | 원래 파일명 | 묶음 내 위치 | 바이트 | 용도 |
 |---|---|---:|---|

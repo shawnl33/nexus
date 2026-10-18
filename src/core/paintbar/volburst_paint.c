@@ -1,4 +1,4 @@
-#include "core/indicators/volburst_paint.h"
+#include "core/paintbar/volburst_paint.h"
 
 #include <string.h>
 
