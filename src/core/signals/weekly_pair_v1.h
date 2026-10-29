@@ -3,8 +3,10 @@
 
 /* 위클리 옵션 페어 주문.
  * 양매수 V34: reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매수.txt 704~1083.
+ * 양매수 V45: 같은 파일 16~20, 715~785, 864~1078. ruleset으로 명시 선택한다.
  * 양매도 V3:  reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매도.txt 704~1076.
- * 청산 사슬은 같다. 양매도는 손익 부호와 진입 조건만 다르다.
+ * V34와 양매도는 청산 사슬이 같고 V45 양매수는 만기 2차 추적 사슬을 추가한다.
+ * 양매도는 손익 부호와 진입 조건만 다르다.
  * 점수는 넣지 않는다. 삼선·이탈 값은 호출자가 tr_ksscore_eval 결과를 넘긴다.
  * 화면 시뮬은 tr_wpair_replay가 보유 1분봉을 다시 돌려 신호만 만든다.
  * 실주문·자동주문은 연결하지 않는다. 백테스트 신호다.
@@ -22,6 +24,9 @@
 
 #define TR_WPAIR_LONG 1
 #define TR_WPAIR_SHORT (-1)
+
+#define TR_WPAIR_RULES_V34 0
+#define TR_WPAIR_RULES_V45 1
 
 #define TR_WPAIR_ORDER_NONE 0
 #define TR_WPAIR_ORDER_ENTRY 1
@@ -43,11 +48,15 @@ typedef struct {
     double tolerance; /* 허용오차 */
     int diag; /* 진단출력사용. 주문에는 영향 없다 */
     int split_exit; /* 분할청산 */
-    double expiry_resid_pct; /* 만기잔량익절률 */
-    int32_t resid_wait_min; /* 잔량익절대기분 */
+    double expiry_resid_pct; /* V34 만기잔량익절률 */
+    int32_t resid_wait_min; /* V34 잔량익절대기분 */
     int32_t low_wait_min; /* 저수익대기분 */
     double low_pct; /* 저수익기준률 */
     double low_cut_pct; /* 저수익청산비율 */
+    int ruleset; /* TR_WPAIR_RULES_*. V45는 양매수에만 적용 */
+    int expiry_override; /* V45 만기당일지정 */
+    int32_t early_second_min; /* V45 조기이차기준분 */
+    double trail_interval; /* V45 이차추적간격 */
 } tr_wpair_config_t;
 
 /* 이 차트(Data1)와 상대(Data3), 선물 1분(Data2), 점수에서 읽은 값. */
@@ -81,7 +90,7 @@ typedef struct {
     int32_t contracts;
     int order_kind;
     int32_t order_qty;
-    int order_reason; /* 0 진입, 1·2·3·4·9·10·11·12 청산, 13 저수익 부분 */
+    int order_reason; /* 0 진입, 1·2·3·4·9·10·11·12·14 청산, 13 저수익 부분 */
     const char *order_name;
     int entry_pending;
     int exit_req;
@@ -112,6 +121,10 @@ typedef struct {
     int32_t entry_elapsed;
     int32_t resid_elapsed;
     int32_t signal_bar;
+    int trail_active; /* V45 만기 2차 추적 상태 */
+    double trail_target;
+    double trail_peak;
+    double trail_protect;
 } tr_wpair_out_t;
 
 /* 식의 Var. 봉 시작 복사용이며 포인터가 없다. */
@@ -164,6 +177,10 @@ typedef struct {
     int32_t order_qty;
     int order_reason;
     const char *order_name;
+    int trail_active;
+    double trail_target;
+    double trail_peak;
+    double trail_protect;
 } tr_wpair_rt;
 
 typedef struct {

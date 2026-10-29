@@ -67,7 +67,7 @@ static void mark_order(tr_wpair_rt *r, int kind, int32_t qty, int reason, const 
     r->order_name = name;
 }
 
-static const char *exit_all_name(int reason) {
+static const char *exit_all_name(int reason, int v45) {
     switch (reason) {
     case 1:
         return "합산익절";
@@ -82,9 +82,11 @@ static const char *exit_all_name(int reason) {
     case 10:
         return "잔량익절보호";
     case 11:
-        return "만기잔량익절";
+        return v45 ? "만기익절2차최종" : "만기잔량익절";
     case 12:
         return "만기잔량손실청산";
+    case 14:
+        return "만기2차추적청산";
     default:
         return "기타청산";
     }
@@ -95,6 +97,10 @@ static void reset_day(tr_wpair_rt *r) {
     r->entry_fut_bar = -1;
     r->entry_fut_date = 0;
     r->entry_elapsed = 0;
+    r->trail_active = 0;
+    r->trail_target = 0;
+    r->trail_peak = 0;
+    r->trail_protect = 0;
     r->low_done = 0;
     r->low_pending = 0;
     r->low_qty = 0;
@@ -160,7 +166,9 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
     const int side = st->side;
     const int held = r->market_position == side;
     const double sgn = (double)side;
-    const int expiry = yl_dow(b->bdate) == 1 || yl_dow(b->bdate) == 4;
+    const int v45 = side == TR_WPAIR_LONG && cfg->ruleset == TR_WPAIR_RULES_V45;
+    const int expiry = yl_dow(b->bdate) == 1 || yl_dow(b->bdate) == 4 ||
+                       (v45 && cfg->expiry_override == 1);
     const int period_ok = b->compress == 2 && b->interval == 1 && b->d3_compress == 2 &&
                           b->d3_interval == 1;
     const int synced = b->d3_date == b->sdate && b->d3_time == b->stime && b->close > 0.0 &&
@@ -263,6 +271,8 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                                  b->two_max > 0.0;
             const int three_ok = d2_sync(b) && b->calc_ready == 1 && b->three_ready == 1 &&
                                  b->three_peak > 0.0 && b->three_ratio >= 70.0;
+            const int second_time_valid = r->entry_fut_bar >= 0 && r->entry_fut_date == b->sdate &&
+                                          d2_sync(b);
             r->pair_pnl = (sgn * (self_px - r->self_first) * (double)r->self_qty +
                            sgn * (opp_px - r->opp_first) * (double)r->opp_qty) *
                           k_mult;
@@ -270,9 +280,53 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                            sgn * (opp_px / r->opp_first - 1.0)) *
                           50.0;
             r->self_resid_pct = sgn * (self_px - r->self_entry) / r->self_entry * 100.0;
+            if (v45 && cfg->split_exit == 1 && r->first_done && !r->first_pending && expiry) {
+                const double interval = dmax(0.01, cfg->trail_interval);
+                if (!r->trail_active && second_time_valid &&
+                    r->entry_elapsed < imax(0, cfg->early_second_min) &&
+                    r->pair_pct >= cfg->take_pct * 4.0) {
+                    r->trail_active = 1;
+                    r->trail_target = cfg->take_pct * 4.0;
+                    r->trail_peak = r->pair_pct;
+                    r->trail_protect = r->trail_target - interval;
+                }
+                if (r->trail_active) {
+                    r->trail_peak = dmax(r->trail_peak, r->pair_pct);
+                    r->trail_protect = dmax(r->trail_protect,
+                                            r->trail_target +
+                                                int_portion(dmax(0.0, r->trail_peak - r->trail_target) /
+                                                            interval) *
+                                                    interval -
+                                                interval);
+                }
+            }
             if (r->pair_pct <= -cfg->stop_pct) {
                 r->exit_req = 1;
                 r->exit_reason = 2;
+            } else if (v45) {
+                if (cfg->split_exit == 1 && r->first_done && !r->first_pending && expiry &&
+                    r->trail_active && r->pair_pct <= r->trail_protect) {
+                    r->exit_req = 1;
+                    r->exit_reason = 14;
+                } else if (cfg->split_exit == 1 && r->first_done && !r->first_pending && expiry &&
+                           !r->trail_active && second_time_valid &&
+                           r->entry_elapsed >= imax(0, cfg->early_second_min) &&
+                           r->pair_pct >= cfg->take_pct * 4.0) {
+                    r->exit_req = 1;
+                    r->exit_reason = 11;
+                } else if (cfg->split_exit == 1 && r->first_done && !r->first_pending &&
+                           ((!expiry && r->pair_pct < cfg->take_pct) ||
+                            (expiry && r->self_resid_pct < cfg->take_pct && three_ok && ratio_ok &&
+                             b->price_ratio >= 100.0))) {
+                    r->exit_req = 1;
+                    r->exit_reason = 10;
+                } else if (!r->low_pending && !r->first_done &&
+                           ((r->self_first > 0.0 && r->self_first < 3.0 &&
+                             r->pair_pct >= cfg->take_pct * 1.5) ||
+                            (r->self_first >= 3.0 && r->pair_pct >= cfg->take_pct))) {
+                    r->exit_req = 1;
+                    r->exit_reason = expiry ? 9 : 1;
+                }
             } else if (cfg->split_exit == 1 && r->first_done && !r->first_pending && expiry &&
                        r->self_resid_pct < 0.0) {
                 r->exit_req = 1;
@@ -347,7 +401,7 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
         }
         if (r->exit_req) {
             mark_order(r, TR_WPAIR_ORDER_EXIT_ALL, r->contracts, r->exit_reason,
-                       exit_all_name(r->exit_reason));
+                       exit_all_name(r->exit_reason, v45));
         }
     }
 
@@ -381,7 +435,7 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
             }
         }
         if (cfg->trade_off == 0 && r->market_position == 0 && !r->used_today && !r->entry_pending &&
-            !r->exit_req && meet) {
+            !r->exit_req && meet && (!v45 || (b->close > 1.5 && b->d3_close > 1.5))) {
             r->used_today = 1;
             r->self_first = b->close;
             r->opp_first = b->d3_close;
@@ -435,6 +489,10 @@ static void fill_out(const tr_wpair_t *st, tr_wpair_out_t *out) {
     out->entry_elapsed = r->entry_elapsed;
     out->resid_elapsed = r->resid_elapsed;
     out->signal_bar = r->signal_bar;
+    out->trail_active = r->trail_active;
+    out->trail_target = r->trail_target;
+    out->trail_peak = r->trail_peak;
+    out->trail_protect = r->trail_protect;
 }
 
 void tr_wpair_default_config(tr_wpair_config_t *cfg) {
@@ -459,6 +517,10 @@ void tr_wpair_default_config(tr_wpair_config_t *cfg) {
     cfg->low_wait_min = 60;
     cfg->low_pct = 5.0;
     cfg->low_cut_pct = 30.0;
+    cfg->ruleset = TR_WPAIR_RULES_V34;
+    cfg->expiry_override = 0;
+    cfg->early_second_min = 30;
+    cfg->trail_interval = 10.0;
 }
 
 int tr_wpair_init(tr_wpair_t *st, int side, const tr_wpair_config_t *cfg) {

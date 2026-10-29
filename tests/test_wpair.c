@@ -3,6 +3,7 @@
 
 #include "test_util.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "core/signals/weekly_pair_v1.h"
@@ -874,6 +875,470 @@ static void test_trade_off_keeps_exit(void) {
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
 }
 
+static void fresh_v45(tr_wpair_t *st, int side) {
+    tr_wpair_config_t cfg;
+    tr_wpair_default_config(&cfg);
+    cfg.ruleset = TR_WPAIR_RULES_V45;
+    TR_CHECK(tr_wpair_init(st, side, &cfg) == 0);
+}
+
+static int32_t v45_first_done(tr_wpair_t *st) {
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+
+    fresh_v45(st, TR_WPAIR_LONG);
+    next = open_pos(st, 1, THU, 10.0, 20, &o);
+    b = bar_at(next, THU, 110000, 30, 11.6);
+    b.price_ratio = 100.0;
+    o = step(st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 9);
+    TR_CHECK(o.first_done == 1);
+    TR_CHECK(o.first_pending == 1);
+    b = bar_at(next + 1, THU, 110100, 31, 11.6);
+    b.price_ratio = 100.0;
+    o = step(st, b);
+    TR_CHECK(o.contracts == 1);
+    TR_CHECK(o.first_done == 1);
+    TR_CHECK(o.first_pending == 0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    return next + 2;
+}
+
+static void test_v45_defaults_and_mode_scope(void) {
+    tr_wpair_config_t cfg;
+    tr_wpair_t st;
+    tr_wpair_out_t o;
+    int32_t next;
+
+    tr_wpair_default_config(&cfg);
+    TR_CHECK(cfg.ruleset == TR_WPAIR_RULES_V34);
+    TR_CHECK(cfg.expiry_override == 0);
+    TR_CHECK(cfg.early_second_min == 30);
+    TR_CHECK(near(cfg.trail_interval, 10.0));
+    TR_CHECK(near(cfg.expiry_resid_pct, 60.0));
+    TR_CHECK(cfg.resid_wait_min == 15);
+
+    fresh(&st, TR_WPAIR_LONG);
+    o = step(&st, bar_at(1, TUE, 100000, 20, 1.5));
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+
+    fresh_v45(&st, TR_WPAIR_SHORT);
+    o = step(&st, bar_at(1, TUE, 100000, 20, 1.0));
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+    TR_CHECK(o.order_qty == 20);
+
+    fresh_v45(&st, TR_WPAIR_SHORT);
+    st.cfg.expiry_override = 1;
+    next = open_pos(&st, 1, TUE, 10.0, 20, &o);
+    o = step(&st, bar_at(next, TUE, 110000, 30, 8.9));
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 1);
+    TR_CHECK(strcmp(o.order_name, "합산익절1차") == 0);
+}
+
+static void test_v45_entry_price_gate(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 20, 1.5);
+    b.d3_close = 2.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 0);
+    TR_CHECK(o.self_first == 0.0);
+    TR_CHECK(o.self_qty == 0);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 20, 2.0);
+    b.d3_close = 1.5;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 0);
+    TR_CHECK(o.opp_first == 0.0);
+    TR_CHECK(o.opp_qty == 0);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    o = step(&st, bar_at(1, TUE, 100000, 20, 1.5));
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    b = bar_at(2, TUE, 100100, 21, 2.0);
+    b.d3_close = 4.0;
+    b.d3_low = 3.1;
+    b.d3_high = 4.1;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 0);
+    o = step(&st, bar_at(3, TUE, 100200, 22, 2.0));
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+    TR_CHECK(o.self_first == 2.0);
+    TR_CHECK(o.opp_first == 2.0);
+}
+
+static void test_v45_entry_budget_after_price_gate(void) {
+    tr_wpair_t st;
+    tr_wpair_out_t o;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    st.cfg.capital = 100000.0;
+    o = step(&st, bar_at(1, TUE, 100000, 20, 2.0));
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 1);
+    TR_CHECK(o.self_first == 2.0);
+    TR_CHECK(o.opp_first == 2.0);
+    TR_CHECK(o.self_qty == 0);
+    TR_CHECK(o.opp_qty == 0);
+    st.cfg.capital = 10000000.0;
+    o = step(&st, bar_at(2, TUE, 100100, 21, 2.0));
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 1);
+}
+
+static void test_v45_first_profit_thresholds(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, TUE, 2.0, 20, &o);
+    b = bar_at(next, TUE, 110000, 30, 2.2);
+    b.price_ratio = 50.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.first_done == 0);
+    b = bar_at(next + 1, TUE, 110100, 31, 2.4);
+    b.price_ratio = 50.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 1);
+    TR_CHECK(o.first_done == 1);
+    TR_CHECK(o.first_pending == 1);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, THU, 3.0, 20, &o);
+    b = bar_at(next, THU, 110000, 30, 3.31);
+    b.price_ratio = 50.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 9);
+    TR_CHECK(strcmp(o.order_name, "만기익절1차") == 0);
+    TR_CHECK(o.first_done == 1);
+}
+
+static void test_v45_first_low_price_exact_boundary(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, THU, 2.0, 20, &o);
+    st.cfg.take_pct = 25.0;
+    b = bar_at(next, THU, 110000, 30, nextafter(2.75, 0.0));
+    b.price_ratio = 50.0;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct < 37.5);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.first_done == 0);
+
+    b.close = 2.75;
+    b.d3_close = 2.75;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct == 37.5);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 9);
+    TR_CHECK(o.first_done == 1);
+
+    b.close = nextafter(2.75, INFINITY);
+    b.d3_close = b.close;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct > 37.5);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 9);
+}
+
+static void test_v45_first_high_price_exact_boundary(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, THU, 4.0, 20, &o);
+    st.cfg.take_pct = 25.0;
+    b = bar_at(next, THU, 110000, 30, nextafter(5.0, 0.0));
+    b.price_ratio = 50.0;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct < 25.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.first_done == 0);
+
+    b.close = 5.0;
+    b.d3_close = 5.0;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct == 25.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 9);
+    TR_CHECK(o.first_done == 1);
+
+    b.close = nextafter(5.0, INFINITY);
+    b.d3_close = b.close;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct > 25.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 9);
+}
+
+static void test_v45_expiry_override_keeps_friday_filter(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    st.cfg.expiry_override = 1;
+    b = bar_at(1, FRI, 100000, 20, 2.0);
+    b.price_ratio = 100.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    b.index = 2;
+    b.price_ratio = 99.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    st.cfg.expiry_override = 1;
+    next = open_pos(&st, 1, TUE, 10.0, 20, &o);
+    b = bar_at(next, TUE, 110000, 30, 11.0);
+    b.price_ratio = 50.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 9);
+    TR_CHECK(strcmp(o.order_name, "만기익절1차") == 0);
+}
+
+static void test_v45_second_final_above_target_at_entry_thirty(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next = v45_first_done(&st);
+
+    b = bar_at(next, THU, 120000, 51, 14.01);
+    b.d2_time = 115959;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 0);
+    b.d2_time = b.stime;
+    o = step(&st, b);
+    TR_CHECK(o.entry_elapsed == 30);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
+    TR_CHECK(o.order_reason == 11);
+    TR_CHECK(strcmp(o.order_name, "만기익절2차최종") == 0);
+    TR_CHECK(o.trail_active == 0);
+}
+
+static void test_v45_trailing_exact_target_boundary(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next = v45_first_done(&st);
+
+    st.cfg.take_pct = 12.5;
+    b = bar_at(next, THU, 115000, 50, nextafter(15.0, 0.0));
+    o = step(&st, b);
+    TR_CHECK(o.entry_elapsed == 29);
+    TR_CHECK(o.pair_pct < 50.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 0);
+
+    b.close = 15.0;
+    b.d3_close = 15.0;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct == 50.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 1);
+    TR_CHECK(o.trail_target == 50.0);
+    TR_CHECK(o.trail_peak == 50.0);
+    TR_CHECK(o.trail_protect == 40.0);
+
+    b.close = nextafter(15.0, INFINITY);
+    b.d3_close = b.close;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct > 50.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 1);
+    TR_CHECK(o.trail_peak > 50.0);
+}
+
+static void test_v45_second_final_exact_target_boundary(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next = v45_first_done(&st);
+
+    st.cfg.take_pct = 12.5;
+    b = bar_at(next, THU, 120000, 51, nextafter(15.0, 0.0));
+    o = step(&st, b);
+    TR_CHECK(o.entry_elapsed == 30);
+    TR_CHECK(o.pair_pct < 50.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 0);
+
+    b.close = 15.0;
+    b.d3_close = 15.0;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct == 50.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
+    TR_CHECK(o.order_reason == 11);
+    TR_CHECK(strcmp(o.order_name, "만기익절2차최종") == 0);
+    TR_CHECK(o.trail_active == 0);
+
+    b.close = nextafter(15.0, INFINITY);
+    b.d3_close = b.close;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct > 50.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
+    TR_CHECK(o.order_reason == 11);
+}
+
+static void test_v45_trailing_steps_checkpoint_and_reset(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next = v45_first_done(&st);
+
+    b = bar_at(next, THU, 115000, 50, 14.01);
+    o = step(&st, b);
+    TR_CHECK(o.entry_elapsed == 29);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 1);
+    TR_CHECK(near(o.trail_target, 40.0));
+    TR_CHECK(near(o.trail_peak, 40.1));
+    TR_CHECK(near(o.trail_protect, 30.0));
+
+    b = bar_at(next + 1, THU, 115100, 51, 14.5);
+    o = step(&st, b);
+    TR_CHECK(o.entry_elapsed == 30);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 1);
+    TR_CHECK(near(o.trail_peak, 45.0));
+    TR_CHECK(near(o.trail_protect, 30.0));
+
+    b = bar_at(next + 2, THU, 115200, 52, 15.0);
+    o = step(&st, b);
+    TR_CHECK(near(o.trail_peak, 50.0));
+    TR_CHECK(near(o.trail_protect, 40.0));
+
+    b = bar_at(next + 3, THU, 115300, 53, 16.0);
+    o = step(&st, b);
+    TR_CHECK(near(o.trail_peak, 60.0));
+    TR_CHECK(near(o.trail_protect, 50.0));
+    b.close = 14.5;
+    b.d3_close = 14.5;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(near(o.trail_peak, 50.0));
+    TR_CHECK(near(o.trail_protect, 40.0));
+
+    b = bar_at(next + 4, THU, 115400, 54, 9.0);
+    b.d3_close = 17.0;
+    b.price_ratio = 100.0;
+    b.three_ratio = 80.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
+    TR_CHECK(o.order_reason == 14);
+    TR_CHECK(strcmp(o.order_name, "만기2차추적청산") == 0);
+    TR_CHECK(o.self_resid_pct < 0.0);
+
+    o = step(&st, bar_at(next + 5, FRI, 100000, 0, 10.0));
+    TR_CHECK(o.market_position == 0);
+    TR_CHECK(o.used_today == 0);
+    TR_CHECK(o.trail_active == 0);
+    TR_CHECK(o.trail_target == 0.0);
+    TR_CHECK(o.trail_peak == 0.0);
+    TR_CHECK(o.trail_protect == 0.0);
+}
+
+static void test_v45_disables_v34_residual_exits(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next = v45_first_done(&st);
+
+    b = bar_at(next, THU, 110200, 32, 9.0);
+    b.d3_close = 10.0;
+    b.price_ratio = 50.0;
+    b.three_ratio = 80.0;
+    o = step(&st, b);
+    TR_CHECK(o.self_resid_pct < 0.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    b = bar_at(next + 1, THU, 110300, 33, 7.9);
+    b.d3_close = 10.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
+    TR_CHECK(o.order_reason == 2);
+
+    next = v45_first_done(&st);
+    b = bar_at(next, THU, 110200, 32, 11.6);
+    b.price_ratio = 99.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    b = bar_at(next + 1, THU, 120000, 46, 16.0);
+    b.d3_close = 11.8;
+    b.price_ratio = 100.0;
+    b.three_ratio = 69.0;
+    st.cfg.take_pct = 80.0;
+    o = step(&st, b);
+    TR_CHECK(o.resid_elapsed == 15);
+    TR_CHECK(near(o.self_resid_pct, 60.0));
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+}
+
+static void test_v45_low_cut_unchanged(void) {
+    tr_wpair_t st;
+    tr_wpair_out_t o;
+    int32_t next;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, TUE, 10.0, 20, &o);
+    o = step(&st, bar_at(next, TUE, 120000, 81, 10.0));
+    TR_CHECK(o.entry_elapsed == 60);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 13);
+    TR_CHECK(o.order_qty == 1);
+    TR_CHECK(o.low_done == 1);
+}
+
+static void test_v45_replay_long_entry(void) {
+    enum { N = 40 };
+    tr_wpair_t st;
+    tr_wpair_pxbar_t self[N];
+    tr_wpair_pxbar_t opp[N];
+    tr_wpair_pxbar_t fut[N];
+    tr_wpair_event_t ev[N];
+    int n;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    st.cfg.entry_start_bar = 0;
+    st.cfg.morning_three_max = 1000000.0;
+    for (int i = 0; i < N; i++) {
+        double option_px = i + 1 == N ? 2.0 : 1.5;
+        self[i] = px_at(TUE, 90000 + i * 100, 20 + i, option_px, 1000000 + i * 60000);
+        opp[i] = self[i];
+        fut[i] = px_at(TUE, 90000 + i * 100, 20 + i, 100.0 + i, 1000000 + i * 60000);
+    }
+    n = tr_wpair_replay(&st, self, N, opp, N, fut, N, 0, ev, N);
+    TR_CHECK(n == 1);
+    TR_CHECK(ev[0].kind == TR_WPAIR_ORDER_ENTRY);
+    TR_CHECK(ev[0].pending == 1);
+    TR_CHECK(ev[0].qty == 10);
+    TR_CHECK(st.now.signal_bar == N);
+    TR_CHECK(st.now.self_first == 2.0);
+}
+
 int main(void) {
     test_defaults_and_reject();
     test_long_entry_filters();
@@ -888,5 +1353,19 @@ int main(void) {
     test_date_change_and_ledger();
     test_replay_signals();
     test_trade_off_keeps_exit();
+    test_v45_defaults_and_mode_scope();
+    test_v45_entry_price_gate();
+    test_v45_entry_budget_after_price_gate();
+    test_v45_first_profit_thresholds();
+    test_v45_first_low_price_exact_boundary();
+    test_v45_first_high_price_exact_boundary();
+    test_v45_expiry_override_keeps_friday_filter();
+    test_v45_second_final_above_target_at_entry_thirty();
+    test_v45_trailing_exact_target_boundary();
+    test_v45_second_final_exact_target_boundary();
+    test_v45_trailing_steps_checkpoint_and_reset();
+    test_v45_disables_v34_residual_exits();
+    test_v45_low_cut_unchanged();
+    test_v45_replay_long_entry();
     TR_TEST_SUMMARY();
 }

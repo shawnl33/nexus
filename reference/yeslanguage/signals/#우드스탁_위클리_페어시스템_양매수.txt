@@ -1,4 +1,6 @@
-// #WSF_위클리듀얼_페어시스템 V34
+// 첫 만남 저장/진입: 양쪽 옵션의 만남 봉 종가가 모두 1.5 초과일 때만 허용.
+// 만기 잔량의 개별 수익률 0% 미만 강제청산 제거. 합산 손절 및 기타 청산 유지.
+// #WSF_위클리듀얼_페어시스템 V45
 // 예스랭귀지 '시스템' 등록용. 검토/백테스트 전용.
 // 2026-09-22: 후보 탐색 제거, 미리 정한 Data3 상대만 비교.
 // 콜 차트 Data1=콜, Data3=풋 / 풋 차트 Data1=풋, Data3=콜.
@@ -11,9 +13,15 @@
 
 // 점수통합 Data2 계산 전체 포함. 점수 출력부만 주석 처리; 삼선 비율을 첫 만남 조건에 적용.
 
-Input : 매매종료(0), 총투자금(10000000), 익절률(10), 손절률(10),
+Input : 매매종료(0), 만기당일지정(0), 총투자금(10000000), 익절률(10), 손절률(10),
         진입시작봉수(15), 오후전환봉수(195), 전량청산(151500), 오전삼선만남최대비율(70), 오후삼선만남최대비율(50),
-        만남방식(1), 허용오차(0), 진단출력사용(1), 분할청산(1), 만기잔량익절률(60), 잔량익절대기분(15), 저수익대기분(60), 저수익기준률(5), 저수익청산비율(30);
+        만남방식(1), 허용오차(0), 진단출력사용(0), 분할청산(1), 조기이차기준분(30), 이차추적간격(10), 저수익대기분(60), 저수익기준률(5), 저수익청산비율(30);
+
+Var : 이차추적중(False), 이차최고수익률(0), 이차보호수익률(0), 이차추적목표(0), 이차간격(0), 이차시간유효(False);
+
+Var : 진단무출력(0);
+
+Var : 판정요일(0), 판정잔존일(-1);
 
 // Data2 계산 설정: 사용자 Input에서 제외하고 기존 기본값으로 내부 고정.
 Var : 예측변수(10),
@@ -705,7 +713,15 @@ If 삼선점수색상 == RGB(220,220,220) && 삼선비율점수 > 0 Then
 
 
 // 사용자 요일 분류: 월요일(1), 목요일(4)은 만기 당일.
-만기요일 = DayOfWeek(Bdate) == 1 || DayOfWeek(Bdate) == 4;
+// 사용자 요일 기준 잔존일 분류. 실제 종목 만기조회/달력일수가 아님.
+판정요일 = DayOfWeek(Bdate);
+판정잔존일 = -1;
+If 판정요일 == 1 || 판정요일 == 4 Then 판정잔존일 = 0;
+Else If 판정요일 == 3 || 판정요일 == 5 Then 판정잔존일 = 1;
+Else If 판정요일 == 2 Then 판정잔존일 = 2;
+If 만기당일지정 == 1 Then 판정잔존일 = 0;
+만기요일 = 판정잔존일 == 0;
+
 
 매수틱 = 0; // 비용 제외
 청산틱 = 0; // 비용 제외
@@ -723,6 +739,10 @@ If 저장일 != Bdate Then
         진입선물봉 = -1;
         진입선물일 = 0;
         진입경과분 = 0;
+        이차추적중 = False;
+        이차최고수익률 = 0;
+        이차보호수익률 = 0;
+        이차추적목표 = 0;
         저수익처리 = False;
         저수익대기 = False;
         저수익수량 = 0;
@@ -796,7 +816,7 @@ If 자기첫만남가격 > 0 && 자기수량 > 0 && (보유확인 || 장부수�
     {
         장부실현손익 = 장부실현손익 + (O - 자기첫만남가격) * 장부감소수량 * 250000;
         If 진단출력사용 == 1 Then
-            MessageLog("WSF V34 MODEL_FILL date=%.0f time=%.0f qty=%.0f modelOpen=%.4f realizedWon=%.0f", sDate, sTime, 장부감소수량, O, 장부실현손익);
+            진단무출력 = 0;
     }
     장부수량 = IntPortion(CurrentContracts);
     장부평가손익 = (C - 자기첫만남가격) * 장부수량 * 250000;
@@ -805,7 +825,7 @@ If 자기첫만남가격 > 0 && 자기수량 > 0 && (보유확인 || 장부수�
     If 진단출력사용 == 1 && (Index != 장부진단봉 || 장부감소수량 > 0) Then
     {
         장부진단봉 = Index;
-        MessageLog("WSF V34 OWN_LEDGER realizedWon=%.0f unrealizedWon=%.0f totalWon=%.0f totalPct=%.4f remaining=%.0f", 장부실현손익, 장부평가손익, 장부전체손익, 장부전체수익률, 장부수량);
+        진단무출력 = 0;
     }
 }
 
@@ -841,25 +861,6 @@ If MarketPosition == 1 && 저수익대기 && CurrentContracts <= 저수익전수
 If MarketPosition == 1 && 일차대기 && CurrentContracts <= 일차전수량 - 일차수량 Then
     일차대기 = False;
 
-// 1차 전략청산 확인 후 동일시각 Data2가 확보된 때부터 대기 시간을 계산.
-// Data1/Data3 빈 봉 수 대신 Data2 1분봉 DayIndex 차이를 사용.
-If MarketPosition == 1 && 일차처리 && 일차대기 == False &&
-   Data2(sDate) == sDate && Data2(sTime) == sTime &&
-   Data2(DataCompress) == 2 && Data2(BarInterval) == 1 Then
-{
-    If 일차완료선물봉 < 0 Then
-    {
-        일차완료선물봉 = Data2(DayIndex);
-        일차완료일 = sDate;
-    }
-    If 일차완료일 == sDate Then
-        잔량경과분 = Max(0, Data2(DayIndex) - 일차완료선물봉);
-    // 1차 이전의 하락은 기억하지 않음. 옵션 동시봉 누락과 독립적으로 관찰.
-    If 함수계산가능 == 1 && 이탈_삼선준비 == 1 &&
-       이탈_두구간최대가격범위 > 0 && 이탈_두구간가격비율 < 100 Then
-        가격비율하락확인 = True;
-}
-
 // 시간 청산은 상대 데이터가 없거나 손익 계산 불가해도 실행.
 If MarketPosition == 1 Then
 {
@@ -885,31 +886,50 @@ If MarketPosition == 1 Then
                          Data2(DataCompress) == 2 && Data2(BarInterval) == 1 &&
                          함수계산가능 == 1 && 이탈_삼선준비 == 1 &&
                          이탈_두구간최대가격범위 > 0;
-        // 만기일 기본보호 익절만 삼선70 이상. 목표익절/개별0%미만 청산은 예외.
+        // 만기일 기본보호 익절만 삼선70 이상. 목표익절은 예외.
         // 손절/시간/날짜 청산에는 적용하지 않음. 진입 삼선 기준 Input과 별개.
         만기잔량삼선허용 = Data2(sDate) == sDate && Data2(sTime) == sTime &&
                              Data2(DataCompress) == 2 && Data2(BarInterval) == 1 &&
                              함수계산가능 == 1 && 삼선_목표준비 == 1 &&
                              삼선_지속목표차_최고 > 0 && 삼선_지속목표차_비율 >= 70;
+        // 같은 날 동기화된 Data2로 30분미만 여부 확인. 확인불가면 목표판정 보류.
+        이차시간유효 = 진입선물봉 >= 0 && 진입선물일 == sDate &&
+                         Data2(sDate) == sDate && Data2(sTime) == sTime &&
+                         Data2(DataCompress) == 2 && Data2(BarInterval) == 1;
+        이차간격 = Max(0.01, 이차추적간격);
+        If 분할청산 == 1 && 일차처리 && 일차대기 == False && 만기요일 Then
+        {
+            If 이차추적중 == False && 이차시간유효 &&
+               진입경과분 < Max(0, 조기이차기준분) && 합산수익률 >= 익절률 * 4 Then
+            {
+                이차추적중 = True;
+                이차추적목표 = 익절률 * 4;
+                이차최고수익률 = 합산수익률;
+                이차보호수익률 = 이차추적목표 - 이차간격;
+            }
+            If 이차추적중 Then
+            {
+                이차최고수익률 = Max(이차최고수익률, 합산수익률);
+                // 목표60/간격10: 최고60~69.99 ->50,70~79.99 ->60. 보호선은 낮추지 않음.
+                이차보호수익률 = Max(이차보호수익률, 이차추적목표 +
+                    IntPortion(Max(0, 이차최고수익률 - 이차추적목표) / 이차간격) * 이차간격 - 이차간격);
+            }
+        }
         If 합산수익률 <= -손절률 Then
         {
             청산요청 = True;
             청산사유 = 2;
         }
-        // 만기 잔량 개별 수익률0% 미만은 삼선/가격비율 보류보다 우선.
+        // 조기 목표도달은 계단식 추적. 시작 후30분을 넘어도 추적 유지.
         Else If 분할청산 == 1 && 일차처리 && 일차대기 == False && 만기요일 &&
-                자기잔량수익률 < 0 Then
+                이차추적중 && 합산수익률 <= 이차보호수익률 Then
         {
             청산요청 = True;
-            청산사유 = 12;
+            청산사유 = 14;
         }
-        // 만기 잔량: 1차 후 기본15분 + 가격비율100미만 관찰 후100복귀 + 개별60% 이상.
-
         Else If 분할청산 == 1 && 일차처리 && 일차대기 == False && 만기요일 &&
-                일차완료선물봉 >= 0 && 일차완료일 == sDate &&
-                잔량경과분 >= Max(0, 잔량익절대기분) && 가격비율하락확인 &&
-                잔량비율유효 && 이탈_두구간가격비율 == 100 &&
-                만기잔량익절률 > 0 && 자기잔량수익률 >= 만기잔량익절률 Then
+                이차추적중 == False && 이차시간유효 &&
+                진입경과분 >= Max(0, 조기이차기준분) && 합산수익률 >= 익절률 * 4 Then
         {
             청산요청 = True;
             청산사유 = 11;
@@ -924,20 +944,13 @@ If MarketPosition == 1 Then
             청산요청 = True;
             청산사유 = 10;
         }
-        // 만기 당일은 일반 익절 대신 수익률 1.5배 초과 + Data2 가격비율 100.
-        Else If 저수익대기 == False && 일차처리 == False && 만기요일 && 합산수익률 > 익절률 * 1.5 &&
-                Data2(sDate) == sDate && Data2(sTime) == sTime &&
-                Data2(DataCompress) == 2 && Data2(BarInterval) == 1 &&
-                함수계산가능 == 1 && 이탈_삼선준비 == 1 &&
-                이탈_두구간최대가격범위 > 0 && 이탈_두구간가격비율 == 100 Then
+        // 1차 익절: 해당 옵션 첫만남가격3미만=1.5배,3이상=1배. 합산수익률로 판단. 요일배수 대체.
+        Else If 저수익대기 == False && 일차처리 == False && ((자기첫만남가격 > 0 && 자기첫만남가격 < 3 && 합산수익률 >= 익절률 * 1.5) ||
+                 (자기첫만남가격 >= 3 && 합산수익률 >= 익절률)) Then
         {
             청산요청 = True;
-            청산사유 = 9;
-        }
-        Else If 저수익대기 == False && 일차처리 == False && 만기요일 == False && 합산수익률 >= 익절률 Then
-        {
-            청산요청 = True;
-            청산사유 = 1;
+            If 만기요일 Then 청산사유 = 9;
+            Else 청산사유 = 1;
         }
 
     }
@@ -966,8 +979,8 @@ If MarketPosition == 1 Then
         청산진단봉 = Index;
         청산진단사유 = 13;
         청산진단수량 = 저수익수량;
-        MessageLog("WSF V34 EXIT_SIGNAL date=%.0f time=%.0f reason=%.0f qty=%.0f pairPct=%.4f ownPct=%.4f", sDate, sTime, 13, 저수익수량, 합산수익률, 자기잔량수익률);
-        MessageLog("WSF V34 EXIT_CONTEXT priceRatio=%.4f triRatio=%.4f entryBars=%.0f firstBars=%.0f sync=%s model=%s", 이탈_두구간가격비율, 삼선_지속목표차_비율, 진입경과분, 잔량경과분, 동시봉, 모델유효);
+        진단무출력 = 0;
+        진단무출력 = 0;
     }
     If 저수익대기 && 청산요청 == False Then
         ExitLong("시간저수익부분청산", AtMarket, Def, "페어진입", 저수익수량, 1);
@@ -995,8 +1008,8 @@ If MarketPosition == 1 Then
         청산진단봉 = Index;
         청산진단사유 = 일차사유;
         청산진단수량 = 일차수량;
-        MessageLog("WSF V34 EXIT_SIGNAL date=%.0f time=%.0f reason=%.0f qty=%.0f pairPct=%.4f ownPct=%.4f", sDate, sTime, 일차사유, 일차수량, 합산수익률, 자기잔량수익률);
-        MessageLog("WSF V34 EXIT_CONTEXT priceRatio=%.4f triRatio=%.4f entryBars=%.0f firstBars=%.0f sync=%s model=%s", 이탈_두구간가격비율, 삼선_지속목표차_비율, 진입경과분, 잔량경과분, 동시봉, 모델유효);
+        진단무출력 = 0;
+        진단무출력 = 0;
     }
     If 일차대기 && 청산요청 == False Then
     {
@@ -1013,8 +1026,8 @@ If MarketPosition == 1 Then
         청산진단봉 = Index;
         청산진단사유 = 청산사유;
         청산진단수량 = CurrentContracts;
-        MessageLog("WSF V34 EXIT_SIGNAL date=%.0f time=%.0f reason=%.0f qty=%.0f pairPct=%.4f ownPct=%.4f", sDate, sTime, 청산사유, CurrentContracts, 합산수익률, 자기잔량수익률);
-        MessageLog("WSF V34 EXIT_CONTEXT priceRatio=%.4f triRatio=%.4f entryBars=%.0f firstBars=%.0f sync=%s model=%s", 이탈_두구간가격비율, 삼선_지속목표차_비율, 진입경과분, 잔량경과분, 동시봉, 모델유효);
+        진단무출력 = 0;
+        진단무출력 = 0;
     }
     // 전량 청산. 요청 후에도 전략 포지션이 남아 있으면 재평가.
     If 청산요청 Then
@@ -1025,8 +1038,8 @@ If MarketPosition == 1 Then
         Else If 청산사유 == 4 Then ExitLong("날짜변경청산", AtMarket);
         Else If 청산사유 == 9 Then ExitLong("만기익절", AtMarket);
         Else If 청산사유 == 10 Then ExitLong("잔량익절보호", AtMarket);
-        Else If 청산사유 == 11 Then ExitLong("만기잔량익절", AtMarket);
-        Else If 청산사유 == 12 Then ExitLong("만기잔량손실청산", AtMarket);
+        Else If 청산사유 == 11 Then ExitLong("만기익절2차최종", AtMarket);
+        Else If 청산사유 == 14 Then ExitLong("만기2차추적청산", AtMarket);
         Else ExitLong("기타청산", AtMarket);
     }
 }
@@ -1062,7 +1075,7 @@ If 주기정상 && 동시봉 && 삼선만남허용 && Data2(DayIndex) >= Max(0, 
 }
 // 매매종료=1은 신규 진입만 금지. 기존 보유 청산은 위에서 계속 처리.
 If 매매종료 == 0 && MarketPosition == 0 && 당일사용 == False &&
-   진입대기 == False && 청산요청 == False && 만남 Then
+   진입대기 == False && 청산요청 == False && 만남 && C > 1.5 && Data3(C) > 1.5 Then
 {
     // 첫 만남에서 예산 부족이어도 그날 재시도하지 않음.
     당일사용 = True;
@@ -1089,14 +1102,13 @@ If 매매종료 == 0 && MarketPosition == 0 && 당일사용 == False &&
 If 진단출력사용 == 1 && Index != 진단봉 Then
 {
     진단봉 = Index;
+    If 이차추적중 Then 진단무출력 = 0;
+    진단무출력 = 0;
     If MarketPosition == 1 || 청산요청 Then
     {
-        MessageLog("WSF V34 entryElapsed=%.0f lowDone=%s lowPending=%s lowQty=%.0f", 진입경과분, 저수익처리, 저수익대기, 저수익수량);
-        MessageLog("WSF V34 ownPct=%.4f target=%.2f priceRatio=%.4f triRatio=%.4f", 자기잔량수익률, 만기잔량익절률, 이탈_두구간가격비율, 삼선_지속목표차_비율);
-        MessageLog("WSF V34 elapsed=%.0f wait=%.0f below100=%s startD2=%.0f", 잔량경과분, 잔량익절대기분, 가격비율하락확인, 일차완료선물봉);
-        MessageLog("WSF V34 first=%s pending=%s qty=%.0f remaining=%.0f", 일차처리, 일차대기, 일차수량, CurrentContracts);
-        MessageLog("WSF V34 date=%.0f time=%.0f model=%s sync=%s exit=%s reason=%.0f pnlPct=%.4f",
-                   sDate, sTime, 모델유효, 동시봉, 청산요청, 청산사유, 합산수익률);
+        진단무출력 = 0;
+        진단무출력 = 0;
+        진단무출력 = 0;
     }
 }
 
