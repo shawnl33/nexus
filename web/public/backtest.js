@@ -101,11 +101,17 @@ function paint() {
 }
 
 function redrawSlot(slot) {
-  slot.view = draw(slot.el, slot.bars, slot.trades, slot.pane.barStyle);
+  slot.view = draw(slot.el, slot.bars, slot.trades, slot.pane);
   if (slot.view) BtSide.attach(slot.pane, slot.view.chart, slot.view.series);
 }
 
-function draw(host, bars, trades, barStyle) {
+function paintHex(pane, time) {
+  const rgb = OsLayers.barPaintRgb(pane?.active, BtSide.indicatorAt(pane?.symbol, time));
+  return rgb ? "#" + (rgb >>> 0).toString(16).padStart(6, "0") : "";
+}
+
+function draw(host, bars, trades, pane) {
+  const barStyle = pane?.barStyle;
   host.replaceChildren();
   if (!window.LightweightCharts) return null;
   const style = BtSide.STYLES.some((s) => s.id === barStyle) ? barStyle : "candle";
@@ -149,9 +155,23 @@ function draw(host, bars, trades, barStyle) {
   for (const b of bars || []) {
     if (!Number.isFinite(b.t) || seen.has(b.t)) continue;
     seen.add(b.t);
-    data.push(kind === "line"
-      ? { time: b.t, value: raw(b.c) }
-      : { time: b.t, open: raw(b.o), high: raw(b.h), low: raw(b.l), close: raw(b.c) });
+    const tint = paintHex(pane, b.t);
+    if (kind === "line") {
+      const point = { time: b.t, value: raw(b.c) };
+      if (tint) point.color = tint;
+      data.push(point);
+    } else {
+      const point = { time: b.t, open: raw(b.o), high: raw(b.h), low: raw(b.l), close: raw(b.c) };
+      if (tint && style === "outline") {
+        point.borderColor = tint;
+        point.wickColor = tint;
+      } else if (tint) {
+        point.color = tint;
+        point.borderColor = tint;
+        point.wickColor = tint;
+      }
+      data.push(point);
+    }
   }
   data.sort((a, b) => a.time - b.time);
   if (data.length) series.setData(data);

@@ -2,6 +2,7 @@
 
 #include "core/indicators/fx_os_filter.h"
 #include "core/indicators/fx_sig_pair.h"
+#include "core/paintbar/fx_judge_paint95.h"
 
 #include <string.h>
 
@@ -67,6 +68,44 @@ int tr_yl_fxsig_bar(tr_yl_book_t *book, tr_fxos_t *scope, const tr_fxos_input_t 
     qty = scope->cfg.order_qty > 0 ? scope->cfg.order_qty : 1;
     tr_yl_fxsig_emit(book, scope->out.sig_dir, scope->out.sig_exit, scope->out.sig_kind, qty,
                      scope->out.sig_grade, scope->out.sig_adj_kind, scope->out.sig_adj_grade);
+    tr_yl_book_close(book);
+    return tr_yl_book_trade_count(book) - before;
+}
+
+int tr_yl_fxwr_bar(tr_yl_book_t *book, tr_fxos_t *scope, const tr_fxos_input_t *in, tr_yl_wr_hold_t *hold) {
+    tr_yl_bar_t bar;
+    int before;
+    int qty;
+    if (book == 0 || scope == 0 || in == 0 || hold == 0) {
+        return -1;
+    }
+    scope->mkt = book->pos.side;
+    scope->contracts = book->pos.contracts;
+    scope->avg_entry = book->pos.avg;
+    memset(&bar, 0, sizeof(bar));
+    bar.time = (int64_t)(in->bar_open / 1000000);
+    bar.open = in->close;
+    bar.high = in->high;
+    bar.low = in->low;
+    bar.close = in->close;
+    tr_yl_book_open(book, &bar);
+    tr_fxos_eval(scope, in);
+    before = tr_yl_book_trade_count(book);
+    (void)hold;
+    if (scope->wr != 0) {
+        int i;
+        for (i = 0; i < scope->wr->ord_n; i++) {
+            tr_yl_order_t o;
+            const tr_fxwr_ord_t *src = &scope->wr->ords[i];
+            memset(&o, 0, sizeof(o));
+            o.action = src->action;
+            o.price_type = src->price_type;
+            o.price = src->price;
+            o.qty = src->qty;
+            o.name = src->name;
+            tr_yl_book_submit(book, &o);
+        }
+    }
     tr_yl_book_close(book);
     return tr_yl_book_trade_count(book) - before;
 }

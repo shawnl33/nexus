@@ -16,12 +16,12 @@
       "overlayScale": "shared",
       "panels": [
         {
-          "height": 0.28503315910088173,
+          "height": 0.675826246806646,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
           "candles": true,
-          "barStyle": "bar",
+          "barStyle": "candle",
           "indicators": [
             {
               "id": "fx_curve_os",
@@ -35,14 +35,22 @@
               }
             },
             {
-              "id": "fx_sig_v6",
+              "id": "fx_paint_v12",
+              "layers": {
+                "bar": true
+              }
+            },
+            {
+              "id": "fx_wr",
               "layers": {
                 "entry": true,
                 "exit": true
               }
             }
           ],
-          "systems": [],
+          "systems": [
+            "fx_wr"
+          ],
           "linkLegs": {
             "w_link_long": {
               "opp": "",
@@ -58,7 +66,7 @@
           }
         },
         {
-          "height": 0.11197484938147279,
+          "height": 0.04632527536085802,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -102,7 +110,7 @@
           }
         },
         {
-          "height": 0.15509259399175468,
+          "height": 0.04632527536085802,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -116,7 +124,7 @@
                 "reg": true,
                 "market": true,
                 "price": true,
-                "vol": true,
+                "vol": false,
                 "signal": true,
                 "emphasis": true,
                 "range": true,
@@ -141,7 +149,7 @@
           }
         },
         {
-          "height": 0.11270730104657403,
+          "height": 0.04632527536085802,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -180,7 +188,7 @@
           }
         },
         {
-          "height": 0.1,
+          "height": 0.04632527536085802,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -212,7 +220,37 @@
           }
         },
         {
-          "height": 0.1,
+          "height": 0.04632527536085802,
+          "symbol": "ESZ26",
+          "panelOpen": false,
+          "data2": "NQZ26",
+          "candles": false,
+          "barStyle": "none",
+          "indicators": [
+            {
+              "id": "fx_swing_w",
+              "layers": {
+                "width": true
+              }
+            }
+          ],
+          "systems": [],
+          "linkLegs": {
+            "w_link_long": {
+              "opp": "",
+              "fut": "ESZ26"
+            },
+            "w_link_short": {
+              "opp": "NQZ26",
+              "fut": "ESZ26"
+            }
+          },
+          "overlayStyles": {
+            "NQZ26": "none"
+          }
+        },
+        {
+          "height": 0.04632527536085802,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",
@@ -244,7 +282,7 @@
           }
         },
         {
-          "height": 0.13519209647931682,
+          "height": 0.04622210102820578,
           "symbol": "ESZ26",
           "panelOpen": false,
           "data2": "NQZ26",

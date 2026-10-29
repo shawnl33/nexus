@@ -378,12 +378,15 @@ int tr_backtest_run(const char *payload, char *out, size_t cap) {
         free(fbars);
         symbol = base;
     } else if (strcmp(signal, "fx_sig_v6") == 0 || strcmp(signal, "fx_sig_pair") == 0 ||
-               strcmp(signal, "fx_sig_zd") == 0) {
+               strcmp(signal, "fx_sig_zd") == 0 || strcmp(signal, "fx_wr") == 0) {
         tr_fxos_t *scope;
         tr_fxmirae_t *fx;
         tr_fxpair_t *pair = 0;
         tr_fxmirae_config_t mcfg;
         int is_pair = strcmp(signal, "fx_sig_pair") == 0 || strcmp(signal, "fx_sig_zd") == 0;
+        int is_wr = strcmp(signal, "fx_wr") == 0;
+        tr_yl_wr_hold_t wr_hold;
+        memset(&wr_hold, 0, sizeof(wr_hold));
         size_t i;
         if (symbol[0] == 0) {
             free(self);
@@ -448,7 +451,9 @@ int tr_backtest_run(const char *payload, char *out, size_t cap) {
             in.price_unit = 1.0;
             in.is_new_bar = true;
             tr_fxos_set_synth(&in, &fx->syn5, &fx->syn15, &fx->syn30);
-            if (is_pair) {
+            if (is_wr) {
+                tr_yl_fxwr_bar(&book, scope, &in, &wr_hold);
+            } else if (is_pair) {
                 tr_yl_fxpair_bar(&book, scope, pair, &in);
             } else {
                 tr_yl_fxsig_bar(&book, scope, &in);

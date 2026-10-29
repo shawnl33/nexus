@@ -1,5 +1,7 @@
 #include "core/indicators/fx_os_scope.h"
 
+#include "core/paintbar/fx_judge_paint95.h"
+#include "core/signals/fx_wr_yl.h"
 #include "core/functions/fx_decision_v2.h"
 #include "core/functions/fx_flat_count_v2.h"
 #include "core/functions/fx_session_key_v1.h"
@@ -7,6 +9,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define RGB_(r, g, b) ((uint32_t)(r) << 16 | (uint32_t)(g) << 8 | (uint32_t)(b))
@@ -914,6 +917,8 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
             s->out.ec_line = line_px;
             s->out.ec_line_rgb = line_dir > 0 ? RGB_(255, 120, 120) : RGB_(120, 150, 255);
         }
+        s->out.swing_on = s->entry.st.swing_ok;
+        s->out.swing_pct = s->entry.st.wpct;
         if (aout.valid && aout.sig_dir != 0) {
             int g = aout.sig_grade;
             s->out.rs_on = 1;
@@ -1052,6 +1057,36 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
     if (ent_dir != 0) {
         s->out.paint_rgb = ent_dir > 0 ? RGB_(0, 255, 0) : RGB_(0, 255, 255);
     }
+    {
+        tr_fxp95_in_t p95;
+        memset(&p95, 0, sizeof(p95));
+        p95.date = in->date;
+        p95.time = in->time;
+        p95.is_new_bar = in->is_new_bar;
+        p95.session_reset = reset;
+        p95.open = in->open;
+        p95.high = in->high;
+        p95.low = in->low;
+        p95.close = in->close;
+        p95.volume = in->volume;
+        p95.judge = dec.unified;
+        p95.fut = fut;
+        p95.di = dec.di;
+        p95.state5 = s->session.out.state5;
+        p95.pos = flat_out.pos;
+        p95.slope = flat_out.slope;
+        p95.pos_prev = s->flat_prev.pos;
+        if (fv != 0) {
+            p95.target5 = fv->persist_target[4];
+            p95.up_lo = fv->lup_low;
+            p95.up_hi = fv->lup_high;
+        }
+        if (s->entry.st.swing_ok) p95.swing_ratio = s->entry.st.wpct;
+        tr_fxp95_bar(&s->p95, &p95);
+        if (s->p95.group != 0) {
+            s->out.paint_rgb = s->p95.rgb;
+        }
+    }
 
     /* 진입신호매매V1: 색방향, 신호 우선순위, 매매시간, 청산, 진입. */
     int color_dir = dec.unified > 0 ? 1 : (dec.unified < 0 ? -1 : 0);
@@ -1131,6 +1166,37 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
         s->avg_entry = in->close;
         s->out.sig_dir = -1;
         s->out.sig_kind = kind;
+    }
+    /* 승률 V14 본문. 주문은 원본 Buy/Sell 그대로 모은다. */
+    {
+        tr_fxwr_bar_t wb;
+        int i;
+        if (s->wr == 0) {
+            s->wr = (tr_fxwr_t *)calloc(1, sizeof(*s->wr));
+        }
+        if (s->wr != 0) {
+            memset(&wb, 0, sizeof(wb));
+            wb.date = in->date;
+            wb.time = in->time;
+            wb.bar_open = in->bar_open;
+            wb.open = in->open;
+            wb.high = in->high;
+            wb.low = in->low;
+            wb.close = in->close;
+            wb.volume = in->volume;
+            wb.price_scale = s->price_scale;
+            wb.market = s->mkt;
+            wb.is_new_bar = in->is_new_bar;
+            tr_fxwr_on_bar(s->wr, &wb);
+            for (i = 0; i < s->wr->ord_n; i++) {
+                int act = s->wr->ords[i].action;
+                if (act == TR_YL_BUY || act == TR_YL_SELL) {
+                    s->out.wr_dir = act == TR_YL_BUY ? 1 : -1;
+                    s->out.wr_order = (int)s->wr->cur[YL_F_진입그룹];
+                    break;
+                }
+            }
+        }
     }
     s->prev_color_dir = color_dir;
 
@@ -1371,8 +1437,9 @@ int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o) {
         m += n;
     }
     /* 기존 칸을 유지하고 청산 수량을 뒤에 추가한다 (228~231). */
-    int n = snprintf(buf + m, cap - (size_t)m, ",%d,%d,%d,%d",
-                     o->pair_exit_qty, o->pair_limit_qty, o->zd_exit_qty, o->zd_limit_qty);
+    int n = snprintf(buf + m, cap - (size_t)m, ",%d,%d,%d,%d,%d,%.10g,%d,%d",
+                     o->pair_exit_qty, o->pair_limit_qty, o->zd_exit_qty, o->zd_limit_qty,
+                     o->swing_on, o->swing_pct, o->wr_dir, o->wr_order);
     if (n < 0 || (size_t)m + (size_t)n >= cap) return -1;
     return m + n;
 }

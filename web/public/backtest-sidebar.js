@@ -22,6 +22,7 @@ const BtSide = (() => {
     fx_pack_v4: { createHandle: (chart) => OsLayers.packHandle(chart) },
     fx_flat_v4: { createHandle: (chart) => OsLayers.flatHandle(chart) },
     fx_flat_v2: { createHandle: (chart) => OsLayers.flatHandleV2(chart) },
+    fx_swing_w: { createHandle: (chart) => OsLayers.swingHandle(chart) },
     fx_adj_v6: { createHandle: (chart) => OsLayers.adjHandle(chart) },
     fx_adj_v1: { createHandle: (chart) => OsLayers.adjHandleOf(chart, "fxadj1", "w1") },
     fx_adj_v2: { createHandle: (chart) => OsLayers.adjHandleOf(chart, "fxadj2", "w2") },
@@ -35,6 +36,7 @@ const BtSide = (() => {
     fx_sig_v6: { createHandle: (chart) => OsLayers.sigHandle(chart) },
     fx_sig_pair: { createHandle: (chart) => OsLayers.sigHandle(chart, "pair") },
     fx_sig_zd: { createHandle: (chart) => OsLayers.sigHandle(chart, "zd") },
+    fx_wr: { createHandle: (chart) => OsLayers.sigHandle(chart, "wr") },
     fx_pnl: { createHandle: (chart) => OsLayers.pnlHandle(chart) },
     fx_pos_v1: { createHandle: (chart) => OsLayers.posHandle(chart, 1) },
     fx_pos_v2: { createHandle: (chart) => OsLayers.posHandle(chart, 2) },
@@ -146,6 +148,7 @@ const BtSide = (() => {
       ind.ymae = YmaeLayers.parseYmae(b.ymae);
       ind.sniper = SniperLayers.parseSniper(b.sniper);
       ind.os = OsLayers.parse(b.os);
+      ind.vb = Number(b.vb) || 0;
       ind.cu = CuLayers.parse(b.cu);
       ind.snco = SncoLayers.parse(b.snco);
       ind.pvc = PvcLayers.parsePvc(b.pvc);
@@ -171,6 +174,10 @@ const BtSide = (() => {
         if (!p || !Array.isArray(p.bars)) break;
         if (page === 0 && Array.isArray(p.indicators)) manifest = p.indicators.filter((m) => m && typeof m.id === "string");
         const n = p.bars.length;
+        const vbAt = {};
+        for (const pair of p.vb ?? []) {
+          if (Array.isArray(pair)) vbAt[pair[0]] = Number(pair[1]) || 0;
+        }
         for (let i = 0; i < n; i++) {
           const [t, o, h, l, c] = p.bars[i];
           rows.push({
@@ -178,7 +185,7 @@ const BtSide = (() => {
             ind: (p.ind || [])[i], fx3: (p.fx3 || [])[i], pgap: (p.pgap || [])[i],
             rgap: (p.rgap || [])[i], mgap: (p.mgap || [])[i], ymae: (p.ymae || [])[i],
             sniper: (p.sniper || [])[i], pvc: (p.pvc || [])[i], os: (p.os || [])[i],
-            cu: (p.cu || [])[i], snco: (p.snco || [])[i],
+            cu: (p.cu || [])[i], snco: (p.snco || [])[i], vb: vbAt[i] || 0,
           });
         }
         if (!p.next_back_index) break;
@@ -390,6 +397,7 @@ const BtSide = (() => {
         deactivate(pane, meta.id);
       }
       if (WPLOT.includes(meta.id)) refreshWeekly(pane);
+      if (OsLayers.BAR_PAINT_IDS.includes(meta.id) && typeof pane.onStyle === "function") pane.onStyle();
       build(pane);
       if (meta.id === "fx_sig_v6") notify(pane);
     };
@@ -422,6 +430,7 @@ const BtSide = (() => {
             live.layers[layer.id] = lbox.checked;
             live.handle.setLayers({ [layer.id]: lbox.checked });
           }
+          if (layer.id === "bar" && typeof pane.onStyle === "function") pane.onStyle();
         };
         lrow.append(lbox, document.createTextNode(layer.name ?? layer.id));
         boxWrap.append(lrow);
@@ -582,9 +591,17 @@ const BtSide = (() => {
     if (typeof onChoice === "function") onChoice(pane?.frame);
   }
 
+  function indicatorAt(symbol, time) {
+    const code = (symbol || "").trim().toUpperCase();
+    if (!code) return null;
+    const cache = feed.forSymbol(code);
+    return cache?.barInd?.get(time) || null;
+  }
+
   function chosen(frame) {
     const pane = frame?.panes?.[0];
     const ids = [];
+    if (pane?.systems?.has("fx_wr") || pane?.wanted?.has("fx_wr")) ids.push("fx_wr");
     if (pane?.systems?.has("pair-long")) ids.push("pair-long");
     if (pane?.systems?.has("pair-short")) ids.push("pair-short");
     if (pane?.wanted?.has("fx_sig_v6")) ids.push("fx_sig_v6");
@@ -601,7 +618,7 @@ const BtSide = (() => {
   });
 
   return {
-    blankPane, mount, attach, syncSymbol, prefetch, STYLES, chosen,
+    blankPane, mount, attach, syncSymbol, prefetch, indicatorAt, STYLES, chosen,
     setOnChoice(fn) { onChoice = fn; },
   };
 })();

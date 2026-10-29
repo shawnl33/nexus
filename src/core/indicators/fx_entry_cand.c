@@ -178,6 +178,9 @@ void tr_fxec_decide(tr_fxec_mem_t *m, const tr_fxec_mem_t *old, const tr_fxec_cf
         width = all_hi - all_lo;
         if (width > m->session_max_w) m->session_max_w = width;
         if (m->session_max_w > 0) wpct = width / m->session_max_w * 100.0;
+        m->swing_ok = 1;
+    } else {
+        m->swing_ok = 0;
     }
     if (m->struct_dir != 0) {
         m->struct_age += 1;

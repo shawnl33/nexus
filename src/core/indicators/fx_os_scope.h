@@ -22,6 +22,8 @@
 #include "core/indicators/fx_os_hist.h"
 #include "core/functions/fx_synthetic_lines_v1.h"
 #include "core/indicators/fx_pnl_2023.h"
+#include "core/paintbar/fx_judge_paint95.h"
+#include "core/signals/fx_wr_yl.h"
 #include "core/indicators/fx_posmon.h"
 #include "core/indicators/fx_sig_pair.h"
 #include "core/model/time_us.h"
@@ -109,6 +111,10 @@ typedef struct {
     int pair_dir, pair_kind, pair_grade, pair_ak, pair_ag, pair_qty, pair_suf, pair_exit, pair_loss, pair_ticks;
     int zd_dir, zd_kind, zd_grade, zd_ak, zd_ag, zd_qty, zd_suf, zd_exit, zd_loss, zd_ticks;
     int pair_limit, zd_limit;
+    int swing_on;
+    double swing_pct;
+    int wr_dir;
+    int wr_order;
     int pair_exit_qty, pair_limit_qty, zd_exit_qty, zd_limit_qty;
     double wave_time, wave_price, wave_opp;
     int wave_state;
@@ -254,6 +260,8 @@ typedef struct {
     int mkt_n, mkt_i, paint_has, paint_first;
     double mkt_avg, mkt_avg_1, paint_fut, paint_fut_1;
     int mkt_avg_1_ok;
+    tr_fxp95_t p95;
+    tr_fxwr_t *wr;
     int64_t key;
     bool has_key;
     int reset_bar;

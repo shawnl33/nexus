@@ -15,6 +15,16 @@ int tr_yl_fxsig_emit(tr_yl_book_t *book, int sig_dir, int sig_exit, int sig_kind
 
 /* 봉을 열고 식을 돌린 뒤 종가 주문으로 닫는다. 이번 봉에서 넣은 주문 수. 실패 시 -1. */
 int tr_yl_fxsig_bar(tr_yl_book_t *book, tr_fxos_t *scope, const tr_fxos_input_t *in);
+
+/* 승률 V14 실행 상태. 1차 10틱 지정가와 그 다음 본전 스톱. */
+typedef struct {
+    int armed;
+    int be;
+    int qty;
+    double entry;
+} tr_yl_wr_hold_t;
+
+int tr_yl_fxwr_bar(tr_yl_book_t *book, tr_fxos_t *scope, const tr_fxos_input_t *in, tr_yl_wr_hold_t *hold);
 int tr_yl_fxpair_bar(tr_yl_book_t *book, tr_fxos_t *scope, tr_fxpair_t *pair, const tr_fxos_input_t *in);
 
 /* 가상포지션 주문을 장부에 넣는다. limit_filled 이면 1차를 다시 넣지 않는다.

@@ -74,6 +74,7 @@ const RENDERERS = {
   fx_pack_v4: { createHandle: (chart) => OsLayers.packHandle(chart) },
   fx_flat_v4: { createHandle: (chart) => OsLayers.flatHandle(chart) },
   fx_flat_v2: { createHandle: (chart) => OsLayers.flatHandleV2(chart) },
+  fx_swing_w: { createHandle: (chart) => OsLayers.swingHandle(chart) },
   fx_adj_v6: { createHandle: (chart) => OsLayers.adjHandle(chart) },
   fx_adj_v1: { createHandle: (chart) => OsLayers.adjHandleOf(chart, "fxadj1", "w1") },
   fx_adj_v2: { createHandle: (chart) => OsLayers.adjHandleOf(chart, "fxadj2", "w2") },
@@ -87,6 +88,7 @@ const RENDERERS = {
   fx_sig_v6: { createHandle: (chart) => OsLayers.sigHandle(chart) },
   fx_sig_pair: { createHandle: (chart) => OsLayers.sigHandle(chart, "pair") },
   fx_sig_zd: { createHandle: (chart) => OsLayers.sigHandle(chart, "zd") },
+  fx_wr: { createHandle: (chart) => OsLayers.sigHandle(chart, "wr") },
   fx_pnl: { createHandle: (chart) => OsLayers.pnlHandle(chart) },
   fx_pos_v1: { createHandle: (chart) => OsLayers.posHandle(chart, 1) },
   fx_pos_v2: { createHandle: (chart) => OsLayers.posHandle(chart, 2) },
@@ -343,6 +345,10 @@ function placePaneTools(pane) {
     node.classList.add(kind);
     node.style.top = top;
   }
+  if (pane.legendEl) {
+    if (pane.legendEl.parentElement !== box) box.append(pane.legendEl);
+    pane.legendEl.style.top = top;
+  }
 }
 
 function watchPaneBoxes(frame) {
@@ -598,21 +604,15 @@ function hexRgb(rgb) {
   return "#" + (Number(rgb) >>> 0).toString(16).padStart(6, "0");
 }
 
-function barLayerOn(entry) {
-  return entry && (typeof entry.handle?.wantsBar !== "function" || entry.handle.wantsBar());
-}
-
-// VolBurst 강조가 색을 내면 그 색을 쓴다. 없으면 1분봉용 페인트바, 그것도 없으면 통합판정색.
+// 봉 색은 켠 페인트바만. 미래곡선은 선을 그리고 봉은 칠하지 않는다.
 function curveStageTint(pane, time) {
   const ind = paneCache(pane)?.barInd?.get(time);
-  const vb = pane?.active?.get("vb_paint");
-  if (barLayerOn(vb) && ind?.vb) return hexRgb(ind.vb);
-  const paint = pane?.active?.get("fx_paint_os");
-  if (barLayerOn(paint) && ind?.os?.osPaint) return hexRgb(ind.os.osPaint);
-  if (!pane?.active?.has("fx_curve_os")) return "";
-  const rgb = ind?.os?.judgeRgb;
-  if (!Number.isFinite(Number(rgb))) return "";
-  return hexRgb(rgb);
+  const rgb = OsLayers.barPaintRgb(pane?.active, ind);
+  return rgb ? hexRgb(rgb) : "";
+}
+
+function paintsBars(indId) {
+  return OsLayers.BAR_PAINT_IDS.includes(indId);
 }
 
 function candlePoint(pane, row, draw) {
@@ -1686,6 +1686,7 @@ function buildPaneTools(pane) {
     hint.className = "ind-hint";
     hint.textContent = "종목을 선택하면 원본 항목을 고를 수 있습니다";
     panel.append(hint);
+    refreshIndLegend(pane);
     return;
   }
 
@@ -1695,6 +1696,7 @@ function buildPaneTools(pane) {
     if (!meta || covered.has(meta.id) || !(meta.id in RENDERERS)) continue;
     panel.append(buildIndNode(pane, meta));
   }
+  refreshIndLegend(pane);
 }
 
 async function loadYlCatalog() {
@@ -2095,6 +2097,42 @@ function buildSourceDir(pane, dir) {
   return node;
 }
 
+function selectedIndicatorNames(pane) {
+  const labels = new Map();
+  if (typeof YlTree !== "undefined" && Array.isArray(ylCatalog)) {
+    for (const dir of YlTree.build(ylCatalog)) {
+      for (const item of dir.items || []) {
+        if (item.port?.kind === "indicator" && item.port.id && !labels.has(item.port.id)) {
+          labels.set(item.port.id, item.label);
+        }
+      }
+    }
+  }
+  const names = [];
+  for (const id of pane.active.keys()) {
+    const meta = indicatorManifest.find((m) => m.id === id);
+    names.push(labels.get(id) || meta?.name || id);
+  }
+  return names;
+}
+
+function refreshIndLegend(pane) {
+  if (!pane.legendEl) {
+    const el = document.createElement("div");
+    el.className = "ind-legend";
+    pane.legendEl = el;
+  }
+  const names = selectedIndicatorNames(pane);
+  pane.legendEl.replaceChildren(...names.map((name) => {
+    const row = document.createElement("span");
+    row.textContent = name;
+    row.title = name;
+    return row;
+  }));
+  pane.legendEl.hidden = names.length === 0;
+  placePaneTools(pane);
+}
+
 function sourceTitle(item) {
   const path = `${item.dir}/${item.label}`;
   return item.port?.note ? `${path}. ${item.port.note}` : path;
@@ -2432,7 +2470,7 @@ function activateIndicator(pane, indId, savedLayers) {
     const cache = pane.symbol ? feed.get(pane.symbol) : undefined;
     if (cache) handle.applySeed(ctxFor(cache));
   }
-  if ((indId === "fx_curve_os" || indId === "vb_paint") && pane.symbol) {
+  if (paintsBars(indId) && pane.symbol) {
     const cache = feed.get(pane.symbol);
     if (cache) rebuildPaneCandles(pane, cache);
   }
@@ -2446,7 +2484,7 @@ function deactivateIndicator(pane, indId) {
   pane.active.delete(indId);
   if (typeof entry.handle.destroy === "function") entry.handle.destroy();
   else entry.handle.clear();
-  if ((indId === "fx_curve_os" || indId === "vb_paint") && pane.symbol) {
+  if (paintsBars(indId) && pane.symbol) {
     const cache = feed.get(pane.symbol);
     if (cache) rebuildPaneCandles(pane, cache);
   }
@@ -2631,7 +2669,7 @@ function applyStatus(msg) {
     if (painted) {
       for (const pane of panes) {
         if (pane.symbol !== sh || !pane.candleSeries) continue;
-        if (!pane.active.has("fx_curve_os") && !pane.active.has("vb_paint") && !pane.active.has("fx_paint_os")) continue;
+        if (!OsLayers.BAR_PAINT_IDS.some((id) => pane.active.has(id))) continue;
         try { pane.candleSeries.update(candlePoint(pane, painted)); }
         catch { /* 과거 시각은 아래 재구성이 맡는다 */ }
       }

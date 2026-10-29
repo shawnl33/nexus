@@ -79,6 +79,7 @@ typedef struct {
     int uni[TR_FXEC_HIST];
     int sok, sok1, blue, blue1, red, red1, three_ok, three_ok1;
     double wpct, wpct1, ahi, ahi1, alo, alo1, dn_lo, dn_lo1, up_hi, up_hi1;
+    int swing_ok;
     double three_ratio, three_ratio1, sq_ratio1, three_gap, three_gap1;
     int sq_hold1;
     double close1;

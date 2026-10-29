@@ -179,6 +179,10 @@ const OsLayers = (() => {
       zdSuf: Number(row[192]) || 0, zdExit: Number(row[193]) || 0, zdLoss: Number(row[194]) || 0,
       zdTicks: Number(row[195]) || 0, zdLimit: Number(row[227]) || 0,
       zdExitQty: num(row[230]), zdLimitQty: num(row[231]),
+      swingOn: row.length >= 234 && Number(row[232]) === 1,
+      swingPct: row.length >= 234 ? num(row[233]) : null,
+      wrDir: row.length >= 236 ? Number(row[234]) || 0 : 0,
+      wrOrder: row.length >= 236 ? Number(row[235]) || 0 : 0,
       adjKind: row.length >= 156 ? (Number(row[154]) || 0) : 0,
       adjGrade: row.length >= 156 ? (Number(row[155]) || 0) : 0,
     };
@@ -634,6 +638,107 @@ const OsLayers = (() => {
     return paneHandle(chart, scale, adjLines(chart, scale, (r) => r[key]), { top: 0.72, bottom: 0 });
   }
 
+  // 값이 같은 봉은 하나로 이어진 가로선, 값이 바뀌면 세로로 잇지 않는다. 없는 봉은 끊긴다.
+  function swingSegments() {
+    let series = null;
+    let chart = null;
+    let points = [];
+    return {
+      setPoints(next) { points = next || []; },
+      attached(param) { series = param.series; chart = param.chart; },
+      detached() { series = null; chart = null; },
+      updateAllViews() {},
+      paneViews() {
+        return [{
+          renderer() {
+            return {
+              draw(target) {
+                if (!series || !chart || !points.length) return;
+                target.useBitmapCoordinateSpace((scope) => {
+                  const ctx = scope.context;
+                  const hr = scope.horizontalPixelRatio;
+                  const vr = scope.verticalPixelRatio;
+                  const ts = chart.timeScale();
+                  ctx.strokeStyle = "#783ca0";
+                  ctx.lineWidth = Math.max(1, 2 * vr);
+                  ctx.lineCap = "butt";
+                  ctx.beginPath();
+                  for (let i = 0; i < points.length; i++) {
+                    const p = points[i];
+                    if (p.value == null || !Number.isFinite(p.value)) continue;
+                    const x0 = ts.timeToCoordinate(p.time);
+                    const y = series.priceToCoordinate(p.value);
+                    if (x0 == null || y == null) continue;
+                    let x1 = x0;
+                    if (i + 1 < points.length) {
+                      const xn = ts.timeToCoordinate(points[i + 1].time);
+                      if (xn != null) x1 = xn;
+                    } else if (i > 0) {
+                      const xp = ts.timeToCoordinate(points[i - 1].time);
+                      if (xp != null) x1 = x0 + (x0 - xp);
+                    }
+                    ctx.moveTo(x0 * hr, y * vr);
+                    ctx.lineTo(x1 * hr, y * vr);
+                  }
+                  ctx.stroke();
+                });
+              },
+            };
+          },
+        }];
+      },
+    };
+  }
+
+  function swingHandle(chart) {
+    const scale = "fxswing";
+    const line = series(chart, scale, "#783ca0", 2);
+    line.applyOptions({
+      lineVisible: false,
+      autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
+    });
+    const pen = swingSegments();
+    line.attachPrimitive(pen);
+    let ctx = null;
+    let show = true;
+    function rows() {
+      if (!show || !ctx?.barSeq) return [];
+      const out = [];
+      for (const t of ctx.barSeq) {
+        const row = ctx.barInd.get(t)?.os;
+        const value = row?.swingOn ? row.swingPct : null;
+        out.push({ time: t, value: Number.isFinite(value) ? value : null });
+      }
+      return out;
+    }
+    function draw() {
+      const pts = rows();
+      line.setData(pts.map((p) => (p.value == null ? { time: p.time } : p)));
+      pen.setPoints(pts);
+    }
+    function setAxis(id) {
+      const own = id === "right";
+      line.applyOptions({ priceScaleId: own ? "right" : scale });
+      if (typeof chart.priceScale === "function") {
+        chart.priceScale(own ? "right" : scale).applyOptions(own
+          ? { scaleMargins: { top: 0.06, bottom: 0.04 }, autoScale: true, visible: true }
+          : { scaleMargins: { top: 0.72, bottom: 0 }, autoScale: true });
+      }
+    }
+    setAxis(null);
+    return {
+      setAxis,
+      setLayers(map) {
+        if (map && "width" in map) show = !!map.width;
+        draw();
+      },
+      applySeed(c) { ctx = c; draw(); },
+      applyLive(p, c) { ctx = c || ctx; draw(); },
+      clear() { line.setData([]); pen.setPoints([]); },
+      destroy() { chart.removeSeries(line); },
+    };
+  }
+
   function flatHandleV2(chart) {
     const scale = "fxflat2";
     const pos = histogram(chart, scale, "#ff0000");
@@ -865,8 +970,16 @@ const OsLayers = (() => {
     const sell = markLine();
     const exit = markLine();
     const zd = mode === "zd";
+    const wr = mode === "wr";
     const pair = mode === "pair" || zd;
-    const dirOf = (r) => (pair ? (zd ? r.zdDir : r.pairDir) : r.sigDir);
+    const dirOf = (r) => (wr ? r.wrDir : (pair ? (zd ? r.zdDir : r.pairDir) : r.sigDir));
+    const wrName = (n) => ({
+      1: "압축매수", 2: "압축매도", 3: "돌파매수", 4: "돌파매도",
+      5: "추세매수", 6: "추세매도", 7: "전환매수", 8: "전환매도",
+      11: "시가회복매수", 12: "시가반락매도", 13: "흡수돌파매수", 14: "흡수돌파매도",
+      15: "무거래_확장반등매수", 19: "전일저이탈매도", 20: "전일고돌파매수",
+      21: "초기하락매도", 22: "초기상승매수", 24: "무거래30매수",
+    }[n] || "승률진입");
     const exitQtyOf = (r) => (pair ? (zd ? r.zdExitQty : r.pairExitQty) : r.sigExitQty);
     const limitQtyOf = (r) => (zd ? r.zdLimitQty : r.pairLimitQty);
     // 구버전의 수량 누락(null)은 이름만 유지한다. 잔량 0의 가상 청산은 표시하지 않는다.
@@ -877,11 +990,11 @@ const OsLayers = (() => {
       { layer: "entry", series: buy.s, pen: buy.pen, on: () => true,
         value: (r, bar) => (dirOf(r) > 0 && bar ? bar.low : null),
         color: () => "#00ff00", side: () => 1,
-        text: (r) => (pair ? pairLabel(r, zd) : orderName(1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade)) },
+        text: (r) => (wr ? (r.wrOrder ? wrName(r.wrOrder) : orderName(1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade)) : (pair ? pairLabel(r, zd) : orderName(1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade))) },
       { layer: "entry", series: sell.s, pen: sell.pen, on: () => true,
         value: (r, bar) => (dirOf(r) < 0 && bar ? bar.high : null),
         color: () => "#00ffff", side: () => -1,
-        text: (r) => (pair ? pairLabel(r, zd) : orderName(-1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade)) },
+        text: (r) => (wr ? (r.wrOrder ? wrName(r.wrOrder) : orderName(-1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade)) : (pair ? pairLabel(r, zd) : orderName(-1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade))) },
       { layer: "exit", series: exit.s, pen: exit.pen, on: () => true,
         value: (r, bar) => (markOf(r) && bar ? (markOf(r) > 0 ? bar.high : bar.low) : null),
         color: () => "#ffd000",
@@ -1276,10 +1389,25 @@ const OsLayers = (() => {
     };
   }
 
+  // 봉 색은 페인트바를 켰을 때만. 둘 이상이면 VolBurst, 1분봉용, 통합판정강조 순으로 하나만 쓴다.
+  const BAR_PAINT_IDS = ["vb_paint", "fx_paint_os", "fx_paint_v12"];
+
+  function barPaintOn(entry) {
+    return !!entry && (typeof entry.handle?.wantsBar !== "function" || entry.handle.wantsBar());
+  }
+
+  function barPaintRgb(active, ind) {
+    if (!active || !ind) return 0;
+    if (barPaintOn(active.get("vb_paint")) && Number(ind.vb)) return Number(ind.vb) >>> 0;
+    if (barPaintOn(active.get("fx_paint_os")) && Number(ind.os?.osPaint)) return Number(ind.os.osPaint) >>> 0;
+    if (barPaintOn(active.get("fx_paint_v12")) && Number(ind.os?.paintRgb)) return Number(ind.os.paintRgb) >>> 0;
+    return 0;
+  }
+
   return {
     parse, judgeHandle, packHandle, flatHandle, flatHandleV2, adjHandle, adjHandleOf,
-    ecHandle, sigHandle, pnlHandle, posHandle, paintHandle, orderName, exitName, pairLabel, groupName,
-    labelMarks,
+    ecHandle, sigHandle, pnlHandle, posHandle, paintHandle, swingHandle, orderName, exitName, pairLabel, groupName,
+    labelMarks, BAR_PAINT_IDS, barPaintRgb,
   };
 })();
 

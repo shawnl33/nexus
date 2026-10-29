@@ -99,6 +99,7 @@ const YlTree = (() => {
     "#우드스탁_해외선물조정분석V5.txt": { kind: "indicator", id: "fx_adj_v5" },
     "#우드스탁_해외선물조정분석V6.txt": { kind: "indicator", id: "fx_adj_v6" },
     "#우드스탁_해외선물평탄카운트.txt": { kind: "indicator", id: "fx_flat_v2" },
+    "#우드스탁_해외선물스윙전체폭V2.txt": { kind: "indicator", id: "fx_swing_w" },
     "#우드스탁_해외선물진입후보V19.txt": { kind: "indicator", id: "fx_ec19" },
     "#우드스탁_해외선물진입후보V20.txt": { kind: "indicator", id: "fx_ec20" },
     "paintbar/#우드스탁_미래곡선_1분봉용_해외.txt": { kind: "indicator", id: "fx_paint_os" },
@@ -129,6 +130,7 @@ const YlTree = (() => {
     "#우드스탁_위클리_합산수익률_양매도.txt": { kind: "indicator", id: "w_ret_short" },
     "#우드스탁_위클리_프라이스링크_양매수.txt": { kind: "indicator", id: "w_link_long" },
     "#우드스탁_위클리_프라이스링크_양매도.txt": { kind: "indicator", id: "w_link_short" },
+    "signals/#우드스탁_ES기초자산_승률.txt": { kind: "indicator", id: "fx_wr" },
     "#우드스탁_위클리_페어시스템_양매수.txt": { kind: "system", id: "pair-long", side: 1, leg: "w_link_long", inputs: LONG_INPUTS },
     "#우드스탁_위클리_페어시스템_양매도.txt": { kind: "system", id: "pair-short", side: -1, leg: "w_link_short", inputs: SHORT_INPUTS },
   };

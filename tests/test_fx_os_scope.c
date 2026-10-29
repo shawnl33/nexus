@@ -221,7 +221,7 @@ static void test_exit_quantities_reach_chart_rows(void) {
         p = strchr(p, ',');
         if (p != 0) p++;
     }
-    TR_CHECK(p != 0 && strcmp(p, "2,0,0,1") == 0);
+    TR_CHECK(p != 0 && strncmp(p, "2,0,0,1", 7) == 0 && (p[7] == '\0' || p[7] == ','));
     bar.is_new_bar = false;
     tr_fxos_eval(&s, &bar);
     TR_CHECK(s.out.pair_exit_qty == 2);
