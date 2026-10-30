@@ -298,6 +298,8 @@ const CuLayers = (() => {
         ctx = c || ctx;
         const t = Number(p.bar_open_time) / 1e6;
         if (!Number.isFinite(t) || t <= 0) return;
+        // 곡선 계산이 꺼진 틱은 빈 배열이다. 점을 지우면 로드 직후 선이 사라진다.
+        if (!Array.isArray(p.cu) || p.cu.length === 0) return;
         if (!synced) { rebuild(); return; }
         liveTail(t);
       },

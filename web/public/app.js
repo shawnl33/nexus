@@ -1493,13 +1493,16 @@ function indicatorIdsFor(shcode) {
   const sh = String(shcode || "").trim().toUpperCase();
   const ids = new Set();
   if (!sh) return [];
+  // 한 화면틀은 종목 하나다. 첫 칸만 종목이 있어도 아래 칸 지표까지 엔진에 켠다.
+  // 여기 빠지면 그 계산이 꺼진 채 봉이 저장되어, 로드 뒤에는 가격 차트만 남는다.
+  const frames = new Set();
   for (const pane of panes) {
-    if (pane.symbol !== sh && pane.selTarget !== sh) continue;
+    if (pane.symbol === sh || pane.selTarget === sh) frames.add(pane.frame);
+  }
+  for (const pane of panes) {
+    if (!frames.has(pane.frame)) continue;
+    if (pane.symbol && pane.symbol !== sh && pane.selTarget !== sh) continue;
     for (const id of pane.active.keys()) ids.add(id);
-    for (const other of pane.frame?.panes || []) {
-      if (other.symbol && other.symbol !== sh) continue;
-      for (const id of other.active.keys()) ids.add(id);
-    }
   }
   return [...ids];
 }
@@ -1511,7 +1514,7 @@ function syncSymbolIndicators(shcode) {
   const gen = (indSyncGen.get(sh) || 0) + 1;
   indSyncGen.set(sh, gen);
   const ids = indicatorIdsFor(sh);
-  void (async () => {
+  return (async () => {
     const token = await apiToken();
     if (!token || indSyncGen.get(sh) !== gen) return;
     let res;
@@ -4028,6 +4031,8 @@ async function applyWorkspace(parsed) {
       // 칸마다 watch하면 NH는 이미 있는 봉을 다시 받아 첫 화면이 칸 수만큼 길어진다.
       const lead = frame.panes[0];
       if (lead && frameSymbol) {
+        // watch가 지표 목록을 읽는 시점에는 아래 칸도 이 종목 선택 중이어야 한다.
+        for (const pane of frame.panes) pane.selTarget = frameSymbol;
         jobs.push((async () => {
           try {
             await selectPaneSymbol(lead, frameSymbol);
@@ -4062,6 +4067,10 @@ async function applyWorkspace(parsed) {
     }
     // 관측에 실패해 페이지를 안 받은 종목도 여기서 마친다. 이후 맞추기는 짧은 꼬리다.
     for (const sh of seedProgress.keys()) finishSeed(sh);
+    // 시딩 중에 지표 목록이 줄었으면, 화면틀 전체를 다시 맞추고 봉을 다시 채운다.
+    const shown = [...new Set(panes.map((p) => p.symbol).filter(Boolean))];
+    await Promise.all(shown.map((sh) => syncSymbolIndicators(sh)));
+    if (!loadStill(epoch)) return;
     for (const pane of panes) {
       const w = pane.chartEl.clientWidth;
       const h = pane.chartEl.clientHeight;
