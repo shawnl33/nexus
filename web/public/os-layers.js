@@ -183,6 +183,9 @@ const OsLayers = (() => {
       swingPct: row.length >= 234 ? num(row[233]) : null,
       wrDir: row.length >= 236 ? Number(row[234]) || 0 : 0,
       wrOrder: row.length >= 236 ? Number(row[235]) || 0 : 0,
+      wrExitDir: row.length >= 237 ? Number(row[236]) || 0 : 0,
+      wrName: row.length >= 238 && typeof row[237] === "string" ? row[237] : "",
+      wrExitName: row.length >= 239 && typeof row[238] === "string" ? row[238] : "",
       adjKind: row.length >= 156 ? (Number(row[154]) || 0) : 0,
       adjGrade: row.length >= 156 ? (Number(row[155]) || 0) : 0,
     };
@@ -643,10 +646,23 @@ const OsLayers = (() => {
     let series = null;
     let chart = null;
     let points = [];
+    let requestUpdate = () => {};
     return {
-      setPoints(next) { points = next || []; },
-      attached(param) { series = param.series; chart = param.chart; },
-      detached() { series = null; chart = null; },
+      setPoints(next) {
+        points = next || [];
+        requestUpdate();
+      },
+      get points() { return points; },
+      attached(param) {
+        series = param.series;
+        chart = param.chart;
+        requestUpdate = typeof param.requestUpdate === "function" ? param.requestUpdate : () => {};
+      },
+      detached() {
+        series = null;
+        chart = null;
+        requestUpdate = () => {};
+      },
       updateAllViews() {},
       paneViews() {
         return [{
@@ -665,16 +681,19 @@ const OsLayers = (() => {
                   ctx.beginPath();
                   for (let i = 0; i < points.length; i++) {
                     const p = points[i];
-                    if (p.value == null || !Number.isFinite(p.value)) continue;
+                    // 시각이 없으면 timeToCoordinate가 예외를 던지고, 그 아래 칸 그리기까지 멈춘다.
+                    if (!p || !Number.isFinite(p.time) || p.value == null || !Number.isFinite(p.value)) continue;
                     const x0 = ts.timeToCoordinate(p.time);
                     const y = series.priceToCoordinate(p.value);
                     if (x0 == null || y == null) continue;
                     let x1 = x0;
-                    if (i + 1 < points.length) {
-                      const xn = ts.timeToCoordinate(points[i + 1].time);
+                    const nxt = points[i + 1];
+                    const prv = points[i - 1];
+                    if (nxt && Number.isFinite(nxt.time)) {
+                      const xn = ts.timeToCoordinate(nxt.time);
                       if (xn != null) x1 = xn;
-                    } else if (i > 0) {
-                      const xp = ts.timeToCoordinate(points[i - 1].time);
+                    } else if (prv && Number.isFinite(prv.time)) {
+                      const xp = ts.timeToCoordinate(prv.time);
                       if (xp != null) x1 = x0 + (x0 - xp);
                     }
                     ctx.moveTo(x0 * hr, y * vr);
@@ -733,7 +752,27 @@ const OsLayers = (() => {
         draw();
       },
       applySeed(c) { ctx = c; draw(); },
-      applyLive(p, c) { ctx = c || ctx; draw(); },
+      applyLive(p, c) {
+        ctx = c || ctx;
+        if (!show || !p || !ctx) return;
+        const t = Number(p.bar_open_time) / 1e6;
+        if (!Number.isFinite(t)) return;
+        const row = ctx.barInd.get(t)?.os;
+        const value = row?.swingOn && Number.isFinite(row.swingPct) ? row.swingPct : null;
+        const point = value == null ? { time: t } : { time: t, value };
+        const pts = pen.points;
+        const last = pts.length ? pts[pts.length - 1] : null;
+        // 과거 봉 정정은 마지막 점 갱신으로 끼워 넣을 수 없다. 가진 봉을 다시 깐다.
+        if (last && t < last.time) {
+          draw();
+          return;
+        }
+        if (last && last.time === t) pts[pts.length - 1] = point;
+        else pts.push(point);
+        pen.setPoints(pts);
+        try { line.update(point); }
+        catch { draw(); }
+      },
       clear() { line.setData([]); pen.setPoints([]); },
       destroy() { chart.removeSeries(line); },
     };
@@ -973,28 +1012,29 @@ const OsLayers = (() => {
     const wr = mode === "wr";
     const pair = mode === "pair" || zd;
     const dirOf = (r) => (wr ? r.wrDir : (pair ? (zd ? r.zdDir : r.pairDir) : r.sigDir));
-    const wrName = (n) => ({
+    const wrOrderName = (n) => ({
       1: "압축매수", 2: "압축매도", 3: "돌파매수", 4: "돌파매도",
       5: "추세매수", 6: "추세매도", 7: "전환매수", 8: "전환매도",
-      11: "시가회복매수", 12: "시가반락매도", 13: "흡수돌파매수", 14: "흡수돌파매도",
-      15: "무거래_확장반등매수", 19: "전일저이탈매도", 20: "전일고돌파매수",
-      21: "초기하락매도", 22: "초기상승매수", 24: "무거래30매수",
-    }[n] || "승률진입");
+      55: "시가회복매수", 58: "시가반락매도", 61: "흡수돌파매수", 64: "흡수돌파매도",
+      67: "무거래_확장반등매수", 79: "전일저이탈매도", 82: "전일고돌파매수",
+      85: "초기하락매도", 88: "초기상승매수", 94: "무거래30매수",
+    }[n] || "");
+    const wrEntryText = (r) => r.wrName || wrOrderName(r.wrOrder) || "";
     const exitQtyOf = (r) => (pair ? (zd ? r.zdExitQty : r.pairExitQty) : r.sigExitQty);
     const limitQtyOf = (r) => (zd ? r.zdLimitQty : r.pairLimitQty);
     // 구버전의 수량 누락(null)은 이름만 유지한다. 잔량 0의 가상 청산은 표시하지 않는다.
-    const exitOf = (r) => (pair && exitQtyOf(r) === 0 ? 0 : (pair ? (zd ? r.zdExit : r.pairExit) : r.sigExit));
+    const exitOf = (r) => (wr ? (r.wrExitDir || 0) : (pair && exitQtyOf(r) === 0 ? 0 : (pair ? (zd ? r.zdExit : r.pairExit) : r.sigExit)));
     const limitOf = (r) => (pair && limitQtyOf(r) !== 0 ? (zd ? r.zdLimit : r.pairLimit) : 0);
     const markOf = (r) => exitOf(r) || limitOf(r);
     const lines = [
       { layer: "entry", series: buy.s, pen: buy.pen, on: () => true,
         value: (r, bar) => (dirOf(r) > 0 && bar ? bar.low : null),
         color: () => "#00ff00", side: () => 1,
-        text: (r) => (wr ? (r.wrOrder ? wrName(r.wrOrder) : orderName(1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade)) : (pair ? pairLabel(r, zd) : orderName(1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade))) },
+        text: (r) => (wr ? wrEntryText(r) : (pair ? pairLabel(r, zd) : orderName(1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade))) },
       { layer: "entry", series: sell.s, pen: sell.pen, on: () => true,
         value: (r, bar) => (dirOf(r) < 0 && bar ? bar.high : null),
         color: () => "#00ffff", side: () => -1,
-        text: (r) => (wr ? (r.wrOrder ? wrName(r.wrOrder) : orderName(-1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade)) : (pair ? pairLabel(r, zd) : orderName(-1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade))) },
+        text: (r) => (wr ? wrEntryText(r) : (pair ? pairLabel(r, zd) : orderName(-1, r.sigKind, r.sigGrade, r.adjKind, r.adjGrade))) },
       { layer: "exit", series: exit.s, pen: exit.pen, on: () => true,
         value: (r, bar) => (markOf(r) && bar ? (markOf(r) > 0 ? bar.high : bar.low) : null),
         color: () => "#ffd000",
@@ -1003,7 +1043,7 @@ const OsLayers = (() => {
           const lines = [];
           const hit = limitOf(r);
           if (hit) lines.push(quantityLabel((zd ? "1차청산" : "1차목표청산") + (hit > 0 ? "매수" : "매도"), limitQtyOf(r)));
-          if (exitOf(r)) lines.push(quantityLabel(pair ? pairExitLabel(r, zd) : exitName(exitOf(r)), exitQtyOf(r)));
+          if (exitOf(r)) lines.push(wr && r.wrExitName ? r.wrExitName : quantityLabel(pair ? pairExitLabel(r, zd) : exitName(exitOf(r)), exitQtyOf(r)));
           return lines.join("\n");
         } },
     ];

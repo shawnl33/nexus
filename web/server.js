@@ -223,6 +223,18 @@ function isValidShcode(s) {
   return typeof s === "string" && /^[A-Za-z0-9._-]{4,32}$/.test(s);
 }
 
+// 켠 지표 id. 없으면 null(엔진은 전부 계산). 배열이 아니면 invalid.
+function indicatorIds(raw) {
+  if (raw == null) return null;
+  if (!Array.isArray(raw)) return undefined;
+  const ids = [];
+  for (const id of raw) {
+    if (typeof id !== "string" || !/^[A-Za-z0-9_]{1,64}$/.test(id) || ids.includes(id)) continue;
+    ids.push(id);
+  }
+  return ids;
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${HOST}`);
@@ -279,17 +291,46 @@ const server = createServer(async (req, res) => {
       // 워치 추가/해제는 엔진 구독 상태를 바꾸는 변경 요청이다 (계획서 §18)
       if (!mutationAllowed(req)) return json(res, 403, { error: "forbidden" });
       const body = await readBody(req);
-      let shcode;
+      let parsed;
       try {
-        shcode = JSON.parse(body).shcode;
+        parsed = JSON.parse(body);
       } catch {
         return json(res, 400, { error: "invalid_json" });
       }
+      const shcode = parsed.shcode;
       if (!isValidShcode(shcode)) {
         return json(res, 400, { error: "invalid_symbol" });
       }
       const type = path.endsWith("/unwatch") ? "market.unwatch" : "market.watch";
-      const reply = await engineCommand(`dash-watch-${reqSeq}`, type, JSON.stringify({ shcode }));
+      const data = { shcode };
+      if (type === "market.watch") {
+        const ids = indicatorIds(parsed.ids);
+        if (ids === undefined) return json(res, 400, { error: "invalid_ids" });
+        if (ids != null) data.ids = ids;
+      }
+      const reply = await engineCommand(`dash-watch-${reqSeq}`, type, JSON.stringify(data));
+      const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
+      return json(res, code, reply);
+    }
+
+    if (req.method === "POST" && path === "/api/indicators") {
+      // 켠 지표만 엔진이 계산하게 한다. ids가 빈 배열이면 해외 지표 계산을 건너뛴다.
+      if (!mutationAllowed(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return json(res, 400, { error: "invalid_json" });
+      }
+      if (!isValidShcode(parsed.shcode)) return json(res, 400, { error: "invalid_symbol" });
+      const ids = indicatorIds(parsed.ids);
+      if (ids == null) return json(res, 400, { error: "invalid_ids" });
+      const reply = await engineCommand(
+        `dash-ind-${reqSeq}`,
+        "market.indicators",
+        JSON.stringify({ shcode: parsed.shcode, ids }),
+      );
       const code = reply.error_code === "connection_error" ? 502 : reply.status === "rejected" ? 400 : 200;
       return json(res, code, reply);
     }

@@ -710,7 +710,8 @@ enum {
     YL_A_회복량5 = 12,
     YL_A_N
 };
-#define YL_LAG 32
+/* 두구간 비율 창 240봉, 조정상태 합 60봉. 32봉이면 그 앞이 0이 된다. */
+#define YL_LAG 240
 typedef struct {
     int64_t date, time, bar_open;
     double open, high, low, close, volume, price_scale;
@@ -735,6 +736,7 @@ typedef struct tr_fxwr {
     tr_fxwr_ord_t ords[24];
     int mkt_side;
     double last_o, last_h, last_l, last_c, last_v;
+    int64_t last_date, last_time;
     void *eng;
 } tr_fxwr_t;
 void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b);
@@ -763,6 +765,6 @@ double yl_WSF_FXSessionKeyV1(tr_fxwr_t *s, const tr_fxwr_bar_t *b);
 double yl_WSF_FXSessionProfileV1_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b);
 double yl_WSF_FXSessionProfileV2_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b);
 double yl_WSF_FXSqueezeV1_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b);
-double yl_WSF_FXSyntheticLinesV1(tr_fxwr_t *s, const tr_fxwr_bar_t *b);
+double yl_WSF_FXSyntheticLinesV1(tr_fxwr_t *s, const tr_fxwr_bar_t *b, int minutes);
 double yl_WSF_FXWaveAdjV6_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b);
 #endif

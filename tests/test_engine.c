@@ -1621,6 +1621,60 @@ static void test_fx_ovs_emits_plots(void) {
     }
 }
 
+/* 켠 지표가 없으면 해외 미래곡선·V3를 계산하지 않는다. 곡선을 다시 켜면 가진 봉으로 채운다. */
+static void test_ind_need_skips_unused(void) {
+    tr_engine_t e;
+    char last[8192];
+    tr_engine_config_t cfg;
+    tr_bar_status_t st;
+    uint32_t replayed;
+    uint64_t id = 1;
+    int i;
+    last[0] = '\0';
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.engine_instance_id = 1;
+    cfg.instrument_id = 7;
+    snprintf(cfg.shcode, sizeof(cfg.shcode), "ESZ26");
+    cfg.session = TEST_SESS;
+    cfg.timeframe_sec = 60;
+    cfg.no_trade = TR_NO_TRADE_SKIP;
+    cfg.predict_bars[0] = 5;
+    cfg.predict_bars[1] = 10;
+    cfg.predict_bars[2] = 15;
+    cfg.htf_ticks = 10;
+    cfg.min_r2 = 0.40;
+    cfg.market_period = 20;
+    cfg.is_futures = true;
+    cfg.is_ovs = true;
+    cfg.tick_raw = 25.0;
+    static tr_candle_t bb[BB_CAP];
+    static double mid[32];
+    static tr_bar_status_t ring[BB_CAP];
+    TR_CHECK(tr_engine_init(&e, &cfg, bb, BB_CAP, mid, 32));
+    TR_CHECK(tr_engine_attach_status_ring(&e, ring, BB_CAP));
+    tr_engine_attach_status_cb(&e, capture_full, last);
+    TR_CHECK(tr_engine_set_ind_need(&e, cfg.instrument_id, 0) == 0);
+    for (i = 0; i < 8; i++) {
+        feed(&e, (unsigned)i, 0, 1000 + i * 25, id++);
+    }
+    TR_CHECK(strstr(last, "\"fx\":") == 0);
+    TR_CHECK(strstr(last, "\"fx3\":") == 0);
+    TR_CHECK(strstr(last, "\"cu\":") == 0);
+    memset(&st, 0, sizeof(st));
+    TR_CHECK(tr_engine_status_at(&e, 0, &st));
+    TR_CHECK(st.fx_on == 0);
+    TR_CHECK(st.cu_n == 0);
+    replayed = tr_engine_set_ind_need(&e, cfg.instrument_id, TR_NEED_CURVE);
+    TR_CHECK(replayed == TR_NEED_CURVE);
+    TR_CHECK(tr_engine_status_at(&e, 0, &st));
+    TR_CHECK(st.fx_on == 1);
+    TR_CHECK((st.fx_mask & 1u) != 0);
+    last[0] = '\0';
+    feed(&e, 8, 0, 1000 + 8 * 25, id++);
+    TR_CHECK(strstr(last, "\"fx\":[") != 0);
+    TR_CHECK(strstr(last, "\"fx3\":") == 0);
+}
+
 /* 국내 파이프라인 페이로드는 기존과 같이 fx 키를 넣지 않는다 */
 static void test_fx_domestic_omits_fx(void) {
     tr_engine_t e;
@@ -1964,6 +2018,7 @@ int main(void) {
     test_pipe_transplant_atr_relink();
     test_mixed_market_sessions();
     test_fx_ovs_emits_plots();
+    test_ind_need_skips_unused();
     test_fx_domestic_omits_fx();
     test_ovs_ob_uses_osf();
     test_ovs_correction_keeps_saved_ob();

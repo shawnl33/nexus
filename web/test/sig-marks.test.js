@@ -161,6 +161,32 @@ test("짝 화살은 계약수와 1차 틱을 적는다", () => {
   }, true), "압축매도_약세\n1계약\n1차 10틱");
 });
 
+test("승률 화살은 원본 주문 이름을 적는다", () => {
+  const chart = fakeChart();
+  const h = Os.sigHandle(chart, "wr");
+  h.applySeed({
+    barSeq: [1000],
+    barPos: new Map([[1000, 0]]),
+    bars: new Map([[1000, { high: 110, low: 90, close: 100 }]]),
+    barInd: new Map([[1000, { os: { wrDir: 1, wrOrder: 55, sigDir: 1, sigKind: 2, wrName: "시가회복매수" } }]]),
+  });
+  const texts = drawAll(chart).filter((c) => c[0] === "text").map((c) => c[1]);
+  assert.deepEqual(texts, ["시가회복매수"]);
+});
+
+test("승률 번호 55는 시가회복매수다", () => {
+  const chart = fakeChart();
+  const h = Os.sigHandle(chart, "wr");
+  h.applySeed({
+    barSeq: [1000],
+    barPos: new Map([[1000, 0]]),
+    bars: new Map([[1000, { high: 110, low: 90, close: 100 }]]),
+    barInd: new Map([[1000, { os: { wrDir: 1, wrOrder: 55, sigDir: 1, sigKind: 1, sigGrade: 8 } }]]),
+  });
+  const texts = drawAll(chart).filter((c) => c[0] === "text").map((c) => c[1]);
+  assert.deepEqual(texts, ["시가회복매수"]);
+});
+
 test("등급 8 매수 화살은 후보돌파매수라고 적는다", () => {
   const chart = fakeChart();
   const h = Os.sigHandle(chart);

@@ -9,6 +9,8 @@
 
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar);
 static void civil_stamp(tr_time_us_t t, int32_t utc_offset_min, int64_t *date, int64_t *tod);
+static void replay_ind(tr_pipeline_t *p, uint32_t old_need, uint32_t added);
+static void replay_wr(tr_pipeline_t *p);
 
 /* 원본 PriceScale 대응: raw 가격 단위의 1틱 — tick_raw 명시(해외선물) > 자동(선물 0.05pt×100=5,
  * 주식 1원×100=100). raw는 주식·선물 모두 실제 × 100 스케일 (ls_chart.c parse_price_scaled) */
@@ -23,6 +25,36 @@ double tr_engine_pipe_tick_scale(const tr_pipeline_t *p) {
     return p != 0 ? tick_scale(p) : 100.0;
 }
 
+uint32_t tr_engine_set_ind_need(tr_engine_t *e, uint64_t instrument_id, uint32_t need) {
+    int i;
+    if (e == 0) {
+        return 0;
+    }
+    for (i = 0; i < e->pipe_count; i++) {
+        tr_pipeline_t *p = e->pipes[i];
+        bool was;
+        uint32_t old;
+        uint32_t added;
+        if (p == 0 || p->instrument_id != instrument_id) {
+            continue;
+        }
+        was = p->ind_need_set;
+        old = p->ind_need;
+        p->ind_need = need;
+        p->ind_need_set = true;
+        if (!was || !p->is_ovs) {
+            return 0;
+        }
+        added = (need & ~old) & (TR_NEED_CURVE | TR_NEED_OS | TR_NEED_VB | TR_NEED_WR);
+        if (added == 0 || tr_ring_count(&p->bb.bars) == 0) {
+            return 0;
+        }
+        replay_ind(p, old, added);
+        return added;
+    }
+    return 0;
+}
+
 void tr_engine_replay_os(tr_pipeline_t *p) {
     tr_fxsig_cfg_t cfg;
     size_t n;
@@ -32,6 +64,7 @@ void tr_engine_replay_os(tr_pipeline_t *p) {
     }
     cfg = p->os_scope.cfg;
     tr_fxec_cfg_t entry_cfg = p->os_scope.entry.cfg;
+    tr_fxos_wr_reset(&p->os_scope);
     if (!tr_fxos_init(&p->os_scope, tick_scale(p))) {
         return;
     }
@@ -117,6 +150,200 @@ static void civil_stamp(tr_time_us_t t, int32_t utc_offset_min, int64_t *date, i
     }
     *date = (int64_t)c.year * 10000 + (int64_t)c.month * 100 + (int64_t)c.day;
     *tod = (int64_t)c.hour * 10000 + (int64_t)c.min * 100 + (int64_t)c.sec;
+}
+
+static tr_bar_status_t *status_slot_mut(tr_pipeline_t *p, tr_time_us_t open) {
+    size_t n, i;
+    if (p == 0 || !p->status_ring_on) {
+        return 0;
+    }
+    n = tr_ring_count(&p->status_ring);
+    for (i = 0; i < n; i++) {
+        tr_bar_status_t *st = tr_ring_get_mut(&p->status_ring, i);
+        if (st != 0 && st->open_time_us == open) {
+            return st;
+        }
+    }
+    return 0;
+}
+
+static void fill_cu_slot(tr_bar_status_t *st, const tr_fxcu_t *cu) {
+    int n = 0;
+    int k;
+    if (st == 0 || cu == 0) {
+        return;
+    }
+    for (k = 0; k < TR_FXCU_PLOTS && n < TR_FXCU_PLOTS; k++) {
+        if (!cu->plots[k].on || cu->plots[k].width <= 0) {
+            continue;
+        }
+        st->cu_id[n] = (uint16_t)(k + 1);
+        st->cu_v[n] = cu->plots[k].value;
+        st->cu_rgb[n] = cu->plots[k].rgb;
+        st->cu_w[n] = (uint8_t)cu->plots[k].width;
+        n++;
+    }
+    st->cu_n = n;
+}
+
+/* 미래곡선이 꺼져 있다 켜지면, 가진 봉으로 mirae와 곡선 플롯을 다시 채운다.
+ * 갭·스나이퍼 CO가 이미 mirae를 돌리고 있으면 p->fx는 그대로 두고 그림자만 쓴다. */
+static void replay_curve(tr_pipeline_t *p, int reset_fx) {
+    tr_fxmirae_t *shadow = 0;
+    tr_fxmirae_t *fx;
+    tr_fxmirae_config_t mcfg;
+    tr_candle_t prev;
+    int has_prev = 0;
+    size_t n;
+    size_t back;
+    tr_fxmirae_default_config(&mcfg, tick_scale(p));
+    if (!tr_fxcu_init(&p->curve_os, tick_scale(p))) {
+        return;
+    }
+    if (reset_fx) {
+        if (!tr_fxmirae_init(&p->fx, &mcfg)) {
+            return;
+        }
+        fx = &p->fx;
+    } else {
+        shadow = (tr_fxmirae_t *)calloc(1, sizeof(*shadow));
+        if (shadow == 0 || !tr_fxmirae_init(shadow, &mcfg)) {
+            free(shadow);
+            return;
+        }
+        fx = shadow;
+    }
+    n = tr_ring_count(&p->bb.bars);
+    for (back = n; back-- > 0;) {
+        tr_candle_t bar;
+        tr_fxmirae_input_t fin;
+        tr_bar_status_t *st;
+        if (!tr_ring_at(&p->bb.bars, back, &bar)) {
+            continue;
+        }
+        memset(&fin, 0, sizeof(fin));
+        civil_stamp(bar.open_time_us, p->session.utc_offset_min, &fin.bar.date, &fin.bar.time);
+        fin.bar.bar_open = bar.open_time_us;
+        fin.bar.high = (double)bar.high;
+        fin.bar.low = (double)bar.low;
+        fin.bar.close = (double)bar.close;
+        fin.bar.volume = (double)bar.volume;
+        if (has_prev) {
+            fin.has_prev = true;
+            civil_stamp(prev.open_time_us, p->session.utc_offset_min, &fin.prev_date, &fin.prev_time);
+            fin.prev_h = (double)prev.high;
+            fin.prev_l = (double)prev.low;
+            fin.prev_c = (double)prev.close;
+            fin.prev_v = (double)prev.volume;
+        }
+        tr_fxmirae_eval(fx, &fin);
+        tr_fxcu_eval(&p->curve_os, &fin, &fx->syn5, &fx->syn15, &fx->syn30);
+        st = status_slot_mut(p, bar.open_time_us);
+        if (reset_fx && st != 0) {
+            uint32_t mask = 0;
+            int k;
+            st->fx_on = 1;
+            for (k = 0; k < TR_FXMIRAE_PLOTS; k++) {
+                if (fx->plots[k].on) {
+                    mask |= 1u << k;
+                }
+                st->fx_plot[k] = fx->plots[k].value;
+            }
+            st->fx_mask = mask;
+        }
+        fill_cu_slot(st, &p->curve_os);
+        prev = bar;
+        has_prev = 1;
+    }
+    free(shadow);
+}
+
+static void replay_vb(tr_pipeline_t *p) {
+    tr_vb_cfg_t cfg;
+    size_t n;
+    size_t back;
+    tr_vb_default_cfg(&cfg);
+    if (!tr_vb_init(&p->vb, &cfg)) {
+        return;
+    }
+    n = tr_ring_count(&p->bb.bars);
+    for (back = n; back-- > 0;) {
+        tr_candle_t bar;
+        tr_vb_bar_t vin;
+        int64_t ymd = 0;
+        int64_t tod = 0;
+        tr_bar_status_t *st;
+        uint32_t rgb;
+        if (!tr_ring_at(&p->bb.bars, back, &bar)) {
+            continue;
+        }
+        memset(&vin, 0, sizeof(vin));
+        civil_stamp(bar.open_time_us, p->session.utc_offset_min, &ymd, &tod);
+        vin.time = tod;
+        vin.high = (double)bar.high;
+        vin.low = (double)bar.low;
+        vin.close = (double)bar.close;
+        vin.volume = (double)bar.volume;
+        vin.is_new_bar = 1;
+        rgb = tr_vb_on_bar(&p->vb, &vin);
+        st = status_slot_mut(p, bar.open_time_us);
+        if (st != 0) {
+            st->vb_rgb = rgb;
+        }
+    }
+}
+
+static void replay_wr(tr_pipeline_t *p) {
+    size_t n;
+    size_t back;
+    if (p == 0 || !p->is_ovs) {
+        return;
+    }
+    tr_fxos_wr_reset(&p->os_scope);
+    n = tr_ring_count(&p->bb.bars);
+    for (back = n; back-- > 0;) {
+        tr_candle_t bar;
+        tr_fxos_input_t in;
+        tr_bar_status_t *st;
+        if (!tr_ring_at(&p->bb.bars, back, &bar)) {
+            continue;
+        }
+        memset(&in, 0, sizeof(in));
+        civil_stamp(bar.open_time_us, p->session.utc_offset_min, &in.date, &in.time);
+        in.bar_open = bar.open_time_us;
+        in.open = (double)bar.open;
+        in.high = (double)bar.high;
+        in.low = (double)bar.low;
+        in.close = (double)bar.close;
+        in.volume = (double)bar.volume;
+        in.is_new_bar = 1;
+        tr_fxos_wr_bar(&p->os_scope, &in);
+        st = status_slot_mut(p, bar.open_time_us);
+        if (st == 0) {
+            continue;
+        }
+        st->os_full.wr_dir = p->os_scope.out.wr_dir;
+        st->os_full.wr_order = p->os_scope.out.wr_order;
+        st->os_full.wr_exit_dir = p->os_scope.out.wr_exit_dir;
+        memcpy(st->os_full.wr_name, p->os_scope.out.wr_name, sizeof(st->os_full.wr_name));
+        memcpy(st->os_full.wr_exit_name, p->os_scope.out.wr_exit_name, sizeof(st->os_full.wr_exit_name));
+    }
+}
+
+static void replay_ind(tr_pipeline_t *p, uint32_t old_need, uint32_t added) {
+    if ((added & TR_NEED_OS) != 0) {
+        tr_engine_replay_os(p);
+    }
+    if ((added & TR_NEED_CURVE) != 0) {
+        int reset_fx = (old_need & (TR_NEED_CURVE | TR_NEED_GAP | TR_NEED_SNCO)) == 0;
+        replay_curve(p, reset_fx);
+    }
+    if ((added & TR_NEED_VB) != 0) {
+        replay_vb(p);
+    }
+    if ((added & TR_NEED_WR) != 0) {
+        replay_wr(p);
+    }
 }
 
 /* shcode를 JSON 안전 문자(영숫자)만 남겨 복사한다. 페이로드에 그대로 실리므로
@@ -1342,6 +1569,14 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
             fin.prev_c = (double)prev.close;
             fin.prev_v = (double)prev.volume;
         }
+        bool want_curve = !p->ind_need_set || (p->ind_need & TR_NEED_CURVE) != 0;
+        bool want_fx3 = !p->ind_need_set || (p->ind_need & TR_NEED_FX3) != 0;
+        bool want_gap = !p->ind_need_set || (p->ind_need & TR_NEED_GAP) != 0;
+        bool want_os = !p->ind_need_set || (p->ind_need & TR_NEED_OS) != 0;
+        bool want_snco = !p->ind_need_set || (p->ind_need & TR_NEED_SNCO) != 0;
+        bool want_wr = !p->ind_need_set || (p->ind_need & TR_NEED_WR) != 0;
+        bool want_mirae = want_curve || want_gap || want_snco;
+        if (want_mirae) {
         tr_fxmirae_eval(&p->fx, &fin);
         fx_on = 1;
         for (int k = 0; k < TR_FXMIRAE_PLOTS; k++) {
@@ -1350,8 +1585,10 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
             }
             fx_plot[k] = p->fx.plots[k].value;
         }
+        }
         int64_t ymd = 0, tod = 0;
         civil_stamp(bar->open_time_us, p->session.utc_offset_min, &ymd, &tod);
+        if (want_fx3) {
         tr_fxv3_run_eval(&p->fx3, ymd, tod, (double)bar->open, (double)bar->high,
                          (double)bar->low, (double)bar->close, (double)bar->volume,
                          bar->open_time_us);
@@ -1369,8 +1606,10 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
                 fx3_n++;
             }
         }
+        }
         int64_t key = tr_fx_session_key_v1(ymd, tod);
         bool reset = !p->pgap_has_key || key != p->pgap_key;
+        if (want_gap) {
         tr_fxpgap_input_t gin;
         memset(&gin, 0, sizeof(gin));
         gin.session_reset = reset;
@@ -1465,6 +1704,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         snin.above = p->pgap3.above;
         tr_fxsniper_eval(&p->sniper, &snin);
         snout = p->sniper.out;
+        }
+        if (want_os || want_wr) {
         tr_fxos_input_t oin;
         memset(&oin, 0, sizeof(oin));
         civil_stamp(bar->open_time_us, p->session.utc_offset_min, &oin.date, &oin.time);
@@ -1485,8 +1726,23 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         oin.reg_r2 = p->lr3.r2;
         oin.ob_valid = p->obd2.validity == TR_VALIDITY_VALID ? 1 : 0;
         oin.ob_score = oin.ob_valid ? p->obd2.score : 0;
-        tr_fxos_eval(&p->os_scope, &oin);
-        osout = p->os_scope.out;
+        if (want_os) {
+            tr_fxos_eval(&p->os_scope, &oin);
+        }
+        if (want_wr) {
+            tr_fxos_wr_bar(&p->os_scope, &oin);
+        }
+        if (want_os) {
+            osout = p->os_scope.out;
+        } else {
+            osout.wr_dir = p->os_scope.out.wr_dir;
+            osout.wr_order = p->os_scope.out.wr_order;
+            osout.wr_exit_dir = p->os_scope.out.wr_exit_dir;
+            memcpy(osout.wr_name, p->os_scope.out.wr_name, sizeof(osout.wr_name));
+            memcpy(osout.wr_exit_name, p->os_scope.out.wr_exit_name, sizeof(osout.wr_exit_name));
+        }
+        }
+        if (want_curve) {
         tr_fxcu_eval(&p->curve_os, &fin, &p->fx.syn5, &p->fx.syn15, &p->fx.syn30);
         for (int k = 0; k < TR_FXCU_PLOTS && cu_n < TR_FXCU_PLOTS; k++) {
             if (!p->curve_os.plots[k].on || p->curve_os.plots[k].width <= 0) {
@@ -1498,6 +1754,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
             cu_w[cu_n] = (uint8_t)p->curve_os.plots[k].width;
             cu_n++;
         }
+        }
+        if (want_snco) {
         tr_snco_input_t scin;
         memset(&scin, 0, sizeof(scin));
         scin.date = fin.bar.date;
@@ -1539,7 +1797,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
             snco_w[snco_n] = (uint8_t)p->snco.plots[k].width;
             snco_n++;
         }
-        if (!reset && p->fx3.reg.reg_valid) {
+        }
+        if (want_fx3 && !reset && p->fx3.reg.reg_valid) {
             double base = p->fx3.reg.residual;
             if (p->fx3.pred.volatility * 0.25 > base) {
                 base = p->fx3.pred.volatility * 0.25;
@@ -1739,7 +1998,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
 
     /* VolBurst 강조. 1분봉에서만 봉 수를 올린다. 정정 봉은 적어 둔 색을 유지한다. */
     uint32_t vb_rgb = 0;
-    if (e->cfg.timeframe_sec == 60 && !is_correction) {
+    if (e->cfg.timeframe_sec == 60 && !is_correction &&
+        (!p->ind_need_set || (p->ind_need & TR_NEED_VB) != 0)) {
         tr_vb_bar_t vin;
         int64_t ymd = 0;
         int64_t tod = 0;

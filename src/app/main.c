@@ -971,6 +971,61 @@ static bool kind_is_futures(int kind) {
 }
 
 /* 워치 목록 조회 (shcode 기준). 없으면 -1 */
+static uint32_t ind_need_bit(const char *id) {
+    if (id == 0) {
+        return 0;
+    }
+    if (strcmp(id, "fx_curve_os") == 0 || strcmp(id, "fx_dnbrk") == 0 || strcmp(id, "fx_mirae_v1") == 0) {
+        return TR_NEED_CURVE;
+    }
+    if (strcmp(id, "fx_mirae_v3") == 0) {
+        return TR_NEED_FX3;
+    }
+    if (strcmp(id, "fx_pgap3") == 0 || strcmp(id, "fx_pgap5") == 0 || strcmp(id, "fx_rgap") == 0 ||
+        strcmp(id, "fx_ugap") == 0 || strcmp(id, "fx_ymae") == 0 || strcmp(id, "fx_pvc") == 0 ||
+        strcmp(id, "fx_sniper") == 0) {
+        return TR_NEED_GAP;
+    }
+    if (strcmp(id, "fx_snco") == 0 || strcmp(id, "fx_data2") == 0) {
+        return TR_NEED_SNCO;
+    }
+    if (strcmp(id, "vb_paint") == 0) {
+        return TR_NEED_VB;
+    }
+    if (strcmp(id, "fx_wr") == 0) {
+        return TR_NEED_WR;
+    }
+    return TR_NEED_OS;
+}
+
+static uint32_t ind_need_from_ids(yyjson_val *ids) {
+    size_t i, n;
+    uint32_t mask = 0;
+    if (!yyjson_is_arr(ids)) {
+        return 0;
+    }
+    n = yyjson_arr_size(ids);
+    for (i = 0; i < n; i++) {
+        yyjson_val *it = yyjson_arr_get(ids, i);
+        if (yyjson_is_str(it)) {
+            mask |= ind_need_bit(yyjson_get_str(it));
+        }
+    }
+    return mask;
+}
+
+static uint32_t apply_ind_ids(tr_engine_t *eng, uint64_t instrument_id, yyjson_val *data) {
+    yyjson_val *ids;
+    if (eng == 0 || data == 0) {
+        return 0;
+    }
+    ids = yyjson_obj_get(data, "ids");
+    if (!yyjson_is_arr(ids)) {
+        return 0;
+    }
+    return tr_engine_set_ind_need(eng, instrument_id, ind_need_from_ids(ids));
+}
+
 static int watch_find(const live_ctx_t *lc, const char *shcode) {
     for (int i = 0; i < lc->watch_count; i++) {
         if (strcmp(lc->watches[i].shcode, shcode) == 0) {
@@ -2409,6 +2464,37 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         return;
     }
 
+    if (strstr(p, "\"type\":\"market.indicators\"") != 0) {
+        yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
+        yyjson_val *data = doc != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0;
+        yyjson_val *sh = data != 0 ? yyjson_obj_get(data, "shcode") : 0;
+        int idx;
+        if (!yyjson_is_str(sh)) {
+            if (doc != 0) yyjson_doc_free(doc);
+            cmd->status = "rejected";
+            cmd->error_code = "invalid_symbol";
+            cmd->payload_json = 0;
+            return;
+        }
+        idx = watch_find(&g_live_ctx, yyjson_get_str(sh));
+        if (idx < 0) {
+            yyjson_doc_free(doc);
+            cmd->status = "rejected";
+            cmd->error_code = "not_watched";
+            cmd->payload_json = 0;
+            return;
+        }
+        {
+            uint32_t replayed = apply_ind_ids(g_live_ctx.engine, g_live_ctx.watches[idx].instrument_id, data);
+            snprintf(payload, sizeof(payload), "{\"ok\":true,\"replayed\":%s}", replayed != 0 ? "true" : "false");
+        }
+        yyjson_doc_free(doc);
+        cmd->status = "applied";
+        cmd->error_code = "none";
+        cmd->payload_json = payload;
+        return;
+    }
+
     if (strstr(p, "\"type\":\"market.watch\"") != 0) {
         /* 다중 관측: 파이프라인 생성(없으면)+실시간 구독+백필. 이미 있으면 현 상태 응답 */
         yyjson_doc *doc = yyjson_read((char *)p, strlen(p), 0);
@@ -2465,6 +2551,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
             w->rt_only = false;
             w->instrument_id = new_id;
             bool blank_rt_only = false;
+            apply_ind_ids(lc->engine, new_id, yyjson_doc_get_root(doc) != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0);
             int nb = backfill_minute_bars(lc->auth, lc->engine, lc->engine->pipes[0], code,
                                           new_kind, &blank_rt_only);
             w->rt_only = blank_rt_only;
@@ -2483,9 +2570,16 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         tr_pipeline_t *pipe = tr_engine_pipe_find(lc->engine, id);
         if (pipe != 0) {
             const char *name = 0;
+            yyjson_val *wdata = yyjson_doc_get_root(doc) != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0;
             resolve_instrument(lc->master, code, &name, 0);
+            apply_ind_ids(lc->engine, id, wdata);
             if (broker_is_nh()) {
-                int nb = nh_replace_pipe_bars(lc->engine, pipe, code, 0);
+                /* 화면을 다시 열 때마다 봉을 통째로 받으면 칸 수만큼 백필이 반복된다.
+                 * 봉이 없을 때만 채운다. 증권사 전환은 switch_broker_profile이 다시 받는다. */
+                int nb = 0;
+                if (tr_ring_count(&pipe->bb.bars) == 0) {
+                    nb = nh_replace_pipe_bars(lc->engine, pipe, code, 0);
+                }
                 nh_watch_realtime(code, id);
                 snprintf(payload, sizeof(payload),
                          "{\"shcode\":\"%s\",\"name\":\"%s\",\"generation\":%u,\"backfilled\":%d}",
@@ -2547,6 +2641,7 @@ static void live_command_handler(void *ctx, tr_ipc_command_t *cmd) {
         w->instrument_id = id;
 
         bool rt_only = false;
+        apply_ind_ids(lc->engine, id, yyjson_doc_get_root(doc) != 0 ? yyjson_obj_get(yyjson_doc_get_root(doc), "data") : 0);
         int nb = backfill_minute_bars(lc->auth, lc->engine, pipe, code, kind, &rt_only);
         w->rt_only = rt_only;
         nh_watch_realtime(code, id);

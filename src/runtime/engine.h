@@ -248,6 +248,8 @@ typedef struct {
     int32_t ks_current;
     bool ks_has_date;
     tr_vb_t vb; /* #BG_Vol_burst_V2. 1분봉에서만 평가한다 */
+    uint32_t ind_need; /* 켠 지표가 요구하는 계산. ind_need_set일 때만 적용 */
+    bool ind_need_set;
 } tr_pipeline_t;
 
 #define TR_ENGINE_MAX_PIPES 8 /* 동시 관측 종목 상한 (더 필요하면 상수만 올린다) */
@@ -321,6 +323,8 @@ struct tr_engine {
             int32_t ks_current;
             bool ks_has_date;
             tr_vb_t vb;
+            uint32_t ind_need;
+            bool ind_need_set;
         };
     };
     tr_pipeline_t pipe_slots[TR_ENGINE_MAX_PIPES - 1]; /* pipes[1..] 내장 저장소 */
@@ -385,6 +389,8 @@ TR_ENGINE_PIPE_LAYOUT_CHECK(ks_day_index);
 TR_ENGINE_PIPE_LAYOUT_CHECK(ks_current);
 TR_ENGINE_PIPE_LAYOUT_CHECK(ks_has_date);
 TR_ENGINE_PIPE_LAYOUT_CHECK(vb);
+TR_ENGINE_PIPE_LAYOUT_CHECK(ind_need);
+TR_ENGINE_PIPE_LAYOUT_CHECK(ind_need_set);
 #undef TR_ENGINE_PIPE_LAYOUT_CHECK
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
@@ -422,6 +428,22 @@ double tr_engine_pipe_tick_scale(const tr_pipeline_t *p);
 
 /* 진입신호 설정을 반영하고, 가진 1분봉으로 그 계산만 다시 돌린다. */
 void tr_engine_replay_os(tr_pipeline_t *p);
+
+/* 켠 지표만 실시간 계산한다. 비트 0이면 해외 지표 계산을 건너뛴다. */
+enum {
+    TR_NEED_CURVE = 1u << 0, /* 미래곡선·하락최고돌파 */
+    TR_NEED_FX3 = 1u << 1,
+    TR_NEED_GAP = 1u << 2, /* 지속목표차·평탄회귀차·양매수·가격거래량·스나이퍼 */
+    TR_NEED_OS = 1u << 3,  /* 통합판정·평탄·스윙·조정·진입·페인트·신호 */
+    TR_NEED_SNCO = 1u << 4,
+    TR_NEED_VB = 1u << 5,
+    TR_NEED_WR = 1u << 6 /* #우드스탁_ES기초자산_승률 원본 주문 */
+};
+
+/* 마스크를 갱신한다. 이전에 꺼져 있던 비트를 다시 켜고 봉이 있으면 그 계산만
+ * 가진 봉으로 다시 채워, 돌려준 비트는 상태 링에 반영된 것이다. 처음 지정
+ * (ind_need_set이 아니었음)이면 0 — 이후 백필이 마스크대로 계산한다. */
+uint32_t tr_engine_set_ind_need(tr_engine_t *e, uint64_t instrument_id, uint32_t need);
 void tr_engine_attach_ipc(tr_engine_t *e, tr_ipc_t *ipc, const char *stream_id);
 void tr_engine_attach_status_cb(tr_engine_t *e, tr_engine_status_fn cb, void *ctx);
 

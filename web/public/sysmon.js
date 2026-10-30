@@ -7,6 +7,7 @@ const Sysmon = (() => {
     fx_sig_v6: { name: "진입신호매매", mode: "v6" },
     fx_sig_pair: { name: "짝진입", mode: "pair" },
     fx_sig_zd: { name: "제로데이기초자산", mode: "zd" },
+    fx_wr: { name: "승률", mode: "wr" },
   };
 
   function create() {
@@ -16,17 +17,20 @@ const Sysmon = (() => {
   function dirOf(os, mode) {
     if (mode === "v6") return os.sigDir || 0;
     if (mode === "zd") return os.zdDir || 0;
+    if (mode === "wr") return os.wrDir || 0;
     return os.pairDir || 0;
   }
 
   function entryQty(os, mode) {
     if (mode === "v6") return os.sigQty || 0;
     if (mode === "zd") return os.zdQty || 0;
+    if (mode === "wr") return 2;
     return os.pairQty || 0;
   }
 
   function entryName(os, mode) {
     const Os = globalThis.OsLayers;
+    if (mode === "wr") return os.wrName || "";
     if (!Os) return "";
     if (mode === "v6") return Os.orderName(os.sigDir, os.sigKind, os.sigGrade, os.adjKind, os.adjGrade);
     return String(Os.pairLabel(os, mode === "zd")).split("\n")[0];
@@ -35,6 +39,7 @@ const Sysmon = (() => {
   function exitCode(os, mode) {
     if (mode === "v6") return os.sigExit || 0;
     if (mode === "zd") return os.zdExit || 0;
+    if (mode === "wr") return os.wrExitDir || 0;
     return os.pairExit || 0;
   }
 
@@ -81,9 +86,24 @@ const Sysmon = (() => {
     const os = ev.os || {};
     const mode = meta.mode;
     const out = [];
+    if (mode === "wr" && os.wrExitDir && os.wrExitName) {
+      const sell = os.wrExitDir < 0;
+      const first = String(os.wrExitName).startsWith("1차");
+      const stop = String(os.wrExitName).includes("스톱");
+      out.push({
+        ...base(ev, id, meta),
+        role: first ? "limit" : "exit",
+        kind: "청산",
+        occur: sell ? "ExitShort" : "ExitLong",
+        orderType: first ? "AtLimit" : (stop ? "AtStop" : "OnClose"),
+        price: first || stop ? null : ev.close,
+        qty: first ? 1 : null,
+        name: os.wrExitName,
+      });
+    }
     const code = exitCode(os, mode);
     const xqty = exitQty(os, mode);
-    if (code && (mode === "v6" || xqty !== 0)) {
+    if (mode !== "wr" && code && (mode === "v6" || xqty !== 0)) {
       out.push({
         ...base(ev, id, meta),
         role: "exit",

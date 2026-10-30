@@ -885,6 +885,7 @@ function clearPaneContent(pane) {
   clearPaneData(pane);
   pane.systems.clear();
   for (const id of [...pane.active.keys()]) deactivateIndicator(pane, id);
+  syncSymbolIndicators(prev);
   refreshWeeklyPlots(pane);
   setBarStyle(pane, "candle");
   setPanelOpen(pane, true);
@@ -1486,6 +1487,52 @@ async function confirmFrameSymbol(frame) {
 // 종목별 큐(WatchGuard.createOpQueue)로 직렬화한다: 같은 종목의 unwatch가
 // 뒤에 시작된 watch보다 엔진에 늦게 도착하는 경주를 막는다 (releaseSymbol 참조).
 const symbolOpQueue = WatchGuard.createOpQueue();
+
+// 이 종목을 보는 칸(선택 중 포함)과, 종목이 아직 비어 있는 같은 화면틀 칸의 지표.
+function indicatorIdsFor(shcode) {
+  const sh = String(shcode || "").trim().toUpperCase();
+  const ids = new Set();
+  if (!sh) return [];
+  for (const pane of panes) {
+    if (pane.symbol !== sh && pane.selTarget !== sh) continue;
+    for (const id of pane.active.keys()) ids.add(id);
+    for (const other of pane.frame?.panes || []) {
+      if (other.symbol && other.symbol !== sh) continue;
+      for (const id of other.active.keys()) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+const indSyncGen = new Map();
+function syncSymbolIndicators(shcode) {
+  const sh = String(shcode || "").trim().toUpperCase();
+  if (!sh) return;
+  const gen = (indSyncGen.get(sh) || 0) + 1;
+  indSyncGen.set(sh, gen);
+  const ids = indicatorIdsFor(sh);
+  void (async () => {
+    const token = await apiToken();
+    if (!token || indSyncGen.get(sh) !== gen) return;
+    let res;
+    try {
+      res = await fetch("/api/indicators", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trader-token": token },
+        body: JSON.stringify({ shcode: sh, ids }),
+      });
+    } catch {
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || indSyncGen.get(sh) !== gen || !data.payload?.replayed) return;
+    const running = seedInflight.get(sh);
+    if (running) await running;
+    if (indSyncGen.get(sh) !== gen) return;
+    try { await seedSymbolNow(sh); } catch { /* 라이브 틱이 이어 그린다 */ }
+  })();
+}
+
 function watchSymbol(shcode) {
   const epoch = loadEpoch;
   return symbolOpQueue.enqueue(shcode, async () => {
@@ -1498,7 +1545,7 @@ function watchSymbol(shcode) {
       res = await fetch("/api/symbols/watch", {
         method: "POST",
         headers: { "content-type": "application/json", "x-trader-token": token },
-        body: JSON.stringify({ shcode }),
+        body: JSON.stringify({ shcode, ids: indicatorIdsFor(shcode) }),
         signal: loadAbort.signal,
       });
     } catch {
@@ -2476,6 +2523,7 @@ function activateIndicator(pane, indId, savedLayers) {
   }
   if (WPLOT_IDS.includes(indId)) refreshWeeklyPlots(pane);
   if (Sysmon.ids.includes(indId) && pane.symbol) sysmonRescan(pane.symbol);
+  syncSymbolIndicators(pane.symbol);
 }
 
 function deactivateIndicator(pane, indId) {
@@ -2490,6 +2538,7 @@ function deactivateIndicator(pane, indId) {
   }
   if (WPLOT_IDS.includes(indId)) refreshWeeklyPlots(pane);
   if (Sysmon.ids.includes(indId) && pane.symbol) sysmonRescan(pane.symbol);
+  syncSymbolIndicators(pane.symbol);
 }
 
 // 헤더 배지의 출처: mirae_v16이 켜진 첫 칸이 보는 캐시
@@ -3974,12 +4023,16 @@ async function applyWorkspace(parsed) {
         pane.systemBasis = { ...(panel.systemBasis || {}) };
         if (panel.linkLegs) pane.linkLegs = WeeklyLegs.copy(panel.linkLegs);
         buildPaneTools(pane);
+      }
+      // 한 화면틀은 종목 하나다. 첫 칸만 watch·시딩하고, 나머지는 그 종목을 따라간다.
+      // 칸마다 watch하면 NH는 이미 있는 봉을 다시 받아 첫 화면이 칸 수만큼 길어진다.
+      const lead = frame.panes[0];
+      if (lead && frameSymbol) {
         jobs.push((async () => {
           try {
-            if (frameSymbol) await selectPaneSymbol(pane, frameSymbol);
+            await selectPaneSymbol(lead, frameSymbol);
           } catch (err) {
-            // 한 칸이 실패해도 다른 칸 시딩과 마지막 다시 그리기는 계속한다.
-            console.error(`화면틀 칸 적용 실패 (${panel.symbol || "?"})`, err);
+            console.error(`화면틀 칸 적용 실패 (${frameSymbol})`, err);
           }
         })());
       }

@@ -115,6 +115,9 @@ typedef struct {
     double swing_pct;
     int wr_dir;
     int wr_order;
+    int wr_exit_dir;
+    char wr_name[64];
+    char wr_exit_name[64];
     int pair_exit_qty, pair_limit_qty, zd_exit_qty, zd_limit_qty;
     double wave_time, wave_price, wave_opp;
     int wave_state;
@@ -262,6 +265,17 @@ typedef struct {
     int mkt_avg_1_ok;
     tr_fxp95_t p95;
     tr_fxwr_t *wr;
+    struct tr_yl_book *wr_book;
+    int64_t wr_bar_open;
+    int wr_seen;
+    int wr_saved_n;
+    tr_fxwr_ord_t wr_saved[24];
+    double wr_save_o, wr_save_h, wr_save_l, wr_save_c, last_wr_v;
+    int wr_hold_dir, wr_hold_order, wr_hold_exit;
+    char wr_hold_name[64];
+    char wr_hold_exit_name[64];
+    char wr_bar_fill[64];
+    int wr_first_filled;
     int64_t key;
     bool has_key;
     int reset_bar;
@@ -273,6 +287,9 @@ void tr_fxsig_cfg_default(tr_fxsig_cfg_t *cfg);
 bool tr_fxos_init(tr_fxos_t *s, double price_scale);
 void tr_fxos_set_cfg(tr_fxos_t *s, const tr_fxsig_cfg_t *cfg);
 void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in);
+/* 승률 원본 주문. 같은 봉의 재계산은 표시만 고치고, 봉이 바뀔 때 이전 봉 주문을 체결한다. */
+void tr_fxos_wr_bar(tr_fxos_t *s, const tr_fxos_input_t *in);
+void tr_fxos_wr_reset(tr_fxos_t *s);
 /* 5·15·30분 합성선의 회귀·마켓중심을 스코프 입력에 넣는다. */
 void tr_fxos_set_synth(tr_fxos_input_t *in, const tr_fxsyn_t *s5, const tr_fxsyn_t *s15,
                        const tr_fxsyn_t *s30);

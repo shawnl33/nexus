@@ -84,6 +84,41 @@ test("색청산 손실은 OnClose 이름에 손절을 붙인다", () => {
   assert.equal(book.rows[0].name, "색청산매수_손절");
 });
 
+test("승률 진입과 1차·스톱 청산은 발생신호에 남는다", () => {
+  const book = Sysmon.create();
+  Sysmon.note(book, {
+    symbol: "ESZ26",
+    time: 1760000000,
+    close: 775325,
+    os: { wrDir: 1, wrName: "시가회복매수" },
+    systems: ["fx_wr"],
+  });
+  Sysmon.note(book, {
+    symbol: "ESZ26",
+    time: 1760000420,
+    close: 775625,
+    os: { wrExitDir: 1, wrExitName: "1차청산매수" },
+    systems: ["fx_wr"],
+  });
+  Sysmon.note(book, {
+    symbol: "ESZ26",
+    time: 1760002580,
+    close: 775350,
+    os: { wrExitDir: 1, wrExitName: "수익보호스톱매수" },
+    systems: ["fx_wr"],
+  });
+  assert.equal(book.rows.length, 3);
+  assert.equal(book.rows[0].system, "승률");
+  assert.equal(book.rows[0].name, "시가회복매수");
+  assert.equal(book.rows[0].occur, "Buy");
+  assert.equal(book.rows[0].qty, 2);
+  assert.equal(book.rows[1].name, "1차청산매수");
+  assert.equal(book.rows[1].orderType, "AtLimit");
+  assert.equal(book.rows[1].qty, 1);
+  assert.equal(book.rows[2].name, "수익보호스톱매수");
+  assert.equal(book.rows[2].orderType, "AtStop");
+});
+
 test("진입신호매매는 후보 이름을 쓴다", () => {
   const book = Sysmon.create();
   Sysmon.note(book, {

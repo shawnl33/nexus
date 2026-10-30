@@ -384,6 +384,11 @@ def order_stmt(p, ind):
                 "OnClose": "TR_YL_ONCLOSE", "AtMarket": "TR_YL_MARKET",
                 "AtStop": "TR_YL_STOP", "AtLimit": "TR_YL_LIMIT", "Def": "TR_YL_ONCLOSE",
             }[style]
+            # ExitLong(name, AtLimit, price, "", qty): 가격은 유형 바로 다음이다.
+            if style in ("AtStop", "AtLimit") and p.peek()[1] == ",":
+                p.take()
+                if p.peek()[0] != "STR" and p.peek()[1] != ")":
+                    price = expr(p)
         else:
             price = expr(p)
         if p.peek()[1] == ",":

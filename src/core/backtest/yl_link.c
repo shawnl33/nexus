@@ -4,6 +4,7 @@
 #include "core/indicators/fx_sig_pair.h"
 #include "core/paintbar/fx_judge_paint95.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 int tr_yl_fxsig_emit(tr_yl_book_t *book, int sig_dir, int sig_exit, int sig_kind, int qty,
@@ -90,6 +91,25 @@ int tr_yl_fxwr_bar(tr_yl_book_t *book, tr_fxos_t *scope, const tr_fxos_input_t *
     bar.close = in->close;
     tr_yl_book_open(book, &bar);
     tr_fxos_eval(scope, in);
+    if (scope->wr == 0) {
+        scope->wr = (tr_fxwr_t *)calloc(1, sizeof(*scope->wr));
+    }
+    if (scope->wr != 0) {
+        tr_fxwr_bar_t wb;
+        memset(&wb, 0, sizeof(wb));
+        wb.date = in->date;
+        wb.time = in->time;
+        wb.bar_open = in->bar_open;
+        wb.open = in->open;
+        wb.high = in->high;
+        wb.low = in->low;
+        wb.close = in->close;
+        wb.volume = in->volume;
+        wb.price_scale = scope->price_scale;
+        wb.market = book->pos.side;
+        wb.is_new_bar = in->is_new_bar;
+        tr_fxwr_on_bar(scope->wr, &wb);
+    }
     before = tr_yl_book_trade_count(book);
     (void)hold;
     if (scope->wr != 0) {

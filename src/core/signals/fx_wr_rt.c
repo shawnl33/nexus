@@ -10,6 +10,7 @@
 #include "core/functions/fx_flat_count_v2.h"
 #include "core/functions/fx_wave_adj_v6.h"
 #include "core/functions/fx_squeeze_v1.h"
+#include "core/functions/fx_synthetic_lines_v1.h"
 #include "core/indicators/fx_entry_cand.h"
 #include "core/model/civil_time.h"
 
@@ -24,8 +25,12 @@ static int field_ok(int id) {
 
 double yl_lag(const tr_fxwr_t *s, int id, double k) {
     int i = (int)k;
-    if (!field_ok(id) || i < 1 || i > YL_LAG) {
+    if (!field_ok(id) || i < 0 || i > YL_LAG) {
         return 0;
+    }
+    /* 예스랭귀지 [0]은 이번 봉이다. */
+    if (i == 0) {
+        return s->cur[id];
     }
     return s->lag[i - 1][id];
 }
@@ -82,7 +87,26 @@ static double window(const tr_fxwr_t *s, const char *which, double n, int mode) 
     return mode == 0 ? acc / (double)cnt : acc;
 }
 
-double yl_avg(const tr_fxwr_t *s, const char *which, double n) { return window(s, which, n, 0); }
+double yl_avg(const tr_fxwr_t *s, const char *which, double n) {
+    int lim, i;
+    double sum;
+    /* Average(봉길이, N)은 종가 이력이 아니라 봉길이 변수다. [0]은 이번 봉. */
+    if (which != 0 && strcmp(which, "봉길이") == 0) {
+        lim = (int)n;
+        if (lim < 1) {
+            return 0;
+        }
+        if (lim > YL_LAG + 1) {
+            lim = YL_LAG + 1;
+        }
+        sum = 0;
+        for (i = 0; i < lim; i++) {
+            sum += yl_lag(s, YL_F_봉길이, i);
+        }
+        return sum / (double)lim;
+    }
+    return window(s, which, n, 0);
+}
 double yl_hi(const tr_fxwr_t *s, const char *which, double n) { return window(s, which, n, 1); }
 double yl_lo(const tr_fxwr_t *s, const char *which, double n) { return window(s, which, n, -1); }
 
@@ -122,7 +146,10 @@ typedef struct {
     tr_fxc_t curve;
     tr_fxadx_t adx;
     tr_fxprof_t prof;
+    tr_fxprof_t prof_box; /* 압축 박스. 세션 매물대와 기간이 다르다. */
     tr_fxsq_t squeeze;
+    tr_fxsyn_t syn5, syn15, syn30;
+    int syn_ready;
     tr_fxec_t entry;
     tr_fxfv_t fv;
     tr_fxflat_out_t flat_prev;
@@ -145,6 +172,7 @@ static tr_fxwr_eng_t *eng_of(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     tr_fxc_init(&e->curve);
     tr_fxadx_init(&e->adx, 14);
     tr_fxprof_init(&e->prof);
+    tr_fxprof_init(&e->prof_box);
     tr_fxsq_init(&e->squeeze);
     tr_fxec_init(&e->entry, b->price_scale > 0 ? b->price_scale : 0.25);
     tr_fxadj_init(&e->adj);
@@ -186,8 +214,29 @@ double yl_WSF_FXCurveV1(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     return 1;
 }
 
+static void fill_prof(tr_fxprof_input_t *in, const tr_fxwr_bar_t *b, int period) {
+    memset(in, 0, sizeof(*in));
+    in->bar_open = b->bar_open;
+    in->high = b->high;
+    in->low = b->low;
+    in->close = b->close;
+    in->volume = b->volume;
+    in->price_scale = b->price_scale > 0 ? b->price_scale : 0.25;
+    /* 원본 가치영역배수(1.5), 최소봉수(5). */
+    in->value_mult = 1.5;
+    in->min_bars = 5;
+    in->period = period;
+}
+
 double yl_WSF_FXSessionProfileV1_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
-    return yl_WSF_FXSessionProfileV2_CO(s, b);
+    tr_fxwr_eng_t *e = eng_of(s, b);
+    tr_fxprof_input_t in;
+    if (e == 0) return 0;
+    fill_prof(&in, b, 0);
+    in.session_reset = reset_of(s);
+    tr_fxprof_eval(&e->prof, &in);
+    s->cur[YL_F_매물대5상태] = e->prof.out.state5;
+    return e->prof.out.valid;
 }
 
 double yl_WSF_FXADXV1(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
@@ -225,7 +274,7 @@ double yl_WSF_FXDecisionV2_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     in.minus_di = e->adx.minus_di;
     in.adx_valid = e->adx.valid;
     in.adx_trend = 20;
-    in.adx_strong = 30;
+    in.adx_strong = 35; /* 원본 ADX강세기준(35) */
     out = tr_fxdec_eval(&in);
     s->cur[YL_F_통합상태] = out.unified;
     s->cur[YL_F_DI방향] = out.di;
@@ -254,6 +303,13 @@ double yl_WSF_FXFutureValuesV3_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     s->cur[YL_F_지속저장목표3] = o->persist_target[2];
     s->cur[YL_F_지속저장목표4] = o->persist_target[3];
     s->cur[YL_F_지속저장목표5] = o->persist_target[4];
+    /* 승률 본문은 같은 지속저장목표를 S목표1~5로 받는다. S목표4는 본문이 읽지 않는다. */
+    s->cur[YL_F_S곡선평탄] = o->reg_flat;
+    s->cur[YL_F_S마켓중심] = o->market_center;
+    s->cur[YL_F_S목표1] = o->persist_target[0];
+    s->cur[YL_F_S목표2] = o->persist_target[1];
+    s->cur[YL_F_S목표3] = o->persist_target[2];
+    s->cur[YL_F_S목표5] = o->persist_target[4];
     s->cur[YL_F_핵심지난상승최고가] = o->lup_high;
     s->cur[YL_F_핵심지난상승최저가] = o->lup_low;
     s->cur[YL_F_핵심지난상승_382] = o->lup_382;
@@ -347,6 +403,7 @@ double yl_WSF_FXWaveAdjV6_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
 double yl_WSF_FXSqueezeV1_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     tr_fxwr_eng_t *e = eng_of(s, b);
     tr_fxsq_input_t in;
+    const tr_fxsq_out_t *o;
     if (e == 0) return 0;
     memset(&in, 0, sizeof(in));
     in.session_reset = reset_of(s);
@@ -357,38 +414,105 @@ double yl_WSF_FXSqueezeV1_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     in.close = b->close;
     in.volume = b->volume;
     in.price_scale = b->price_scale > 0 ? b->price_scale : 0.25;
-    in.value_mult = 1;
-    in.min_bars = 3;
-    in.width_bars = 20;
-    in.ratio_bars = 20;
-    in.narrow_pct = 70;
+    /* 원본 Var: 가치영역배수 1.5, 최소봉수 5, 폭계산봉수 30, 비율기준봉수 120,
+     * 좁음기준 40, 단계1봉수 15, 방향확정봉수 5, 확정봉판정 0. */
+    in.value_mult = 1.5;
+    in.min_bars = 5;
+    in.width_bars = 30;
+    in.ratio_bars = 120;
+    in.narrow_pct = 40;
+    in.stage1_bars = 15;
+    in.confirm_bars = 5;
+    in.confirm_closed = 0;
     tr_fxsq_eval(&e->squeeze, &in);
-    return e->squeeze.out.release;
+    o = &e->squeeze.out;
+    s->cur[YL_F_압축지속봉수] = o->hold;
+    s->cur[YL_F_압축폭비율] = o->ratio;
+    s->cur[YL_F_해제방향] = o->release_dir;
+    s->cur[YL_F_지연확정방향] = o->confirm_dir;
+    return o->release;
 }
 
 double yl_WSF_FXSessionProfileV2_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     tr_fxwr_eng_t *e = eng_of(s, b);
     tr_fxprof_input_t in;
     if (e == 0) return 0;
-    memset(&in, 0, sizeof(in));
+    /* 원본은 폭계산봉수(30) 창의 박스다. 세션 매물대와 상태를 섞지 않는다. */
+    fill_prof(&in, b, 30);
     in.session_reset = reset_of(s);
-    in.bar_open = b->bar_open;
-    in.high = b->high;
-    in.low = b->low;
-    in.close = b->close;
-    in.volume = b->volume;
-    in.price_scale = b->price_scale > 0 ? b->price_scale : 0.25;
-    in.value_mult = 1;
-    in.min_bars = 3;
-    tr_fxprof_eval(&e->prof, &in);
-    s->cur[YL_F_매물대5상태] = e->prof.out.state5;
-    return e->prof.out.valid;
+    tr_fxprof_eval(&e->prof_box, &in);
+    s->cur[YL_F_P2상단1] = e->prof_box.out.hi1;
+    s->cur[YL_F_P2하단1] = e->prof_box.out.lo1;
+    s->cur[YL_F_P2유효] = e->prof_box.out.valid;
+    return e->prof_box.out.valid;
 }
 
-double yl_WSF_FXSyntheticLinesV1(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
-    (void)s;
-    (void)b;
+static tr_fxsyn_t *syn_of(tr_fxwr_eng_t *e, int minutes) {
+    if (minutes == 5) return &e->syn5;
+    if (minutes == 15) return &e->syn15;
+    if (minutes == 30) return &e->syn30;
     return 0;
+}
+
+static void write_syn(tr_fxwr_t *s, int minutes, const tr_fxsyn_t *syn) {
+    if (minutes == 5) {
+        s->cur[YL_F_S평탄회귀5분] = syn->out_reg;
+        s->cur[YL_F_S마켓중심5분] = syn->out_mkt;
+        s->cur[YL_F_S회귀유효5분] = syn->out_reg_valid;
+        s->cur[YL_F_S마켓유효5분] = syn->out_mkt_valid;
+    } else if (minutes == 15) {
+        s->cur[YL_F_S평탄회귀15분] = syn->out_reg;
+        s->cur[YL_F_S마켓중심15분] = syn->out_mkt;
+        s->cur[YL_F_S회귀유효15분] = syn->out_reg_valid;
+        s->cur[YL_F_S마켓유효15분] = syn->out_mkt_valid;
+    } else if (minutes == 30) {
+        s->cur[YL_F_S평탄회귀30분] = syn->out_reg;
+        s->cur[YL_F_S마켓중심30분] = syn->out_mkt;
+        s->cur[YL_F_S회귀유효30분] = syn->out_reg_valid;
+        s->cur[YL_F_S마켓유효30분] = syn->out_mkt_valid;
+    }
+}
+
+double yl_WSF_FXSyntheticLinesV1(tr_fxwr_t *s, const tr_fxwr_bar_t *b, int minutes) {
+    tr_fxwr_eng_t *e = eng_of(s, b);
+    tr_fxsyn_t *syn;
+    tr_fxsyn_input_t in;
+    tr_fxsyn_config_t cfg;
+    double ps;
+    if (e == 0) return 0;
+    ps = b->price_scale > 0 ? b->price_scale : 0.25;
+    if (!e->syn_ready) {
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.synth_min = 5;
+        cfg.reg_period = 18;
+        cfg.mkt_period = 20;
+        cfg.time_basis = 1;
+        cfg.price_scale = ps;
+        if (!tr_fxsyn_init(&e->syn5, &cfg)) return 0;
+        cfg.synth_min = 15;
+        cfg.reg_period = 10;
+        if (!tr_fxsyn_init(&e->syn15, &cfg)) return 0;
+        cfg.synth_min = 30;
+        cfg.reg_period = 6;
+        if (!tr_fxsyn_init(&e->syn30, &cfg)) return 0;
+        e->syn_ready = 1;
+    }
+    syn = syn_of(e, minutes);
+    if (syn == 0 || ps <= 0) return 0;
+    memset(&in, 0, sizeof(in));
+    in.cur_date = b->date;
+    in.cur_time = b->time;
+    in.is_new_bar = b->is_new_bar;
+    in.has_prev = s->bar_n > 1 && s->last_time != 0;
+    in.prev_date = s->last_date;
+    in.prev_time = s->last_time;
+    in.prev_h = s->last_h;
+    in.prev_l = s->last_l;
+    in.prev_c = s->last_c;
+    in.prev_v = s->last_v;
+    tr_fxsyn_eval(syn, &in);
+    write_syn(s, minutes, syn);
+    return 1;
 }
 
 #include "core/signals/fx_wr_init.inc"
@@ -436,4 +560,6 @@ void tr_fxwr_on_bar(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     s->last_l = b->low;
     s->last_c = b->close;
     s->last_v = b->volume;
+    s->last_date = b->date;
+    s->last_time = b->time;
 }

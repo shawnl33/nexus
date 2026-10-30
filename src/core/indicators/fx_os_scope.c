@@ -2,6 +2,7 @@
 
 #include "core/paintbar/fx_judge_paint95.h"
 #include "core/signals/fx_wr_yl.h"
+#include "core/backtest/yl_fill.h"
 #include "core/functions/fx_decision_v2.h"
 #include "core/functions/fx_flat_count_v2.h"
 #include "core/functions/fx_session_key_v1.h"
@@ -1167,37 +1168,12 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
         s->out.sig_dir = -1;
         s->out.sig_kind = kind;
     }
-    /* 승률 V14 본문. 주문은 원본 Buy/Sell 그대로 모은다. */
-    {
-        tr_fxwr_bar_t wb;
-        int i;
-        if (s->wr == 0) {
-            s->wr = (tr_fxwr_t *)calloc(1, sizeof(*s->wr));
-        }
-        if (s->wr != 0) {
-            memset(&wb, 0, sizeof(wb));
-            wb.date = in->date;
-            wb.time = in->time;
-            wb.bar_open = in->bar_open;
-            wb.open = in->open;
-            wb.high = in->high;
-            wb.low = in->low;
-            wb.close = in->close;
-            wb.volume = in->volume;
-            wb.price_scale = s->price_scale;
-            wb.market = s->mkt;
-            wb.is_new_bar = in->is_new_bar;
-            tr_fxwr_on_bar(s->wr, &wb);
-            for (i = 0; i < s->wr->ord_n; i++) {
-                int act = s->wr->ords[i].action;
-                if (act == TR_YL_BUY || act == TR_YL_SELL) {
-                    s->out.wr_dir = act == TR_YL_BUY ? 1 : -1;
-                    s->out.wr_order = (int)s->wr->cur[YL_F_진입그룹];
-                    break;
-                }
-            }
-        }
-    }
+    /* 승률 화살은 tr_fxos_wr_bar 가 원본 주문 이름으로 채운다. 진입신호 이름으로 대체하지 않는다. */
+    s->out.wr_dir = 0;
+    s->out.wr_order = 0;
+    s->out.wr_exit_dir = 0;
+    s->out.wr_name[0] = '\0';
+    s->out.wr_exit_name[0] = '\0';
     s->prev_color_dir = color_dir;
 
     /* 수익관리는 이 시스템트레이딩의 I_MarketPosition, I_AvgEntryPrice, I_CurrentContracts. */
@@ -1437,9 +1413,320 @@ int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o) {
         m += n;
     }
     /* 기존 칸을 유지하고 청산 수량을 뒤에 추가한다 (228~231). */
-    int n = snprintf(buf + m, cap - (size_t)m, ",%d,%d,%d,%d,%d,%.10g,%d,%d",
+    int n = snprintf(buf + m, cap - (size_t)m, ",%d,%d,%d,%d,%d,%.10g,%d,%d,%d,\"%s\",\"%s\"",
                      o->pair_exit_qty, o->pair_limit_qty, o->zd_exit_qty, o->zd_limit_qty,
-                     o->swing_on, o->swing_pct, o->wr_dir, o->wr_order);
+                     o->swing_on, o->swing_pct, o->wr_dir, o->wr_order, o->wr_exit_dir,
+                     o->wr_name, o->wr_exit_name);
     if (n < 0 || (size_t)m + (size_t)n >= cap) return -1;
     return m + n;
+}
+
+/* 매수 청산 지정가·스톱이 이 봉의 고저에 닿으면 그 이름을 돌려준다.
+ * 1차청산은 진입 봉이 아니라 가격이 닿은 봉에 그린다. */
+static int long_exit_touch(const tr_yl_book_t *book, double open, double high, double low,
+                           char *name, size_t cap) {
+    int i;
+    if (book == 0) {
+        return 0;
+    }
+    for (i = 0; i < book->queue_n; i++) {
+        const tr_yl_pending_t *p = &book->queue[i];
+        int hit = 0;
+        if (p->action != TR_YL_EXIT_LONG) {
+            continue;
+        }
+        if (p->price_type == TR_YL_LIMIT) {
+            hit = open >= p->price || high >= p->price;
+        } else if (p->price_type == TR_YL_STOP) {
+            hit = open <= p->price || low <= p->price;
+        }
+        if (hit) {
+            snprintf(name, cap, "%s", p->name);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 매도 청산 지정가·스톱. 닿으면 저가 쪽 화살표다. */
+static int short_exit_touch(const tr_yl_book_t *book, double open, double high, double low,
+                            char *name, size_t cap) {
+    int i;
+    if (book == 0) {
+        return 0;
+    }
+    for (i = 0; i < book->queue_n; i++) {
+        const tr_yl_pending_t *p = &book->queue[i];
+        int hit = 0;
+        if (p->action != TR_YL_EXIT_SHORT) {
+            continue;
+        }
+        if (p->price_type == TR_YL_LIMIT) {
+            hit = open <= p->price || low <= p->price;
+        } else if (p->price_type == TR_YL_STOP) {
+            hit = open >= p->price || high >= p->price;
+        }
+        if (hit) {
+            snprintf(name, cap, "%s", p->name);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void wr_show(tr_fxos_t *s) {
+    s->out.wr_dir = s->wr_hold_dir;
+    s->out.wr_order = s->wr_hold_order;
+    s->out.wr_exit_dir = s->wr_hold_exit;
+    snprintf(s->out.wr_name, sizeof(s->out.wr_name), "%s", s->wr_hold_name);
+    snprintf(s->out.wr_exit_name, sizeof(s->out.wr_exit_name), "%s", s->wr_hold_exit_name);
+}
+
+/* 같은 이름의 스톱·지정가는 새로 쌓지 않고 가격만 바꾼다. 예스트레이더도 같은 주문을 갈아 끼운다. */
+static void submit_order(tr_yl_book_t *book, const tr_yl_order_t *order) {
+    int i;
+    if (book == 0 || order == 0) {
+        return;
+    }
+    if (order->price_type != TR_YL_ONCLOSE && order->name != 0) {
+        for (i = 0; i < book->queue_n; i++) {
+            tr_yl_pending_t *p = &book->queue[i];
+            if (strcmp(p->name, order->name) == 0) {
+                p->action = order->action;
+                p->price_type = order->price_type;
+                p->price = order->price;
+                p->qty = order->qty;
+                return;
+            }
+        }
+    }
+    tr_yl_book_submit(book, order);
+}
+
+static int is_first_target(const char *name) {
+    return name != 0 && (strcmp(name, "1차청산매수") == 0 || strcmp(name, "1차청산매도") == 0);
+}
+
+static int is_entry_fill(const char *name) {
+    return name != 0 && name[0] != '\0' && strstr(name, "청산") == 0 && strstr(name, "스톱") == 0 &&
+           strstr(name, "손절") == 0;
+}
+
+static void note_fills(tr_fxos_t *s, int from) {
+    int k;
+    int saw_entry = 0;
+    int saw_first = 0;
+    if (s->wr_book == 0) {
+        return;
+    }
+    for (k = from; k < s->wr_book->trade_n; k++) {
+        const tr_yl_trade_t *t = tr_yl_book_trade(s->wr_book, k);
+        if (t == 0) {
+            continue;
+        }
+        if (is_entry_fill(t->name)) {
+            saw_entry = 1;
+        }
+        if (is_first_target(t->name)) {
+            saw_first = 1;
+        }
+    }
+    if (s->wr_book->pos.side == 0 || saw_entry) {
+        s->wr_first_filled = 0;
+    }
+    if (saw_first && s->wr_book->pos.side != 0) {
+        s->wr_first_filled = 1;
+    }
+}
+
+static void wr_commit(tr_fxos_t *s) {
+    tr_yl_bar_t bar;
+    int i;
+    int n0;
+    if (s->wr_book == 0) {
+        return;
+    }
+    memset(&bar, 0, sizeof(bar));
+    bar.time = s->wr_bar_open / 1000000;
+    bar.open = s->wr_save_o;
+    bar.high = s->wr_save_h;
+    bar.low = s->wr_save_l;
+    bar.close = s->wr_save_c;
+    n0 = s->wr_book->trade_n;
+    tr_yl_book_open(s->wr_book, &bar);
+    note_fills(s, n0);
+    for (i = 0; i < s->wr_saved_n; i++) {
+        tr_yl_order_t o;
+        const tr_fxwr_ord_t *src = &s->wr_saved[i];
+        /* 1차는 진입당 한 번이다. 남은 계약은 수익보호 스톱·색청산이 가져간다. */
+        if (s->wr_first_filled && is_first_target(src->name)) {
+            continue;
+        }
+        memset(&o, 0, sizeof(o));
+        o.action = src->action;
+        o.price_type = src->price_type;
+        o.price = src->price;
+        o.qty = src->qty;
+        o.name = src->name;
+        submit_order(s->wr_book, &o);
+    }
+    n0 = s->wr_book->trade_n;
+    tr_yl_book_close(s->wr_book);
+    note_fills(s, n0);
+    if (s->wr_book->pos.side == 0) {
+        s->wr_first_filled = 0;
+    }
+    s->wr_saved_n = 0;
+}
+
+void tr_fxos_wr_reset(tr_fxos_t *s) {
+    if (s == 0) {
+        return;
+    }
+    if (s->wr != 0) {
+        free(s->wr->eng);
+        free(s->wr);
+        s->wr = 0;
+    }
+    free(s->wr_book);
+    s->wr_book = 0;
+    s->wr_seen = 0;
+    s->wr_saved_n = 0;
+    s->wr_hold_dir = 0;
+    s->wr_hold_order = 0;
+    s->wr_hold_exit = 0;
+    s->wr_hold_name[0] = '\0';
+    s->wr_hold_exit_name[0] = '\0';
+    s->wr_bar_fill[0] = '\0';
+    s->wr_first_filled = 0;
+}
+
+/* 예스랭귀지 가격은 포인트다. 엔진 봉은 100배 raw 이므로 승률 계산에만 되돌린다.
+ * 비상손절pt(25)처럼 PriceScale 을 안 곱하는 값은 포인트다. raw 로 빼면 0.25포인트가 된다. */
+static void wr_as_points(const tr_fxos_input_t *in, tr_fxos_input_t *out) {
+    *out = *in;
+    out->open /= 100.0;
+    out->high /= 100.0;
+    out->low /= 100.0;
+    out->close /= 100.0;
+}
+
+void tr_fxos_wr_bar(tr_fxos_t *s, const tr_fxos_input_t *raw) {
+    tr_fxwr_bar_t wb;
+    tr_fxos_input_t pin;
+    const tr_fxos_input_t *in;
+    int i;
+    int same;
+    if (s == 0 || raw == 0) {
+        return;
+    }
+    wr_as_points(raw, &pin);
+    in = &pin;
+    same = s->wr_seen && in->bar_open == s->wr_bar_open && in->open == s->wr_save_o &&
+           in->high == s->wr_save_h && in->low == s->wr_save_l && in->close == s->wr_save_c &&
+           in->volume == s->last_wr_v;
+    if (same) {
+        wr_show(s);
+        return;
+    }
+    if (s->wr == 0) {
+        s->wr = (tr_fxwr_t *)calloc(1, sizeof(*s->wr));
+    }
+    if (s->wr_book == 0) {
+        s->wr_book = (tr_yl_book_t *)calloc(1, sizeof(*s->wr_book));
+        if (s->wr_book != 0) {
+            tr_yl_book_init(s->wr_book, 1, s->price_scale / 100.0);
+        }
+    }
+    if (s->wr == 0 || s->wr_book == 0) {
+        return;
+    }
+    if (s->wr_seen && in->bar_open != s->wr_bar_open) {
+        s->wr_bar_fill[0] = '\0';
+        wr_commit(s);
+    }
+    /* 예스트레이더는 스크립트보다 먼저, 걸려 있던 스톱·지정가를 이 봉의 고저로 체결한다.
+     * 수익보호 스톱이 먼저 체결되면 포지션이 없어져 색청산은 나가지 않는다. */
+    {
+        tr_yl_bar_t now;
+        int n0 = s->wr_book->trade_n;
+        int k;
+        memset(&now, 0, sizeof(now));
+        now.time = in->bar_open / 1000000;
+        now.open = in->open;
+        now.high = in->high;
+        now.low = in->low;
+        now.close = in->close;
+        tr_yl_book_open(s->wr_book, &now);
+        for (k = n0; k < s->wr_book->trade_n; k++) {
+            const tr_yl_trade_t *t = tr_yl_book_trade(s->wr_book, k);
+            if (t == 0 || t->name[0] == '\0') {
+                continue;
+            }
+            /* 진입 체결은 화살표가 따로 그린다. 청산·스톱·손절만 청산 이름으로 남긴다. */
+            if (strstr(t->name, "청산") == 0 && strstr(t->name, "스톱") == 0 &&
+                strstr(t->name, "손절") == 0 && strstr(t->name, "본전") == 0) {
+                continue;
+            }
+            snprintf(s->wr_bar_fill, sizeof(s->wr_bar_fill), "%s", t->name);
+        }
+        note_fills(s, n0);
+    }
+    memset(&wb, 0, sizeof(wb));
+    wb.date = in->date;
+    wb.time = in->time;
+    wb.bar_open = in->bar_open;
+    wb.open = in->open;
+    wb.high = in->high;
+    wb.low = in->low;
+    wb.close = in->close;
+    wb.volume = in->volume;
+    wb.price_scale = s->price_scale / 100.0;
+    wb.market = s->wr_book->pos.side;
+    wb.is_new_bar = !s->wr_seen || in->bar_open != s->wr_bar_open;
+    tr_fxwr_on_bar(s->wr, &wb);
+    s->wr_hold_dir = 0;
+    s->wr_hold_order = (int)s->wr->cur[YL_F_주문번호];
+    s->wr_hold_exit = 0;
+    s->wr_hold_name[0] = '\0';
+    s->wr_hold_exit_name[0] = '\0';
+    s->wr_saved_n = s->wr->ord_n;
+    if (s->wr_saved_n > 24) {
+        s->wr_saved_n = 24;
+    }
+    for (i = 0; i < s->wr_saved_n; i++) {
+        const tr_fxwr_ord_t *src = &s->wr->ords[i];
+        s->wr_saved[i] = *src;
+        if ((src->action == TR_YL_BUY || src->action == TR_YL_SELL) && s->wr_hold_name[0] == '\0') {
+            s->wr_hold_dir = src->action;
+            snprintf(s->wr_hold_name, sizeof(s->wr_hold_name), "%s", src->name);
+        }
+        if (s->wr_bar_fill[0] == '\0' && src->price_type == TR_YL_ONCLOSE &&
+            s->wr_hold_exit_name[0] == '\0' &&
+            (src->action == TR_YL_EXIT_LONG || src->action == TR_YL_EXIT_SHORT)) {
+            s->wr_hold_exit = src->action == TR_YL_EXIT_LONG ? 1 : -1;
+            snprintf(s->wr_hold_exit_name, sizeof(s->wr_hold_exit_name), "%s", src->name);
+        }
+    }
+    if (s->wr_bar_fill[0] != '\0') {
+        s->wr_hold_exit = strstr(s->wr_bar_fill, "매도") != 0 ? -1 : 1;
+        snprintf(s->wr_hold_exit_name, sizeof(s->wr_hold_exit_name), "%s", s->wr_bar_fill);
+    } else if (long_exit_touch(s->wr_book, in->open, in->high, in->low, s->wr_hold_exit_name,
+                               sizeof(s->wr_hold_exit_name))) {
+        s->wr_hold_exit = 1;
+    } else if (short_exit_touch(s->wr_book, in->open, in->high, in->low, s->wr_hold_exit_name,
+                                sizeof(s->wr_hold_exit_name))) {
+        s->wr_hold_exit = -1;
+    }
+    if (s->wr_hold_name[0] == '\0') {
+        s->wr_hold_order = 0;
+    }
+    s->wr_seen = 1;
+    s->wr_bar_open = in->bar_open;
+    s->wr_save_o = in->open;
+    s->wr_save_h = in->high;
+    s->wr_save_l = in->low;
+    s->wr_save_c = in->close;
+    s->last_wr_v = in->volume;
+    wr_show(s);
 }

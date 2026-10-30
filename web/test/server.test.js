@@ -75,7 +75,10 @@ before(async () => {
             await new Promise((r) => setTimeout(r, 4000));
           }
           payload = { shcode: reqData.shcode, name: "테스트종목", generation: 1, backfilled: 1 };
+          if (Array.isArray(reqData.ids)) payload.ids = reqData.ids;
         }
+      } else if (type === "market.indicators") {
+        payload = { ok: true, shcode: reqData.shcode, ids: reqData.ids ?? null, replayed: false };
       } else if (type === "chart.cap") {
         payload = { bars: reqData.bars };
       } else if (type === "broker.select") {
@@ -308,6 +311,52 @@ test("POST /api/symbols/watch proxies market.watch with token", async () => {
   const rejected = await res.json();
   assert.equal(rejected.status, "rejected");
   assert.equal(rejected.error_code, "watch_limit");
+});
+
+test("watch와 indicators가 켠 지표 id를 엔진에 전달한다", async () => {
+  let res = await fetch(`${base}/api/symbols/watch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ shcode: "ESZ26", ids: ["fx_curve_os", "fx_swing_w"] }),
+  });
+  assert.equal(res.status, 200);
+  let data = await res.json();
+  assert.deepEqual(data.payload.ids, ["fx_curve_os", "fx_swing_w"]);
+
+  res = await fetch(`${base}/api/symbols/watch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ shcode: "ESZ26", ids: [] }),
+  });
+  assert.equal(res.status, 200);
+  data = await res.json();
+  assert.deepEqual(data.payload.ids, []);
+
+  res = await fetch(`${base}/api/indicators`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ shcode: "NQZ26", ids: ["vb_paint"] }),
+  });
+  assert.equal(res.status, 200);
+  data = await res.json();
+  assert.equal(data.status, "applied");
+  assert.equal(data.payload.shcode, "NQZ26");
+  assert.deepEqual(data.payload.ids, ["vb_paint"]);
+
+  res = await fetch(`${base}/api/indicators`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ shcode: "NQZ26", ids: [] }),
+  });
+  assert.equal(res.status, 403);
+
+  res = await fetch(`${base}/api/indicators`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-trader-token": AUTH_TOKEN },
+    body: JSON.stringify({ shcode: "NQZ26", ids: "fx_curve_os" }),
+  });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, "invalid_ids");
 });
 
 test("POST /api/symbols/watch waits for a slow engine (backfill)", async (t) => {
