@@ -13,6 +13,20 @@ static void copy_name(char *dst, const char *src) {
     dst[i] = '\0';
 }
 
+static int same_order_name(const char *a, const char *b) {
+    return a != 0 && b != 0 && a[0] != '\0' && strcmp(a, b) == 0;
+}
+
+static void store_pending(tr_yl_pending_t *p, const tr_yl_order_t *order, int64_t time) {
+    memset(p, 0, sizeof(*p));
+    p->action = order->action;
+    p->price_type = order->price_type;
+    p->price = order->price;
+    p->qty = order->qty;
+    p->time = time;
+    copy_name(p->name, order->name);
+}
+
 static int is_exit(int action) {
     return action == TR_YL_EXIT_LONG || action == TR_YL_EXIT_SHORT;
 }
@@ -199,6 +213,7 @@ void tr_yl_book_open(tr_yl_book_t *book, const tr_yl_bar_t *bar) {
 }
 
 int tr_yl_book_submit(tr_yl_book_t *book, const tr_yl_order_t *order) {
+    int i;
     if (book == 0 || order == 0 || !book->have_bar) {
         return 0;
     }
@@ -210,6 +225,16 @@ int tr_yl_book_submit(tr_yl_book_t *book, const tr_yl_order_t *order) {
     }
     if (order->price_type == TR_YL_ONCLOSE) {
         tr_yl_order_t *dst;
+        for (i = 0; i < book->onclose_n; i++) {
+            if (!same_order_name(book->onclose_name[i], order->name)) {
+                continue;
+            }
+            dst = &book->onclose[i];
+            *dst = *order;
+            copy_name(book->onclose_name[i], order->name);
+            dst->name = book->onclose_name[i];
+            return 1;
+        }
         if (book->onclose_n >= TR_YL_QUEUE) {
             return 0;
         }
@@ -224,19 +249,17 @@ int tr_yl_book_submit(tr_yl_book_t *book, const tr_yl_order_t *order) {
         order->price_type != TR_YL_LIMIT) {
         return 0;
     }
+    for (i = 0; i < book->queue_n; i++) {
+        if (!same_order_name(book->queue[i].name, order->name)) {
+            continue;
+        }
+        store_pending(&book->queue[i], order, book->bar.time);
+        return 1;
+    }
     if (book->queue_n >= TR_YL_QUEUE) {
         return 0;
     }
-    {
-        tr_yl_pending_t *p = &book->queue[book->queue_n++];
-        memset(p, 0, sizeof(*p));
-        p->action = order->action;
-        p->price_type = order->price_type;
-        p->price = order->price;
-        p->qty = order->qty;
-        p->time = book->bar.time;
-        copy_name(p->name, order->name);
-    }
+    store_pending(&book->queue[book->queue_n++], order, book->bar.time);
     return 1;
 }
 

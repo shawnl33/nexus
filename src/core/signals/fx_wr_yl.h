@@ -739,6 +739,7 @@ typedef struct tr_fxwr {
     int64_t last_date, last_time;
     void *eng;
 } tr_fxwr_t;
+void tr_fxwr_load_defaults(tr_fxwr_t *s);
 void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b);
 void tr_fxwr_on_bar(tr_fxwr_t *s, const tr_fxwr_bar_t *b);
 double yl_lag(const tr_fxwr_t *s, int id, double k);

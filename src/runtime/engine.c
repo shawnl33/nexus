@@ -325,6 +325,8 @@ static void replay_wr(tr_pipeline_t *p) {
         st->os_full.wr_dir = p->os_scope.out.wr_dir;
         st->os_full.wr_order = p->os_scope.out.wr_order;
         st->os_full.wr_exit_dir = p->os_scope.out.wr_exit_dir;
+        st->os_full.wr_qty = p->os_scope.out.wr_qty;
+        st->os_full.wr_exit_qty = p->os_scope.out.wr_exit_qty;
         memcpy(st->os_full.wr_name, p->os_scope.out.wr_name, sizeof(st->os_full.wr_name));
         memcpy(st->os_full.wr_exit_name, p->os_scope.out.wr_exit_name, sizeof(st->os_full.wr_exit_name));
     }
@@ -1738,6 +1740,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
             osout.wr_dir = p->os_scope.out.wr_dir;
             osout.wr_order = p->os_scope.out.wr_order;
             osout.wr_exit_dir = p->os_scope.out.wr_exit_dir;
+            osout.wr_qty = p->os_scope.out.wr_qty;
+            osout.wr_exit_qty = p->os_scope.out.wr_exit_qty;
             memcpy(osout.wr_name, p->os_scope.out.wr_name, sizeof(osout.wr_name));
             memcpy(osout.wr_exit_name, p->os_scope.out.wr_exit_name, sizeof(osout.wr_exit_name));
         }

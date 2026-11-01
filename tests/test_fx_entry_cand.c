@@ -51,7 +51,35 @@ static void test_t_sell_breaks_blue_low(void) {
     TR_CHECK(o.emph == 1);
 }
 
+/* 세션 첫 봉도 삼선이 준비되면 직전범위 구간 봉수는 1이다. 0이면 구간 종료가 한 봉 늦다. */
+static void test_reset_bar_starts_position_leg(void) {
+    tr_fxec_cfg_t cfg;
+    tr_fxec_default_cfg(&cfg);
+    tr_fxec_mem_t old, now;
+    tr_fxec_bar_t b;
+    tr_fxec_out_t o;
+    fill_old(&old);
+    old.three_ok = 1;
+    old.p_n = 5;
+    old.p_prev_ok = 1;
+    memset(&b, 0, sizeof(b));
+    b.cur_bar = 10;
+    b.reset = 1;
+    b.high = 105;
+    b.low = 95;
+    b.close = 100;
+    b.price_scale = 0.25;
+    b.v1_ok = 1;
+    b.tgt[0] = 100;
+    b.tgt[1] = 110;
+    b.tgt[2] = 120;
+    tr_fxec_decide(&now, &old, &cfg, &b, &o);
+    TR_CHECK(now.p_n == 1);
+    TR_CHECK(now.p_prev_ok == 0);
+}
+
 int main(void) {
     test_t_sell_breaks_blue_low();
+    test_reset_bar_starts_position_leg();
     TR_TEST_SUMMARY();
 }

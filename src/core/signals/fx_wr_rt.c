@@ -151,7 +151,8 @@ typedef struct {
     tr_fxsyn_t syn5, syn15, syn30;
     int syn_ready;
     tr_fxec_t entry;
-    tr_fxfv_t fv;
+    tr_fxfv_t fv3; /* WSF_FXFutureValuesV3_CO. 기세무시틱 1 */
+    tr_fxfv_t fv1; /* WSF_FXFutureValuesV1. 기세 필터 없음 */
     tr_fxflat_out_t flat_prev;
     tr_fxadj_t adj;
     double prev_flat;
@@ -159,9 +160,89 @@ typedef struct {
     int ready;
 } tr_fxwr_eng_t;
 
+static double ps_of(const tr_fxwr_bar_t *b) {
+    return b->price_scale > 0 ? b->price_scale : 0.25;
+}
+
+/* 원본 Var 초기값. 이 이름들은 WSF 인자로만 쓰여 본문 슬롯이 없다. */
+static void fv_cfg(tr_fxfv_config_t *fc, double ps, double momentum_ticks) {
+    memset(fc, 0, sizeof(*fc));
+    fc->predict_bars[0] = 5;
+    fc->predict_bars[1] = 10;
+    fc->predict_bars[2] = 15;
+    fc->predict_bars[3] = 30;
+    fc->predict_bars[4] = 60;
+    fc->predict_ticks = 10;
+    fc->min_r2 = 0.4;
+    fc->persist_bars = 5;
+    fc->market_period = 20;
+    fc->min_hold_bars = 3;
+    fc->price_scale = ps;
+    fc->swing_link = 0;
+    fc->momentum_ignore_ticks = momentum_ticks;
+}
+
+static void fv_input(tr_fxfv_input_t *in, const tr_fxwr_bar_t *b) {
+    memset(in, 0, sizeof(*in));
+    in->date = b->date;
+    in->time = b->time;
+    in->bar_open = b->bar_open;
+    in->high = b->high;
+    in->low = b->low;
+    in->close = b->close;
+    in->volume = b->volume;
+}
+
+static int eval_fv(tr_fxfv_t *fv, const tr_fxwr_bar_t *b) {
+    tr_fxfv_input_t in;
+    if (b->price_scale <= 0) {
+        return 0;
+    }
+    fv_input(&in, b);
+    tr_fxfv_eval(fv, &in);
+    return 1;
+}
+
+static void write_fv3(tr_fxwr_t *s, const tr_fxfv_output_t *o) {
+    s->cur[YL_F_곡선회귀선_평탄] = o->reg_flat;
+    s->cur[YL_F_지속저장목표1] = o->persist_target[0];
+    s->cur[YL_F_지속저장목표2] = o->persist_target[1];
+    s->cur[YL_F_지속저장목표3] = o->persist_target[2];
+    s->cur[YL_F_지속저장목표4] = o->persist_target[3];
+    s->cur[YL_F_지속저장목표5] = o->persist_target[4];
+    s->cur[YL_F_핵심지난상승최고가] = o->lup_high;
+    s->cur[YL_F_핵심지난상승최저가] = o->lup_low;
+    s->cur[YL_F_핵심지난상승_382] = o->lup_382;
+    s->cur[YL_F_핵심지난상승_500] = o->lup_500;
+    s->cur[YL_F_핵심지난상승_618] = o->lup_618;
+    s->cur[YL_F_핵심지난하락최고가] = o->ldn_high;
+    s->cur[YL_F_핵심지난하락최저가] = o->ldn_low;
+    s->cur[YL_F_핵심지난하락_382] = o->ldn_382;
+    s->cur[YL_F_핵심지난하락_500] = o->ldn_500;
+    s->cur[YL_F_핵심지난하락_618] = o->ldn_618;
+}
+
+static void write_fv1(tr_fxwr_t *s, const tr_fxfv_output_t *o) {
+    s->cur[YL_F_S곡선평탄] = o->reg_flat;
+    s->cur[YL_F_S마켓중심] = o->market_center;
+    s->cur[YL_F_S목표1] = o->persist_target[0];
+    s->cur[YL_F_S목표2] = o->persist_target[1];
+    s->cur[YL_F_S목표3] = o->persist_target[2];
+    s->cur[YL_F_S목표5] = o->persist_target[4];
+}
+
+/* 본문은 미래계산가능이 1일 때만 평탄 회귀선을 넘긴다. */
+static double flat_in(const tr_fxwr_t *s) {
+    if (s->cur[YL_F_미래계산가능] != 1) {
+        return 0;
+    }
+    return s->cur[YL_F_곡선회귀선_평탄];
+}
+
 static tr_fxwr_eng_t *eng_of(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     tr_fxwr_eng_t *e;
     tr_fxfv_config_t fc;
+    double ps;
     if (s->eng != 0) {
         return (tr_fxwr_eng_t *)s->eng;
     }
@@ -169,26 +250,24 @@ static tr_fxwr_eng_t *eng_of(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     if (e == 0) {
         return 0;
     }
+    ps = ps_of(b);
     tr_fxc_init(&e->curve);
     tr_fxadx_init(&e->adx, 14);
     tr_fxprof_init(&e->prof);
     tr_fxprof_init(&e->prof_box);
     tr_fxsq_init(&e->squeeze);
-    tr_fxec_init(&e->entry, b->price_scale > 0 ? b->price_scale : 0.25);
+    tr_fxec_init(&e->entry, ps);
     tr_fxadj_init(&e->adj);
-    memset(&fc, 0, sizeof(fc));
-    fc.predict_bars[0] = 5;
-    fc.predict_bars[1] = 10;
-    fc.predict_bars[2] = 15;
-    fc.predict_bars[3] = 30;
-    fc.predict_bars[4] = 60;
-    fc.predict_ticks = 10;
-    fc.min_r2 = 0.4;
-    fc.persist_bars = 5;
-    fc.market_period = 20;
-    fc.min_hold_bars = 3;
-    fc.price_scale = b->price_scale > 0 ? b->price_scale : 0.25;
-    tr_fxfv_init(&e->fv, &fc);
+    fv_cfg(&fc, ps, 1);
+    if (!tr_fxfv_init(&e->fv3, &fc)) {
+        free(e);
+        return 0;
+    }
+    fv_cfg(&fc, ps, 0);
+    if (!tr_fxfv_init(&e->fv1, &fc)) {
+        free(e);
+        return 0;
+    }
     e->ready = 1;
     s->eng = e;
     return e;
@@ -284,53 +363,33 @@ double yl_WSF_FXDecisionV2_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
 
 double yl_WSF_FXFutureValuesV3_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     tr_fxwr_eng_t *e = eng_of(s, b);
-    tr_fxfv_input_t in;
-    const tr_fxfv_output_t *o;
-    if (e == 0) return 0;
-    memset(&in, 0, sizeof(in));
-    in.date = b->date;
-    in.time = b->time;
-    in.bar_open = b->bar_open;
-    in.high = b->high;
-    in.low = b->low;
-    in.close = b->close;
-    in.volume = b->volume;
-    tr_fxfv_eval(&e->fv, &in);
-    o = &e->fv.out;
-    s->cur[YL_F_곡선회귀선_평탄] = o->reg_flat;
-    s->cur[YL_F_지속저장목표1] = o->persist_target[0];
-    s->cur[YL_F_지속저장목표2] = o->persist_target[1];
-    s->cur[YL_F_지속저장목표3] = o->persist_target[2];
-    s->cur[YL_F_지속저장목표4] = o->persist_target[3];
-    s->cur[YL_F_지속저장목표5] = o->persist_target[4];
-    /* 승률 본문은 같은 지속저장목표를 S목표1~5로 받는다. S목표4는 본문이 읽지 않는다. */
-    s->cur[YL_F_S곡선평탄] = o->reg_flat;
-    s->cur[YL_F_S마켓중심] = o->market_center;
-    s->cur[YL_F_S목표1] = o->persist_target[0];
-    s->cur[YL_F_S목표2] = o->persist_target[1];
-    s->cur[YL_F_S목표3] = o->persist_target[2];
-    s->cur[YL_F_S목표5] = o->persist_target[4];
-    s->cur[YL_F_핵심지난상승최고가] = o->lup_high;
-    s->cur[YL_F_핵심지난상승최저가] = o->lup_low;
-    s->cur[YL_F_핵심지난상승_382] = o->lup_382;
-    s->cur[YL_F_핵심지난상승_500] = o->lup_500;
-    s->cur[YL_F_핵심지난상승_618] = o->lup_618;
-    s->cur[YL_F_핵심지난하락최고가] = o->ldn_high;
-    s->cur[YL_F_핵심지난하락최저가] = o->ldn_low;
-    s->cur[YL_F_핵심지난하락_382] = o->ldn_382;
-    s->cur[YL_F_핵심지난하락_500] = o->ldn_500;
-    s->cur[YL_F_핵심지난하락_618] = o->ldn_618;
-    return o->reg_flat != 0 || o->lup_high > 0;
+    if (e == 0 || !eval_fv(&e->fv3, b)) {
+        return 0;
+    }
+    write_fv3(s, &e->fv3.out);
+    /* 원본은 1분봉이고 PriceScale > 0 이면 1. 가격이 아직 없어도 반환은 1이다. */
+    return 1;
 }
 
 double yl_WSF_FXFutureValuesV1(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
-    return yl_WSF_FXFutureValuesV3_CO(s, b);
+    tr_fxwr_eng_t *e = eng_of(s, b);
+    if (e == 0 || !eval_fv(&e->fv1, b)) {
+        return 0;
+    }
+    write_fv1(s, &e->fv1.out);
+    return 1;
 }
 
 double yl_WSF_FXEntryCandV16_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     tr_fxwr_eng_t *e = eng_of(s, b);
     tr_fxec_input_t in;
+    tr_fxfv_output_t merged;
     if (e == 0) return 0;
+    /* 진입후보는 본문의 V3·V1 대입보다 먼저 호출된다. 이번 봉을 여기서 계산한다. */
+    eval_fv(&e->fv3, b);
+    eval_fv(&e->fv1, b);
+    merged = e->fv3.out;
+    memcpy(merged.persist_target, e->fv1.out.persist_target, sizeof(merged.persist_target));
     memset(&in, 0, sizeof(in));
     in.date = b->date;
     in.time = b->time;
@@ -340,7 +399,7 @@ double yl_WSF_FXEntryCandV16_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     in.low = b->low;
     in.close = b->close;
     in.volume = b->volume;
-    in.fv = &e->fv.out;
+    in.fv = &merged;
     tr_fxec_eval(&e->entry, &in);
     s->cur[YL_F_후보방향] = e->entry.out.dir;
     s->cur[YL_F_후보등급] = e->entry.out.grade;
@@ -352,10 +411,11 @@ double yl_WSF_FXFlatCountV2_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     tr_fxflat_out_t out;
     double flat;
     if (e == 0) return 0;
-    flat = s->cur[YL_F_곡선회귀선_평탄];
+    flat = flat_in(s);
     memset(&out, 0, sizeof(out));
+    /* 최소구간봉수 3 */
     tr_fxflat_step(&e->flat_prev, reset_of(s), flat, e->prev_flat, b->high, b->low,
-                   b->close, e->prev_close, b->price_scale > 0 ? b->price_scale : 0.25, 3, &out);
+                   b->close, e->prev_close, ps_of(b), 3, &out);
     e->flat_prev = out;
     e->prev_flat = flat;
     e->prev_close = b->close;
@@ -375,13 +435,13 @@ double yl_WSF_FXWaveAdjV6_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     if (e == 0) return 0;
     memset(&in, 0, sizeof(in));
     memset(&out, 0, sizeof(out));
-    in.flat = s->cur[YL_F_곡선회귀선_평탄];
+    in.flat = flat_in(s);
     in.flat_prev = e->prev_flat;
     in.high = b->high;
     in.low = b->low;
     in.close = b->close;
     in.close_prev = e->prev_close;
-    in.price_scale = b->price_scale > 0 ? b->price_scale : 0.25;
+    in.price_scale = ps_of(b);
     in.up_hi = s->cur[YL_F_핵심지난상승최고가];
     in.up_lo = s->cur[YL_F_핵심지난상승최저가];
     in.up_382 = s->cur[YL_F_핵심지난상승_382];
@@ -389,6 +449,21 @@ double yl_WSF_FXWaveAdjV6_CO(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     in.dn_lo = s->cur[YL_F_핵심지난하락최저가];
     in.dn_618 = s->cur[YL_F_핵심지난하락_618];
     in.session_reset = reset_of(s);
+    in.new_bar = b->is_new_bar;
+    /* 최소구간 3, 최소추세 15, 최소반대 3, 복귀 2, 강가격 38.2, 강시간 23.6, 중가격 61.8 */
+    in.min_leg = 3;
+    in.min_trend = 15;
+    in.min_opp = 3;
+    in.confirm_back = 2;
+    in.strong_px = 38.2;
+    in.strong_time = 23.6;
+    in.mid_px = 61.8;
+    in.start_b_only = 1;
+    in.struct_boost = 1;
+    in.struct_px = 78.6;
+    in.signal_limit = 120;
+    in.flip_opp_pct = 61.8;
+    in.rev = 6;
     tr_fxadj_eval(&e->adj, &in, &out);
     s->cur[YL_F_조정추세방향] = out.trend;
     s->cur[YL_F_조정중] = out.in_adj;
@@ -486,7 +561,8 @@ double yl_WSF_FXSyntheticLinesV1(tr_fxwr_t *s, const tr_fxwr_bar_t *b, int minut
         cfg.synth_min = 5;
         cfg.reg_period = 18;
         cfg.mkt_period = 20;
-        cfg.time_basis = 1;
+        /* 원본 합성봉시각기준은 1(봉 끝)이다. 엔진 sTime은 봉 시작이라 0이 같은 버킷이다. */
+        cfg.time_basis = 0;
         cfg.price_scale = ps;
         if (!tr_fxsyn_init(&e->syn5, &cfg)) return 0;
         cfg.synth_min = 15;

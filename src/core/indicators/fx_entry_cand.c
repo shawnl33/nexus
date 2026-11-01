@@ -288,10 +288,11 @@ void tr_fxec_decide(tr_fxec_mem_t *m, const tr_fxec_mem_t *old, const tr_fxec_cf
     int p_pos = 0;
     int p_n = m->p_n, p_ok = m->p_prev_ok;
     double p_hi = m->p_hi, p_lo = m->p_lo, p_phi = m->p_prev_hi, p_plo = m->p_prev_lo;
-    if (b->reset || !three_ok) {
+    if (!three_ok) {
         p_n = 0; p_ok = 0; p_hi = 0; p_lo = 0; p_phi = 0; p_plo = 0;
     } else if (three_ok) {
-        if (!old->three_ok) {
+        /* 세션 첫 봉도 삼선이 있으면 구간 봉수 1에서 시작한다. */
+        if (b->reset || !old->three_ok) {
             p_n = 1; p_hi = b->high; p_lo = b->low; p_ok = 0; p_phi = 0; p_plo = 0;
         } else if (three_gap != old->three_gap && old->p_n >= (cfg->r_leg_min > 1 ? cfg->r_leg_min : 1)) {
             p_phi = old->p_hi; p_plo = old->p_lo; p_ok = 1;

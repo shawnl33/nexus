@@ -222,9 +222,12 @@ static void test_exit_quantities_reach_chart_rows(void) {
         if (p != 0) p++;
     }
     TR_CHECK(p != 0 && strncmp(p, "2,0,0,1", 7) == 0 && (p[7] == '\0' || p[7] == ','));
-    snprintf(s.out.wr_name, sizeof(s.out.wr_name), "시가회복매수");
+    snprintf(s.out.wr_name, sizeof(s.out.wr_name), "압축매도");
+    snprintf(s.out.wr_exit_name, sizeof(s.out.wr_exit_name), "색청산매도");
+    s.out.wr_qty = 2;
+    s.out.wr_exit_qty = 0;
     TR_CHECK(tr_fxos_format(buf, sizeof(buf), &s.out) > 0);
-    TR_CHECK(strstr(buf, "\"시가회복매수\"") != 0);
+    TR_CHECK(strstr(buf, "\"압축매도\",\"색청산매도\",2,0") != 0);
     bar.is_new_bar = false;
     tr_fxos_eval(&s, &bar);
     TR_CHECK(s.out.pair_exit_qty == 2);

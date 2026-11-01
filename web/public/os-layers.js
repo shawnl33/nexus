@@ -186,6 +186,8 @@ const OsLayers = (() => {
       wrExitDir: row.length >= 237 ? Number(row[236]) || 0 : 0,
       wrName: row.length >= 238 && typeof row[237] === "string" ? row[237] : "",
       wrExitName: row.length >= 239 && typeof row[238] === "string" ? row[238] : "",
+      wrQty: row.length >= 240 ? Number(row[239]) || 0 : 0,
+      wrExitQty: row.length >= 241 ? Number(row[240]) || 0 : 0,
       adjKind: row.length >= 156 ? (Number(row[154]) || 0) : 0,
       adjGrade: row.length >= 156 ? (Number(row[155]) || 0) : 0,
     };
@@ -1019,7 +1021,8 @@ const OsLayers = (() => {
       67: "무거래_확장반등매수", 79: "전일저이탈매도", 82: "전일고돌파매수",
       85: "초기하락매도", 88: "초기상승매수", 94: "무거래30매수",
     }[n] || "");
-    const wrEntryText = (r) => r.wrName || wrOrderName(r.wrOrder) || "";
+    const wrNum = (name, qty) => (name ? name + "\n" + qty : "");
+    const wrEntryText = (r) => wrNum(r.wrName || wrOrderName(r.wrOrder) || "", r.wrQty || 0);
     const exitQtyOf = (r) => (pair ? (zd ? r.zdExitQty : r.pairExitQty) : r.sigExitQty);
     const limitQtyOf = (r) => (zd ? r.zdLimitQty : r.pairLimitQty);
     // 구버전의 수량 누락(null)은 이름만 유지한다. 잔량 0의 가상 청산은 표시하지 않는다.
@@ -1043,7 +1046,7 @@ const OsLayers = (() => {
           const lines = [];
           const hit = limitOf(r);
           if (hit) lines.push(quantityLabel((zd ? "1차청산" : "1차목표청산") + (hit > 0 ? "매수" : "매도"), limitQtyOf(r)));
-          if (exitOf(r)) lines.push(wr && r.wrExitName ? r.wrExitName : quantityLabel(pair ? pairExitLabel(r, zd) : exitName(exitOf(r)), exitQtyOf(r)));
+          if (exitOf(r)) lines.push(wr && r.wrExitName ? wrNum(r.wrExitName, r.wrExitQty || 0) : quantityLabel(pair ? pairExitLabel(r, zd) : exitName(exitOf(r)), exitQtyOf(r)));
           return lines.join("\n");
         } },
     ];

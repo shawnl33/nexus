@@ -118,6 +118,8 @@ typedef struct {
     int wr_exit_dir;
     char wr_name[64];
     char wr_exit_name[64];
+    int wr_qty;
+    int wr_exit_qty;
     int pair_exit_qty, pair_limit_qty, zd_exit_qty, zd_limit_qty;
     double wave_time, wave_price, wave_opp;
     int wave_state;
@@ -271,10 +273,11 @@ typedef struct {
     int wr_saved_n;
     tr_fxwr_ord_t wr_saved[24];
     double wr_save_o, wr_save_h, wr_save_l, wr_save_c, last_wr_v;
-    int wr_hold_dir, wr_hold_order, wr_hold_exit;
+    int wr_hold_dir, wr_hold_order, wr_hold_exit, wr_hold_qty, wr_hold_exit_qty;
     char wr_hold_name[64];
     char wr_hold_exit_name[64];
     char wr_bar_fill[64];
+    int wr_bar_fill_qty;
     int wr_first_filled;
     int64_t key;
     bool has_key;

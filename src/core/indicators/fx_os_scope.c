@@ -1172,6 +1172,8 @@ void tr_fxos_eval(tr_fxos_t *s, const tr_fxos_input_t *in) {
     s->out.wr_dir = 0;
     s->out.wr_order = 0;
     s->out.wr_exit_dir = 0;
+    s->out.wr_qty = 0;
+    s->out.wr_exit_qty = 0;
     s->out.wr_name[0] = '\0';
     s->out.wr_exit_name[0] = '\0';
     s->prev_color_dir = color_dir;
@@ -1413,10 +1415,11 @@ int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o) {
         m += n;
     }
     /* 기존 칸을 유지하고 청산 수량을 뒤에 추가한다 (228~231). */
-    int n = snprintf(buf + m, cap - (size_t)m, ",%d,%d,%d,%d,%d,%.10g,%d,%d,%d,\"%s\",\"%s\"",
+    /* 239는 승률 진입 수량, 240은 청산 수량. 색청산은 0이다. */
+    int n = snprintf(buf + m, cap - (size_t)m, ",%d,%d,%d,%d,%d,%.10g,%d,%d,%d,\"%s\",\"%s\",%d,%d",
                      o->pair_exit_qty, o->pair_limit_qty, o->zd_exit_qty, o->zd_limit_qty,
                      o->swing_on, o->swing_pct, o->wr_dir, o->wr_order, o->wr_exit_dir,
-                     o->wr_name, o->wr_exit_name);
+                     o->wr_name, o->wr_exit_name, o->wr_qty, o->wr_exit_qty);
     if (n < 0 || (size_t)m + (size_t)n >= cap) return -1;
     return m + n;
 }
@@ -1424,7 +1427,7 @@ int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o) {
 /* 매수 청산 지정가·스톱이 이 봉의 고저에 닿으면 그 이름을 돌려준다.
  * 1차청산은 진입 봉이 아니라 가격이 닿은 봉에 그린다. */
 static int long_exit_touch(const tr_yl_book_t *book, double open, double high, double low,
-                           char *name, size_t cap) {
+                           char *name, size_t cap, int *qty) {
     int i;
     if (book == 0) {
         return 0;
@@ -1442,6 +1445,9 @@ static int long_exit_touch(const tr_yl_book_t *book, double open, double high, d
         }
         if (hit) {
             snprintf(name, cap, "%s", p->name);
+            if (qty != 0) {
+                *qty = p->qty;
+            }
             return 1;
         }
     }
@@ -1450,7 +1456,7 @@ static int long_exit_touch(const tr_yl_book_t *book, double open, double high, d
 
 /* 매도 청산 지정가·스톱. 닿으면 저가 쪽 화살표다. */
 static int short_exit_touch(const tr_yl_book_t *book, double open, double high, double low,
-                            char *name, size_t cap) {
+                            char *name, size_t cap, int *qty) {
     int i;
     if (book == 0) {
         return 0;
@@ -1468,6 +1474,9 @@ static int short_exit_touch(const tr_yl_book_t *book, double open, double high, 
         }
         if (hit) {
             snprintf(name, cap, "%s", p->name);
+            if (qty != 0) {
+                *qty = p->qty;
+            }
             return 1;
         }
     }
@@ -1478,6 +1487,8 @@ static void wr_show(tr_fxos_t *s) {
     s->out.wr_dir = s->wr_hold_dir;
     s->out.wr_order = s->wr_hold_order;
     s->out.wr_exit_dir = s->wr_hold_exit;
+    s->out.wr_qty = s->wr_hold_qty;
+    s->out.wr_exit_qty = s->wr_hold_exit_qty;
     snprintf(s->out.wr_name, sizeof(s->out.wr_name), "%s", s->wr_hold_name);
     snprintf(s->out.wr_exit_name, sizeof(s->out.wr_exit_name), "%s", s->wr_hold_exit_name);
 }
@@ -1595,9 +1606,12 @@ void tr_fxos_wr_reset(tr_fxos_t *s) {
     s->wr_hold_dir = 0;
     s->wr_hold_order = 0;
     s->wr_hold_exit = 0;
+    s->wr_hold_qty = 0;
+    s->wr_hold_exit_qty = 0;
     s->wr_hold_name[0] = '\0';
     s->wr_hold_exit_name[0] = '\0';
     s->wr_bar_fill[0] = '\0';
+    s->wr_bar_fill_qty = 0;
     s->wr_first_filled = 0;
 }
 
@@ -1643,6 +1657,7 @@ void tr_fxos_wr_bar(tr_fxos_t *s, const tr_fxos_input_t *raw) {
     }
     if (s->wr_seen && in->bar_open != s->wr_bar_open) {
         s->wr_bar_fill[0] = '\0';
+        s->wr_bar_fill_qty = 0;
         wr_commit(s);
     }
     /* 예스트레이더는 스크립트보다 먼저, 걸려 있던 스톱·지정가를 이 봉의 고저로 체결한다.
@@ -1669,6 +1684,7 @@ void tr_fxos_wr_bar(tr_fxos_t *s, const tr_fxos_input_t *raw) {
                 continue;
             }
             snprintf(s->wr_bar_fill, sizeof(s->wr_bar_fill), "%s", t->name);
+            s->wr_bar_fill_qty = t->qty;
         }
         note_fills(s, n0);
     }
@@ -1688,6 +1704,8 @@ void tr_fxos_wr_bar(tr_fxos_t *s, const tr_fxos_input_t *raw) {
     s->wr_hold_dir = 0;
     s->wr_hold_order = (int)s->wr->cur[YL_F_주문번호];
     s->wr_hold_exit = 0;
+    s->wr_hold_qty = 0;
+    s->wr_hold_exit_qty = 0;
     s->wr_hold_name[0] = '\0';
     s->wr_hold_exit_name[0] = '\0';
     s->wr_saved_n = s->wr->ord_n;
@@ -1699,23 +1717,26 @@ void tr_fxos_wr_bar(tr_fxos_t *s, const tr_fxos_input_t *raw) {
         s->wr_saved[i] = *src;
         if ((src->action == TR_YL_BUY || src->action == TR_YL_SELL) && s->wr_hold_name[0] == '\0') {
             s->wr_hold_dir = src->action;
+            s->wr_hold_qty = src->qty;
             snprintf(s->wr_hold_name, sizeof(s->wr_hold_name), "%s", src->name);
         }
         if (s->wr_bar_fill[0] == '\0' && src->price_type == TR_YL_ONCLOSE &&
             s->wr_hold_exit_name[0] == '\0' &&
             (src->action == TR_YL_EXIT_LONG || src->action == TR_YL_EXIT_SHORT)) {
             s->wr_hold_exit = src->action == TR_YL_EXIT_LONG ? 1 : -1;
+            s->wr_hold_exit_qty = src->qty;
             snprintf(s->wr_hold_exit_name, sizeof(s->wr_hold_exit_name), "%s", src->name);
         }
     }
     if (s->wr_bar_fill[0] != '\0') {
         s->wr_hold_exit = strstr(s->wr_bar_fill, "매도") != 0 ? -1 : 1;
+        s->wr_hold_exit_qty = s->wr_bar_fill_qty;
         snprintf(s->wr_hold_exit_name, sizeof(s->wr_hold_exit_name), "%s", s->wr_bar_fill);
     } else if (long_exit_touch(s->wr_book, in->open, in->high, in->low, s->wr_hold_exit_name,
-                               sizeof(s->wr_hold_exit_name))) {
+                               sizeof(s->wr_hold_exit_name), &s->wr_hold_exit_qty)) {
         s->wr_hold_exit = 1;
     } else if (short_exit_touch(s->wr_book, in->open, in->high, in->low, s->wr_hold_exit_name,
-                                sizeof(s->wr_hold_exit_name))) {
+                                sizeof(s->wr_hold_exit_name), &s->wr_hold_exit_qty)) {
         s->wr_hold_exit = -1;
     }
     if (s->wr_hold_name[0] == '\0') {

@@ -1,8 +1,10 @@
 #include "core/backtest/yl_fill.h"
 #include "core/backtest/yl_link.h"
+#include "core/indicators/fx_os_scope.h"
 #include "core/signals/weekly_pair_v1.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int fails;
@@ -377,6 +379,80 @@ static void test_negative_qty_rejected(void) {
     expect_i(tr_yl_book_pos(&book).side, 0, "still flat");
 }
 
+/* 승률 백테스트는 봉 시작에 대기 스톱을 체결한다. 시가가 스톱을 지나치면 체결가는 시가다. */
+static void test_wr_stop_gap_fills_at_open(void) {
+    tr_yl_book_t book;
+    tr_fxos_t *scope = (tr_fxos_t *)calloc(1, sizeof(*scope));
+    tr_fxos_input_t in;
+    tr_yl_wr_hold_t hold;
+    tr_yl_bar_t first = bar(100000, 100, 100, 100, 100);
+    tr_yl_order_t buy = order("진입", TR_YL_BUY, TR_YL_ONCLOSE, 0, 1);
+    tr_yl_order_t stop = order("갭스톱", TR_YL_EXIT_LONG, TR_YL_STOP, 100, 1);
+    const tr_yl_trade_t *t;
+    int i;
+    int found = 0;
+    memset(&in, 0, sizeof(in));
+    memset(&hold, 0, sizeof(hold));
+    expect_i(scope != 0 && tr_fxos_init(scope, 0.25), 1, "wr scope");
+    tr_yl_book_init(&book, 1, 0.25);
+    tr_yl_book_open(&book, &first);
+    tr_yl_book_submit(&book, &buy);
+    tr_yl_book_close(&book);
+    tr_yl_book_submit(&book, &stop);
+    in.date = 20241001;
+    in.time = 100100;
+    in.bar_open = 60000000;
+    in.open = 99;
+    in.high = 101;
+    in.low = 98;
+    in.close = 100.5;
+    in.volume = 1;
+    in.is_new_bar = 1;
+    tr_yl_fxwr_bar(&book, scope, &in, &hold);
+    for (i = 0; i < tr_yl_book_trade_count(&book); i++) {
+        t = tr_yl_book_trade(&book, i);
+        if (t != 0 && strcmp(t->name, "갭스톱") == 0) {
+            found = 1;
+            expect_i(t->filled, 1, "wr stop filled");
+            expect_d(t->price, 99, "wr stop gap uses open");
+        }
+    }
+    expect_i(found, 1, "wr stop trade");
+    free(scope);
+}
+
+/* 같은 이름의 스톱은 가격을 바꾼다. 예전 스톱이 남아 있으면 더 나쁜 가격에 청산된다. */
+static void test_same_name_stop_replaces_price(void) {
+    tr_yl_book_t book;
+    tr_yl_bar_t b1 = bar(1, 100, 100, 100, 100);
+    tr_yl_bar_t b2 = bar(2, 105, 110, 104, 109);
+    tr_yl_bar_t b3 = bar(3, 109, 112, 99, 105);
+    tr_yl_order_t buy = order("진입", TR_YL_BUY, TR_YL_ONCLOSE, 0, 1);
+    tr_yl_order_t stop = order("2차추적스톱매수", TR_YL_EXIT_LONG, TR_YL_STOP, 100, 1);
+    const tr_yl_trade_t *t;
+    int i;
+    int found = 0;
+    tr_yl_book_init(&book, 1, 0.25);
+    tr_yl_book_open(&book, &b1);
+    tr_yl_book_submit(&book, &buy);
+    tr_yl_book_close(&book);
+    tr_yl_book_submit(&book, &stop);
+    tr_yl_book_open(&book, &b2);
+    stop.price = 108;
+    expect_i(tr_yl_book_submit(&book, &stop), 1, "replace stop");
+    tr_yl_book_close(&book);
+    tr_yl_book_open(&book, &b3);
+    for (i = 0; i < tr_yl_book_trade_count(&book); i++) {
+        t = tr_yl_book_trade(&book, i);
+        if (t != 0 && strcmp(t->name, "2차추적스톱매수") == 0) {
+            found = 1;
+            expect_i(t->filled, 1, "trail filled");
+            expect_d(t->price, 108, "trail uses new stop");
+        }
+    }
+    expect_i(found, 1, "trail trade");
+}
+
 int main(void) {
     test_onclose_fills_this_bar();
     test_market_fills_next_open();
@@ -389,6 +465,8 @@ int main(void) {
     test_fxsig_onclose_name_and_position();
     test_virt_first_target_once_then_remainder();
     test_negative_qty_rejected();
+    test_wr_stop_gap_fills_at_open();
+    test_same_name_stop_replaces_price();
     if (fails != 0) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

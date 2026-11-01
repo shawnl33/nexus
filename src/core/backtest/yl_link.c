@@ -85,7 +85,8 @@ int tr_yl_fxwr_bar(tr_yl_book_t *book, tr_fxos_t *scope, const tr_fxos_input_t *
     scope->avg_entry = book->pos.avg;
     memset(&bar, 0, sizeof(bar));
     bar.time = (int64_t)(in->bar_open / 1000000);
-    bar.open = in->close;
+    /* 시가가 스톱·지정가를 지나면 체결가는 시가다. 종가로 바꾸면 갭이 사라진다. */
+    bar.open = in->open;
     bar.high = in->high;
     bar.low = in->low;
     bar.close = in->close;

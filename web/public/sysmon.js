@@ -24,7 +24,7 @@ const Sysmon = (() => {
   function entryQty(os, mode) {
     if (mode === "v6") return os.sigQty || 0;
     if (mode === "zd") return os.zdQty || 0;
-    if (mode === "wr") return 2;
+    if (mode === "wr") return os.wrQty || 0;
     return os.pairQty || 0;
   }
 
@@ -46,6 +46,7 @@ const Sysmon = (() => {
   function exitQty(os, mode) {
     if (mode === "v6") return os.sigExitQty;
     if (mode === "zd") return os.zdExitQty;
+    if (mode === "wr") return os.wrExitQty || 0;
     return os.pairExitQty;
   }
 

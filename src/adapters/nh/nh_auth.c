@@ -1,6 +1,7 @@
 #include "adapters/nh/nh_auth.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -62,13 +63,24 @@ bool nh_auth_refresh(nh_auth_t *a) {
     yyjson_val *root = yyjson_doc_get_root(doc);
     const char *tok = yyjson_get_str(yyjson_obj_get(root, "access_token"));
     yyjson_val *exp = yyjson_obj_get(root, "expires_in");
-    if (tok == 0 || !yyjson_is_num(exp)) {
+    int64_t expires = 0;
+    if (yyjson_is_num(exp)) {
+        expires = yyjson_get_sint(exp);
+    } else if (yyjson_is_str(exp)) {
+        const char *s = yyjson_get_str(exp);
+        char *end = 0;
+        expires = s == 0 ? 0 : strtoll(s, &end, 10);
+        if (end == s) {
+            expires = 0;
+        }
+    }
+    if (tok == 0 || expires <= 0) {
         yyjson_doc_free(doc);
         snprintf(a->last_error, sizeof(a->last_error), "NH token missing fields");
         return false;
     }
     snprintf(a->token, sizeof(a->token), "%s", tok);
-    a->expires_at_us = now_us() + (int64_t)yyjson_get_sint(exp) * 1000000LL;
+    a->expires_at_us = now_us() + expires * 1000000LL;
     a->has_token = true;
     a->last_error[0] = 0;
     yyjson_doc_free(doc);
