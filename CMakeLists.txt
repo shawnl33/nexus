@@ -108,6 +108,8 @@ add_library(core STATIC
     src/core/indicators/weekly_plot_v1.c
     src/core/paintbar/volburst_paint.c
     src/core/paintbar/fx_judge_paint95.c
+    ${CMAKE_SOURCE_DIR}/../nakedstrike/src/core/paintbar/fx_judge_v66_rt.c
+    ${CMAKE_SOURCE_DIR}/../nakedstrike/src/core/paintbar/fx_judge_v66_yl.c
     src/core/signals/fx_wr_rt.c
     src/core/signals/fx_wr_yl.c
     src/core/signals/volburst_strangle.c
@@ -117,7 +119,7 @@ add_library(core STATIC
     src/core/model/time_us.c
     src/core/model/units.c
 )
-target_include_directories(core PUBLIC src)
+target_include_directories(core PUBLIC src ${CMAKE_SOURCE_DIR}/../nakedstrike/src)
 target_compile_options(core PRIVATE ${TR_WARNINGS})
 # 지표 계산은 double을 사용한다(계획서 §6). MSVC는 libm이 없다.
 if(NOT MSVC)

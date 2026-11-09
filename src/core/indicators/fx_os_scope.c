@@ -1421,6 +1421,11 @@ int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o) {
                      o->swing_on, o->swing_pct, o->wr_dir, o->wr_order, o->wr_exit_dir,
                      o->wr_name, o->wr_exit_name, o->wr_qty, o->wr_exit_qty);
     if (n < 0 || (size_t)m + (size_t)n >= cap) return -1;
+    m += n;
+    /* 241~246. 본장전용 V66C 실제진입·그림자·DI. */
+    n = snprintf(buf + m, cap - (size_t)m, ",%d,%.10g,%u,%.10g,%u,%u",
+                 o->v66_on, o->v66_real, o->v66_real_rgb, o->v66_shadow, o->v66_shadow_rgb, o->v66_di_rgb);
+    if (n < 0 || (size_t)m + (size_t)n >= cap) return -1;
     return m + n;
 }
 
@@ -1518,9 +1523,56 @@ static int is_first_target(const char *name) {
     return name != 0 && (strcmp(name, "1차청산매수") == 0 || strcmp(name, "1차청산매도") == 0);
 }
 
+static int is_exit_name(const char *name) {
+    return name != 0 && (strstr(name, "청산") != 0 || strstr(name, "스톱") != 0 ||
+                         strstr(name, "손절") != 0 || strstr(name, "본전") != 0);
+}
+
 static int is_entry_fill(const char *name) {
-    return name != 0 && name[0] != '\0' && strstr(name, "청산") == 0 && strstr(name, "스톱") == 0 &&
-           strstr(name, "손절") == 0;
+    return name != 0 && name[0] != '\0' && !is_exit_name(name);
+}
+
+static void publish_exit(tr_fxwr_t *w, int exit_bar) {
+    w->exit_ok = 1;
+    w->exit_bar = exit_bar;
+    w->exit_pnl = w->open_pnl;
+    snprintf(w->exit_name, sizeof(w->exit_name), "%s", w->open_entry);
+    w->open_active = 0;
+    w->open_pnl = 0;
+    w->open_entry[0] = '\0';
+}
+
+/* 1차 부분청산과 나머지 청산의 손익을 합쳐 직전 실제 포지션으로 남긴다. */
+static void wr_note_round(tr_fxos_t *s, int from, int exit_bar) {
+    tr_fxwr_t *w;
+    int k;
+    if (s->wr == 0 || s->wr_book == 0) {
+        return;
+    }
+    w = s->wr;
+    for (k = from; k < s->wr_book->trade_n; k++) {
+        const tr_yl_trade_t *t = tr_yl_book_trade(s->wr_book, k);
+        int entry;
+        if (t == 0 || !t->filled) {
+            continue;
+        }
+        entry = is_entry_fill(t->name);
+        if (t->has_pnl && w->open_active) {
+            w->open_pnl += t->pnl;
+        }
+        if (entry && t->has_pnl && w->open_active) {
+            publish_exit(w, exit_bar);
+            w->open_active = 1;
+            snprintf(w->open_entry, sizeof(w->open_entry), "%s", t->name);
+        } else if (entry && !w->open_active) {
+            w->open_active = 1;
+            w->open_pnl = 0;
+            snprintf(w->open_entry, sizeof(w->open_entry), "%s", t->name);
+        }
+    }
+    if (s->wr_book->pos.side == 0 && w->open_active) {
+        publish_exit(w, exit_bar);
+    }
 }
 
 static void note_fills(tr_fxos_t *s, int from) {
@@ -1566,6 +1618,7 @@ static void wr_commit(tr_fxos_t *s) {
     n0 = s->wr_book->trade_n;
     tr_yl_book_open(s->wr_book, &bar);
     note_fills(s, n0);
+    wr_note_round(s, n0, s->wr == 0 ? 0 : s->wr->bar_n);
     for (i = 0; i < s->wr_saved_n; i++) {
         tr_yl_order_t o;
         const tr_fxwr_ord_t *src = &s->wr_saved[i];
@@ -1584,6 +1637,7 @@ static void wr_commit(tr_fxos_t *s) {
     n0 = s->wr_book->trade_n;
     tr_yl_book_close(s->wr_book);
     note_fills(s, n0);
+    wr_note_round(s, n0, s->wr == 0 ? 0 : s->wr->bar_n);
     if (s->wr_book->pos.side == 0) {
         s->wr_first_filled = 0;
     }
@@ -1687,6 +1741,7 @@ void tr_fxos_wr_bar(tr_fxos_t *s, const tr_fxos_input_t *raw) {
             s->wr_bar_fill_qty = t->qty;
         }
         note_fills(s, n0);
+        wr_note_round(s, n0, s->wr->bar_n + ((!s->wr_seen || in->bar_open != s->wr_bar_open) ? 1 : 0));
     }
     memset(&wb, 0, sizeof(wb));
     wb.date = in->date;

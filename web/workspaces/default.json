@@ -160,15 +160,9 @@
               "id": "fx_judge",
               "layers": {
                 "state": true,
-                "fut": true,
-                "prof": true,
-                "di": true,
-                "adx": true,
-                "entry": true,
-                "release": true,
-                "resume": true,
-                "break": true,
-                "lead": true
+                "real": true,
+                "shadow": true,
+                "di": true
               }
             }
           ],

@@ -2504,7 +2504,7 @@ function activateIndicator(pane, indId, savedLayers) {
   const renderer = RENDERERS[indId];
   if (!renderer) return;
   const handle = renderer.createHandle(pane.chart, pane.candleSeries);
-  if (pane.barStyle === "none" && typeof handle.setAxis === "function") handle.setAxis("right");
+  if (typeof handle.setAxis === "function") handle.setAxis(pane.barStyle === "none" ? "right" : null);
   const meta = indicatorManifest.find((m) => m.id === indId);
   const layers = {};
   for (const l of meta?.layers ?? []) layers[l.id] = savedLayers?.[l.id] ?? (l.defaultOn !== false);

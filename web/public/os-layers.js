@@ -188,6 +188,12 @@ const OsLayers = (() => {
       wrExitName: row.length >= 239 && typeof row[238] === "string" ? row[238] : "",
       wrQty: row.length >= 240 ? Number(row[239]) || 0 : 0,
       wrExitQty: row.length >= 241 ? Number(row[240]) || 0 : 0,
+      v66On: row.length >= 247 && Number(row[241]) === 1,
+      v66Real: row.length >= 247 ? num(row[242]) : null,
+      v66RealRgb: row.length >= 247 ? (Number(row[243]) || 0) : 0,
+      v66Shadow: row.length >= 247 ? num(row[244]) : null,
+      v66ShadowRgb: row.length >= 247 ? (Number(row[245]) || 0) : 0,
+      v66DiRgb: row.length >= 247 ? (Number(row[246]) || 0) : 0,
       adjKind: row.length >= 156 ? (Number(row[154]) || 0) : 0,
       adjGrade: row.length >= 156 ? (Number(row[155]) || 0) : 0,
     };
@@ -254,6 +260,7 @@ const OsLayers = (() => {
               time: t, value, color: point.color, width: ln.width ? ln.width(row) : 4,
               text: ln.text ? ln.text(row, bar) : "",
               side: ln.side ? ln.side(row) : 1,
+              stroke: ln.stroke ? ln.stroke(row) : 1,
             });
           }
         }
@@ -307,6 +314,7 @@ const OsLayers = (() => {
               time: bt, value: bv, color: ln.color(brow), width: ln.width ? ln.width(brow) : 4,
               text: ln.text ? ln.text(brow, bbar) : "",
               side: ln.side ? ln.side(brow) : 1,
+              stroke: ln.stroke ? ln.stroke(brow) : 1,
             });
           }
         }
@@ -317,53 +325,29 @@ const OsLayers = (() => {
 
   function judgeHandle(chart) {
     const scale = "fxjudge";
-    const layers = { state: true, fut: true, prof: true, di: true, adx: true, entry: true, release: true, resume: true, break: true, lead: true, turn: true };
-    // 통합상태는 0선에서 세운 막대. 미래·매물은 각 높이의 얇은 가로선.
-    // DI방향은 ±20의 속 빈 테두리 원. ADX는 ±10 가로선.
-    function levelLine(color) {
+    const layers = { state: true, real: true, shadow: true, di: true };
+    // 본장전용 V66C. 통합상태는 0선에서 얇은 세로선. DI는 0선의 속 빈 원. 진입은 채운 점.
+    function hair(color) {
       const s = series(chart, scale, color, 1);
-      s.applyOptions({ lineVisible: false });
-      s.attachPrimitive(globalThis.HorizLines.primitive(color, 1));
+      s.applyOptions({ lineVisible: false, lastValueVisible: false, priceLineVisible: false });
       return s;
     }
+    const stateSeries = hair("#969696");
+    const statePen = globalThis.HorizLines.verts();
+    stateSeries.attachPrimitive(statePen);
+    const diSeries = hair("#969696");
+    const diPen = globalThis.HorizLines.rings(1);
+    diSeries.attachPrimitive(diPen);
     const lines = [
-      { layer: "state", series: histogram(chart, scale, "#969696"),
-        on: () => layers.state, value: (r) => r.judge, color: (r) => css(r.judgeRgb) },
-      { layer: "fut", series: levelLine("#ff5a5a"),
-        on: () => layers.fut, value: (r) => (r.fut ? r.fut * 80 : null), color: (r) => sideRgb(r.fut) },
-      { layer: "prof", series: levelLine("#5a82ff"),
-        on: () => layers.prof, value: (r) => (r.prof ? r.prof * 40 : null), color: (r) => sideRgb(r.prof) },
-      { layer: "di", series: (() => {
-          const s = series(chart, scale, "#5a82ff", 1);
-          s.applyOptions({ lineVisible: false });
-          return s;
-        })(),
-        on: () => layers.di, value: (r) => (r.di ? r.di * 20 : null), color: (r) => sideRgb(r.di), width: () => 8 },
-      { layer: "adx", series: levelLine("#787878"),
-        on: () => layers.adx, value: (r) => (r.adx ? r.adx * 10 : null), color: () => "#787878" },
-      { layer: "entry", series: (() => {
-          const s = series(chart, scale, "#ffd7d7", 1);
-          s.applyOptions({ lineVisible: false });
-          return s;
-        })(),
-        on: () => layers.entry, value: (r) => (r.entOn ? r.entY : null), color: (r) => css(r.entRgb), width: (r) => r.entW },
-      { layer: "release", series: dots(chart, scale, "#dc0000", 4),
-        on: () => layers.release, value: (r) => (r.sqOn ? 0 : null), color: (r) => css(r.sqRgb) },
-      { layer: "resume", series: dots(chart, scale, "#ff8c00", 4),
-        on: () => layers.resume, value: (r) => (r.adjOn ? r.adjY : null), color: (r) => css(r.adjRgb) },
-      { layer: "break", series: dots(chart, scale, "#ffbe00", 4),
-        on: () => layers.break, value: (r) => (r.brkOn ? r.brkY : null), color: (r) => css(r.brkRgb) },
-      { layer: "lead", series: dots(chart, scale, "#00b400", 4),
-        on: () => layers.lead, value: (r) => (r.leadOn ? r.leadY : null), color: (r) => css(r.leadRgb) },
-      { layer: "turn", series: dots(chart, scale, "#006400", 7),
-        on: () => layers.turn, value: (r) => (r.turnOn ? r.turnY : null), color: (r) => css(r.turnRgb), width: (r) => r.turnW || 7 },
+      { layer: "state", series: stateSeries, pen: statePen,
+        on: () => layers.state, value: (r) => r.judge, color: (r) => css(r.judgeRgb), width: () => 3 },
+      { layer: "real", series: dots(chart, scale, "#dc008c", 6),
+        on: () => layers.real, value: (r) => (r.v66Real ? r.v66Real : null), color: (r) => css(r.v66RealRgb) },
+      { layer: "shadow", series: dots(chart, scale, "#bebebe", 4),
+        on: () => layers.shadow, value: (r) => (r.v66Shadow ? r.v66Shadow : null), color: (r) => css(r.v66ShadowRgb || 0xbebebe) },
+      { layer: "di", series: diSeries, pen: diPen,
+        on: () => layers.di, value: (r) => (r.v66On ? 0 : null), color: (r) => css(r.v66DiRgb || 0x969696), width: () => 16, stroke: () => 3 },
     ];
-    const entryLn = lines.find((ln) => ln.layer === "entry");
-    entryLn.pen = globalThis.HorizLines.dots(1);
-    entryLn.series.attachPrimitive(entryLn.pen);
-    const diLn = lines.find((ln) => ln.layer === "di");
-    diLn.pen = globalThis.HorizLines.rings(1);
-    diLn.series.attachPrimitive(diLn.pen);
     const all = lines.map((ln) => ln.series);
     function setAxis(id) {
       const own = id === "right";
@@ -377,20 +361,16 @@ const OsLayers = (() => {
       }
       if (typeof chart.priceScale === "function") {
         chart.priceScale(next).applyOptions(own
-          ? { scaleMargins: { top: 0.08, bottom: 0.08 }, autoScale: true, visible: true }
-          : { scaleMargins: { top: 0.72, bottom: 0 }, autoScale: true });
+          ? { scaleMargins: { top: 0.08, bottom: 0.08 }, autoScale: true, visible: true, borderVisible: true }
+          : { scaleMargins: { top: 0.72, bottom: 0 }, autoScale: true, visible: false });
       }
     }
-    setAxis(null);
+    setAxis("right");
     let ctx = null;
     const pick = (ind) => ind && ind.os;
     return {
       setAxis,
       setLayers(map) {
-        if (map && "detail" in map) {
-          const on = !!map.detail;
-          layers.fut = layers.prof = layers.di = layers.adx = on;
-        }
         for (const k of Object.keys(layers)) if (map && k in map) layers[k] = !!map[k];
         paint(lines, ctx, pick);
       },

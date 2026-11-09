@@ -117,6 +117,23 @@ test("통합판정 눈금은 전환 ±190을 포함하고 전환 점을 읽는�
   assert.equal(parsed.turnY, -190);
   assert.equal(parsed.turnRgb, 0x006400);
   assert.equal(parsed.turnW, 7);
+  const v66 = Array(247).fill(0);
+  v66[0] = 100;
+  v66[1] = 0xff0000;
+  v66[50] = 0xff7800;
+  v66[241] = 1;
+  v66[242] = 170;
+  v66[243] = 0xdc008c;
+  v66[244] = 0;
+  v66[246] = 0x0000ff;
+  const next = Os.parse(v66);
+  assert.equal(next.v66On, true);
+  assert.equal(next.judge, 100);
+  assert.equal(next.v66Real, 170);
+  assert.equal(next.v66RealRgb, 0xdc008c);
+  assert.equal(next.v66Shadow, 0);
+  assert.equal(next.v66DiRgb, 0x0000ff);
+  assert.equal(next.paintRgb, 0xff7800);
 });
 
 test("포지션감시 줄은 수익전환과 총손익을 읽는다", () => {

@@ -156,6 +156,13 @@ typedef struct {
     double bk_px;
     uint32_t bk_rgb;
     uint32_t os_paint;
+    /* 본장전용 V66C 표시. 241~246. judge·paint_rgb도 이 계산으로 덮는다. */
+    int v66_on;
+    double v66_real;
+    uint32_t v66_real_rgb;
+    double v66_shadow;
+    uint32_t v66_shadow_rgb;
+    uint32_t v66_di_rgb;
 } tr_fxos_out_t;
 
 /* 진입신호매매 Input 중 이 계산이 봉마다 읽는 값. 비어 있으면 식의 기본값. */

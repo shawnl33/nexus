@@ -6,11 +6,16 @@
 #include <string.h>
 
 #include "core/model/civil_time.h"
+#include "core/paintbar/fx_judge_v66.h"
 
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar);
 static void civil_stamp(tr_time_us_t t, int32_t utc_offset_min, int64_t *date, int64_t *tod);
 static void replay_ind(tr_pipeline_t *p, uint32_t old_need, uint32_t added);
 static void replay_wr(tr_pipeline_t *p);
+static void v66_reset(tr_pipeline_t *p);
+static void v66_apply(tr_pipeline_t *p, tr_fxos_out_t *o, int64_t date, int64_t tod,
+                      tr_time_us_t bar_open, double open, double high, double low,
+                      double close, double volume, int is_new);
 
 /* 원본 PriceScale 대응: raw 가격 단위의 1틱 — tick_raw 명시(해외선물) > 자동(선물 0.05pt×100=5,
  * 주식 1원×100=100). raw는 주식·선물 모두 실제 × 100 스케일 (ls_chart.c parse_price_scaled) */
@@ -64,6 +69,7 @@ void tr_engine_replay_os(tr_pipeline_t *p) {
     }
     cfg = p->os_scope.cfg;
     tr_fxec_cfg_t entry_cfg = p->os_scope.entry.cfg;
+    v66_reset(p);
     tr_fxos_wr_reset(&p->os_scope);
     if (!tr_fxos_init(&p->os_scope, tick_scale(p))) {
         return;
@@ -121,6 +127,8 @@ void tr_engine_replay_os(tr_pipeline_t *p) {
         oin.fv = &replay_fx->fv.out;
         tr_fxos_set_synth(&oin, &replay_fx->syn5, &replay_fx->syn15, &replay_fx->syn30);
         tr_fxos_eval(&p->os_scope, &oin);
+        v66_apply(p, &p->os_scope.out, oin.date, oin.time, bar.open_time_us,
+                  oin.open, oin.high, oin.low, oin.close, oin.volume, 1);
         prev = bar;
         has_prev = 1;
         if (!p->status_ring_on) {
@@ -138,6 +146,65 @@ void tr_engine_replay_os(tr_pipeline_t *p) {
     }
     free(replay_fx);
     }
+}
+
+static void v66_reset(tr_pipeline_t *p) {
+    if (p == 0 || p->v66 == 0) {
+        return;
+    }
+    tr_fxj_free(p->v66);
+    free(p->v66);
+    p->v66 = 0;
+}
+
+/* 본장전용 V66C. 가격은 raw(×100)라 포인트로 나눠 넣는다. judge·봉색·진입 점을 덮어쓴다. */
+static void v66_apply(tr_pipeline_t *p, tr_fxos_out_t *o, int64_t date, int64_t tod,
+                      tr_time_us_t bar_open, double open, double high, double low,
+                      double close, double volume, int is_new) {
+    tr_fxj_t *s;
+    tr_fxj_bar_t bar;
+    tr_fxj_ind_t ind;
+    int thick = 0;
+    unsigned rgb;
+    double unit = 100.0;
+    double ps;
+    if (p == 0 || o == 0) {
+        return;
+    }
+    if (p->v66 == 0) {
+        p->v66 = calloc(1, sizeof(tr_fxj_t));
+    }
+    s = p->v66;
+    if (s == 0) {
+        return;
+    }
+    ps = tick_scale(p) / unit;
+    if (!(ps > 0.0)) {
+        ps = 0.25;
+    }
+    memset(&bar, 0, sizeof(bar));
+    bar.date = date;
+    bar.time = tod;
+    bar.bar_open = bar_open;
+    bar.open = open / unit;
+    bar.high = high / unit;
+    bar.low = low / unit;
+    bar.close = close / unit;
+    bar.volume = volume;
+    bar.price_scale = ps;
+    bar.is_new_bar = is_new ? 1 : 0;
+    tr_fxj_on_bar(s, &bar);
+    rgb = tr_fxj_paint(s, &thick);
+    tr_fxj_ind(s, &ind);
+    o->judge = (int)ind.state;
+    o->judge_rgb = ind.state_rgb != 0 ? ind.state_rgb : 0x969696u;
+    o->paint_rgb = rgb;
+    o->v66_on = 1;
+    o->v66_real = ind.real;
+    o->v66_real_rgb = ind.real_rgb;
+    o->v66_shadow = ind.shadow;
+    o->v66_shadow_rgb = ind.shadow_rgb;
+    o->v66_di_rgb = ind.di_rgb;
 }
 
 /* 봉 시작 시각 → 예스랭귀지 sDate(yyyymmdd) / sTime(hhmmss). 세션 오프셋의 현지 시각. */
@@ -1736,6 +1803,8 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         }
         if (want_os) {
             osout = p->os_scope.out;
+            v66_apply(p, &osout, oin.date, oin.time, oin.bar_open,
+                      oin.open, oin.high, oin.low, oin.close, oin.volume, oin.is_new_bar ? 1 : 0);
         } else {
             osout.wr_dir = p->os_scope.out.wr_dir;
             osout.wr_order = p->os_scope.out.wr_order;

@@ -274,6 +274,57 @@ const HorizLines = (() => {
     };
   }
 
+  // 0선에서 값까지 세로선. 굵기는 점의 width, 원본 Plot 은 3.
+  function verts() {
+    let series = null;
+    let chart = null;
+    let points = [];
+    return {
+      setPoints(next) { points = next || []; },
+      attached(param) {
+        series = param.series;
+        chart = param.chart;
+      },
+      detached() {
+        series = null;
+        chart = null;
+      },
+      updateAllViews() {},
+      paneViews() {
+        return [{
+          renderer() {
+            return {
+              draw(target) {
+                if (!series || !chart) return;
+                target.useBitmapCoordinateSpace((scope) => {
+                  const ctx = scope.context;
+                  const hr = scope.horizontalPixelRatio;
+                  const vr = scope.verticalPixelRatio;
+                  const y0 = series.priceToCoordinate(0);
+                  if (y0 == null) return;
+                  const xOf = (t) => chart.timeScale().timeToCoordinate(t);
+                  ctx.lineCap = "butt";
+                  for (const p of points) {
+                    if (!p || !Number.isFinite(p.value)) continue;
+                    const mx = xOf(p.time);
+                    const my = series.priceToCoordinate(p.value);
+                    if (mx == null || my == null) continue;
+                    ctx.beginPath();
+                    ctx.lineWidth = Math.max(1, (Number(p.width) || 3) * hr);
+                    ctx.strokeStyle = p.color || "#969696";
+                    ctx.moveTo(mx * hr, y0 * vr);
+                    ctx.lineTo(mx * hr, my * vr);
+                    ctx.stroke();
+                  }
+                });
+              },
+            };
+          },
+        }];
+      },
+    };
+  }
+
   // 봉마다 속 빈 테두리 원. 지름은 굵기. 점 사이는 잇지 않는다.
   function rings(scale) {
     let series = null;
@@ -301,7 +352,6 @@ const HorizLines = (() => {
                   const hr = scope.horizontalPixelRatio;
                   const vr = scope.verticalPixelRatio;
                   const xOf = (t) => chart.timeScale().timeToCoordinate(t);
-                  ctx.lineWidth = Math.max(1, hr);
                   for (const p of points) {
                     if (!p || !Number.isFinite(p.value)) continue;
                     const mx = xOf(p.time);
@@ -309,6 +359,7 @@ const HorizLines = (() => {
                     if (mx == null || my == null) continue;
                     const radius = Math.max(3, (p.width || 1) * (scale > 0 ? scale : 1)) * 0.5 * hr;
                     ctx.beginPath();
+                    ctx.lineWidth = Math.max(1, (Number(p.stroke) || 1) * hr);
                     ctx.strokeStyle = p.color || "#d7dde8";
                     ctx.arc(mx * hr, my * vr, radius, 0, Math.PI * 2);
                     ctx.stroke();
@@ -644,7 +695,7 @@ const HorizLines = (() => {
     };
   }
 
-  return { primitive, segments, flat, plus, dots, rings, diamonds, arrows, defLine, levels };
+  return { primitive, segments, flat, plus, dots, rings, verts, diamonds, arrows, defLine, levels };
 })();
 
 if (typeof globalThis !== "undefined") globalThis.HorizLines = HorizLines;

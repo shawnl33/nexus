@@ -250,6 +250,7 @@ typedef struct {
     tr_vb_t vb; /* #BG_Vol_burst_V2. 1분봉에서만 평가한다 */
     uint32_t ind_need; /* 켠 지표가 요구하는 계산. ind_need_set일 때만 적용 */
     bool ind_need_set;
+    void *v66; /* 본장전용 V66C. 해외 1분봉에서만 할당 */
 } tr_pipeline_t;
 
 #define TR_ENGINE_MAX_PIPES 8 /* 동시 관측 종목 상한 (더 필요하면 상수만 올린다) */
@@ -325,6 +326,7 @@ struct tr_engine {
             tr_vb_t vb;
             uint32_t ind_need;
             bool ind_need_set;
+            void *v66;
         };
     };
     tr_pipeline_t pipe_slots[TR_ENGINE_MAX_PIPES - 1]; /* pipes[1..] 내장 저장소 */
@@ -391,6 +393,7 @@ TR_ENGINE_PIPE_LAYOUT_CHECK(ks_has_date);
 TR_ENGINE_PIPE_LAYOUT_CHECK(vb);
 TR_ENGINE_PIPE_LAYOUT_CHECK(ind_need);
 TR_ENGINE_PIPE_LAYOUT_CHECK(ind_need_set);
+TR_ENGINE_PIPE_LAYOUT_CHECK(v66);
 #undef TR_ENGINE_PIPE_LAYOUT_CHECK
 
 bool tr_engine_init(tr_engine_t *e, const tr_engine_config_t *cfg,
