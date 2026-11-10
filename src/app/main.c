@@ -995,6 +995,9 @@ static uint32_t ind_need_bit(const char *id) {
     if (strcmp(id, "fx_wr") == 0) {
         return TR_NEED_WR;
     }
+    if (strcmp(id, "fx_rr") == 0) {
+        return TR_NEED_RR;
+    }
     return TR_NEED_OS;
 }
 
@@ -1212,6 +1215,9 @@ static const char SNAP_IND_MANIFEST_B[] =
     "{\"id\":\"fx_paint_v12\",\"name\":\"1분통합판정강조\",\"layers\":["
     "{\"id\":\"bar\",\"name\":\"봉색\",\"defaultOn\":true}]},"
     "{\"id\":\"fx_wr\",\"name\":\"#우드스탁_ES기초자산_승률\",\"layers\":["
+    "{\"id\":\"entry\",\"name\":\"진입\",\"defaultOn\":true},"
+    "{\"id\":\"exit\",\"name\":\"청산\",\"defaultOn\":true}]},"
+    "{\"id\":\"fx_rr\",\"name\":\"#우드스탁_ES기초자산_수익비\",\"layers\":["
     "{\"id\":\"entry\",\"name\":\"진입\",\"defaultOn\":true},"
     "{\"id\":\"exit\",\"name\":\"청산\",\"defaultOn\":true}]},"
     "{\"id\":\"fx_sig_v6\",\"name\":\"진입신호\",\"layers\":["

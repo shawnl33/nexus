@@ -138,6 +138,59 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
         s->cur[YL_F_흡수지속봉] = (s->cur[YL_F_흡수지속봉] + 1);
     else 
         s->cur[YL_F_흡수지속봉] = 0;
+    if ((s->cur[YL_F_FX초기화] == 1))         {
+            if (((s->cur[YL_F_진세션완전] == 1) && (s->cur[YL_F_진세션마지막분] >= 0)))                 {
+                    for (s->cur[YL_F_진k] = (0); s->cur[YL_F_진k] <= (1440); s->cur[YL_F_진k] += 1)                         {
+                            if ((s->cur[YL_F_진k] > s->cur[YL_F_진세션마지막분])) 
+                                yl_arr_set(s, YL_A_진세션오늘, (int)(s->cur[YL_F_진k]), yl_arr(s, YL_A_진세션오늘, (int)(s->cur[YL_F_진세션마지막분])));
+                            yl_arr_set(s, YL_A_진세션5, (int)(s->cur[YL_F_진k]), yl_arr(s, YL_A_진세션4, (int)(s->cur[YL_F_진k])));
+                            yl_arr_set(s, YL_A_진세션4, (int)(s->cur[YL_F_진k]), yl_arr(s, YL_A_진세션3, (int)(s->cur[YL_F_진k])));
+                            yl_arr_set(s, YL_A_진세션3, (int)(s->cur[YL_F_진k]), yl_arr(s, YL_A_진세션2, (int)(s->cur[YL_F_진k])));
+                            yl_arr_set(s, YL_A_진세션2, (int)(s->cur[YL_F_진k]), yl_arr(s, YL_A_진세션1, (int)(s->cur[YL_F_진k])));
+                            yl_arr_set(s, YL_A_진세션1, (int)(s->cur[YL_F_진k]), yl_arr(s, YL_A_진세션오늘, (int)(s->cur[YL_F_진k])));
+                        }
+                    s->cur[YL_F_진세션개수] = yl_min(5, (s->cur[YL_F_진세션개수] + 1));
+                }
+            for (s->cur[YL_F_진k] = (0); s->cur[YL_F_진k] <= (1440); s->cur[YL_F_진k] += 1)                 {
+                    yl_arr_set(s, YL_A_진세션오늘, (int)(s->cur[YL_F_진k]), 0);
+                }
+            s->cur[YL_F_진세션완전] = ((s->bar_n > 1) ? 1 : 0);
+            s->cur[YL_F_진세션시작분] = s->cur[YL_F_본장기준봉분];
+            s->cur[YL_F_진세션마지막분] = (-1);
+            s->cur[YL_F_진세션고가] = b->high;
+            s->cur[YL_F_진세션저가] = b->low;
+        }
+    s->cur[YL_F_진세션분] = yl_max(0, yl_min(1440, (s->cur[YL_F_본장기준봉분] - s->cur[YL_F_진세션시작분])));
+    s->cur[YL_F_진세션고가] = yl_max(s->cur[YL_F_진세션고가], b->high);
+    s->cur[YL_F_진세션저가] = yl_min(s->cur[YL_F_진세션저가], b->low);
+    if (((s->cur[YL_F_진세션마지막분] >= 0) && (s->cur[YL_F_진세션분] > (s->cur[YL_F_진세션마지막분] + 1))))         {
+            for (s->cur[YL_F_진k] = ((s->cur[YL_F_진세션마지막분] + 1)); s->cur[YL_F_진k] <= ((s->cur[YL_F_진세션분] - 1)); s->cur[YL_F_진k] += 1)                 {
+                    yl_arr_set(s, YL_A_진세션오늘, (int)(s->cur[YL_F_진k]), yl_arr(s, YL_A_진세션오늘, (int)(s->cur[YL_F_진세션마지막분])));
+                }
+        }
+    yl_arr_set(s, YL_A_진세션오늘, (int)(s->cur[YL_F_진세션분]), (s->cur[YL_F_진세션고가] - s->cur[YL_F_진세션저가]));
+    s->cur[YL_F_진세션마지막분] = s->cur[YL_F_진세션분];
+    s->cur[YL_F_진세션평균] = 0;
+    s->cur[YL_F_세션진폭율] = 0;
+    if ((s->cur[YL_F_진세션개수] >= 1)) 
+        s->cur[YL_F_진세션평균] = (s->cur[YL_F_진세션평균] + yl_arr(s, YL_A_진세션1, (int)(s->cur[YL_F_진세션분])));
+    if ((s->cur[YL_F_진세션개수] >= 2)) 
+        s->cur[YL_F_진세션평균] = (s->cur[YL_F_진세션평균] + yl_arr(s, YL_A_진세션2, (int)(s->cur[YL_F_진세션분])));
+    if ((s->cur[YL_F_진세션개수] >= 3)) 
+        s->cur[YL_F_진세션평균] = (s->cur[YL_F_진세션평균] + yl_arr(s, YL_A_진세션3, (int)(s->cur[YL_F_진세션분])));
+    if ((s->cur[YL_F_진세션개수] >= 4)) 
+        s->cur[YL_F_진세션평균] = (s->cur[YL_F_진세션평균] + yl_arr(s, YL_A_진세션4, (int)(s->cur[YL_F_진세션분])));
+    if ((s->cur[YL_F_진세션개수] >= 5)) 
+        s->cur[YL_F_진세션평균] = (s->cur[YL_F_진세션평균] + yl_arr(s, YL_A_진세션5, (int)(s->cur[YL_F_진세션분])));
+    if ((s->cur[YL_F_진세션개수] >= 1)) 
+        s->cur[YL_F_진세션평균] = (s->cur[YL_F_진세션평균] / s->cur[YL_F_진세션개수]);
+    if ((s->cur[YL_F_진세션평균] > 0)) 
+        s->cur[YL_F_세션진폭율] = ((yl_arr(s, YL_A_진세션오늘, (int)(s->cur[YL_F_진세션분])) / s->cur[YL_F_진세션평균]) * 100);
+    s->cur[YL_F_직전본장고가V102] = ((s->cur[YL_F_본장기준봉분] < s->cur[YL_F_본장시작분]) ? s->cur[YL_F_당일본장고가] : s->cur[YL_F_전일본장고가]);
+    if (((s->cur[YL_F_본장중] == 1) && (((s->bar_n == 1) || (yl_lag(s, YL_F_본장중, 1) == 0))))) 
+        s->cur[YL_F_본장최고진폭율] = 0;
+    if ((s->cur[YL_F_본장중] == 1)) 
+        s->cur[YL_F_본장최고진폭율] = yl_max(s->cur[YL_F_본장최고진폭율], s->cur[YL_F_본장진폭율]);
     s->cur[YL_F_영국서머타임] = 0;
     if (((s->cur[YL_F_봉월] >= 4) && (s->cur[YL_F_봉월] <= 9))) 
         s->cur[YL_F_영국서머타임] = 1;
@@ -148,7 +201,7 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     s->cur[YL_F_아시아시작분] = ((trunc((s->cur[YL_F_아시아시작] / 10000)) * 60) + trunc((((s->cur[YL_F_아시아시작] - (trunc((s->cur[YL_F_아시아시작] / 10000)) * 10000))) / 100)));
     s->cur[YL_F_런던시작분] = ((s->cur[YL_F_영국서머타임] == 1) ? ((trunc((s->cur[YL_F_런던서머타임시작] / 10000)) * 60) + trunc((((s->cur[YL_F_런던서머타임시작] - (trunc((s->cur[YL_F_런던서머타임시작] / 10000)) * 10000))) / 100))) : ((trunc((s->cur[YL_F_런던표준시시작] / 10000)) * 60) + trunc((((s->cur[YL_F_런던표준시시작] - (trunc((s->cur[YL_F_런던표준시시작] / 10000)) * 10000))) / 100))));
     if (((((s->bar_n > 1) && (s->cur[YL_F_봉시작분] >= s->cur[YL_F_아시아시작분])) && (s->cur[YL_F_봉시작분] < (s->cur[YL_F_아시아시작분] + 60))) && (((yl_lag(s, YL_F_봉시작분, 1) < s->cur[YL_F_아시아시작분]) || (b->date != yl_lag(s, YL_F_sDate, 1)))))) 
-        s->cur[YL_F_아시아시가] = b->open;
+        s->cur[YL_F_아시아시가] = s->cur[YL_F_아시아시가];
     if (((((s->bar_n > 1) && (s->cur[YL_F_봉시작분] >= s->cur[YL_F_런던시작분])) && (s->cur[YL_F_봉시작분] < (s->cur[YL_F_런던시작분] + 60))) && (((yl_lag(s, YL_F_봉시작분, 1) < s->cur[YL_F_런던시작분]) || (b->date != yl_lag(s, YL_F_sDate, 1))))))         {
             if ((s->cur[YL_F_런던저가] > 0)) 
                 s->cur[YL_F_전일런던저가] = s->cur[YL_F_런던저가];
@@ -206,6 +259,30 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                 }
             yl_WSF_FXEntryCandV16_CO(s, b);
             s->cur[YL_F_미래계산가능] = yl_WSF_FXFutureValuesV3_CO(s, b);
+            if (((s->bar_n > 1) && (s->cur[YL_F_지속저장목표5] != yl_lag(s, YL_F_지속저장목표5, 1))))                 {
+                    s->cur[YL_F_목표5지지횟수] = 0;
+                    s->cur[YL_F_목표5아래중] = 0;
+                }
+            if ((((s->cur[YL_F_지속저장목표5] > 0) && (b->low < s->cur[YL_F_지속저장목표5])) && (s->cur[YL_F_목표5아래중] == 0)))                 {
+                    s->cur[YL_F_목표5지지횟수] = (s->cur[YL_F_목표5지지횟수] + 1);
+                    s->cur[YL_F_목표5아래중] = 1;
+                }
+            if (((s->cur[YL_F_지속저장목표5] > 0) && (b->low >= s->cur[YL_F_지속저장목표5]))) 
+                s->cur[YL_F_목표5아래중] = 0;
+            if (((s->bar_n > 1) && (s->cur[YL_F_지속저장목표5] != yl_lag(s, YL_F_지속저장목표5, 1))))                 {
+                    s->cur[YL_F_목표5저항횟수] = 0;
+                    s->cur[YL_F_목표5위중] = 0;
+                }
+            if ((((s->cur[YL_F_지속저장목표5] > 0) && (b->high > s->cur[YL_F_지속저장목표5])) && (s->cur[YL_F_목표5위중] == 0)))                 {
+                    s->cur[YL_F_목표5저항횟수] = (s->cur[YL_F_목표5저항횟수] + 1);
+                    s->cur[YL_F_목표5위중] = 1;
+                }
+            if (((s->cur[YL_F_지속저장목표5] > 0) && (b->high <= s->cur[YL_F_지속저장목표5]))) 
+                s->cur[YL_F_목표5위중] = 0;
+            if ((((((s->cur[YL_F_본장중] == 1) && (s->cur[YL_F_지속저장목표5] > 0)) && (s->bar_n > 1)) && (s->cur[YL_F_지속저장목표5] == yl_lag(s, YL_F_지속저장목표5, 1))) && (yl_lag(s, YL_F_본장중, 1) == 1))) 
+                s->cur[YL_F_목표5유지봉] = (s->cur[YL_F_목표5유지봉] + 1);
+            else 
+                s->cur[YL_F_목표5유지봉] = 0;
             if ((((s->cur[YL_F_FX초기화] == 1) || (s->cur[YL_F_미래계산가능] != 1)) || (s->cur[YL_F_지속저장목표2] == 0))) 
                 s->cur[YL_F_지속목표방향] = 0;
             else if ((((((s->cur[YL_F_지속저장목표1] != yl_lag(s, YL_F_지속저장목표1, 1)) || (s->cur[YL_F_지속저장목표2] != yl_lag(s, YL_F_지속저장목표2, 1))) || (s->cur[YL_F_지속저장목표3] != yl_lag(s, YL_F_지속저장목표3, 1))) || (s->cur[YL_F_지속저장목표4] != yl_lag(s, YL_F_지속저장목표4, 1))) || (s->cur[YL_F_지속저장목표5] != yl_lag(s, YL_F_지속저장목표5, 1))))                 {
@@ -450,9 +527,9 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                     if ((s->cur[YL_F_S두구간최대] > 0)) 
                         s->cur[YL_F_S두구간비율] = ((s->cur[YL_F_S두구간범위] / s->cur[YL_F_S두구간최대]) * 100);
                 }
-            s->cur[YL_F_S합성가능5분] = yl_WSF_FXSyntheticLinesV1(s, b, 5);
-            s->cur[YL_F_S합성가능15분] = yl_WSF_FXSyntheticLinesV1(s, b, 15);
-            s->cur[YL_F_S합성가능30분] = yl_WSF_FXSyntheticLinesV1(s, b, 30);
+            s->cur[YL_F_S합성가능5분] = yl_WSF_FXSyntheticLinesV1(s, b, (int)(5));
+            s->cur[YL_F_S합성가능15분] = yl_WSF_FXSyntheticLinesV1(s, b, (int)(15));
+            s->cur[YL_F_S합성가능30분] = yl_WSF_FXSyntheticLinesV1(s, b, (int)(30));
             if ((s->cur[YL_F_FX초기화] == 1)) 
                 s->cur[YL_F_S평탄회귀차최고] = 0;
             else 
@@ -701,9 +778,9 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
             s->cur[YL_F_압축위치구분] = 0;
             if (((s->cur[YL_F_P2유효] == 1) && (s->cur[YL_F_P2상단1] > s->cur[YL_F_P2하단1])))                 {
                     s->cur[YL_F_압축박스위치] = (((b->close - s->cur[YL_F_P2하단1])) / ((s->cur[YL_F_P2상단1] - s->cur[YL_F_P2하단1])));
-                    if ((s->cur[YL_F_압축박스위치] >= (2.0 / 3.0))) 
+                    if ((s->cur[YL_F_압축박스위치] >= (2 / 3))) 
                         s->cur[YL_F_압축위치구분] = 1;
-                    else if ((s->cur[YL_F_압축박스위치] <= (1.0 / 3.0))) 
+                    else if ((s->cur[YL_F_압축박스위치] <= (1 / 3))) 
                         s->cur[YL_F_압축위치구분] = (-1);
                 }
             s->cur[YL_F_전환압축빨강수] = 0;
@@ -845,10 +922,15 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                             s->cur[YL_F_장상태최저가] = yl_min(s->cur[YL_F_장상태최저가], b->low);
                         }
                 }
-            if ((((b->market == 1) && (s->cur[YL_F_색방향] == (-1))) && (yl_lag(s, YL_F_색방향, 1) != (-1)))) 
+            s->cur[YL_F_거래부족] = ((((s->cur[YL_F_본장중] == 1) && (s->cur[YL_F_본장거래량율] > 0)) && (s->cur[YL_F_본장거래량율] < 90)) ? 1 : 0);
+            if (((((b->market == 1) && (s->cur[YL_F_색방향] == (-1))) && (yl_lag(s, YL_F_색방향, 1) != (-1))) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "색청산매수");
-            if ((((b->market == (-1)) && (s->cur[YL_F_색방향] == 1)) && (yl_lag(s, YL_F_색방향, 1) != 1))) 
+            if (((((b->market == 1) && (s->cur[YL_F_색방향] == (-1))) && (yl_lag(s, YL_F_색방향, 1) != (-1))) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "색청산매수_거래부족");
+            if (((((b->market == (-1)) && (s->cur[YL_F_색방향] == 1)) && (yl_lag(s, YL_F_색방향, 1) != 1)) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "색청산매도");
+            if (((((b->market == (-1)) && (s->cur[YL_F_색방향] == 1)) && (yl_lag(s, YL_F_색방향, 1) != 1)) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "색청산매도_거래부족");
             s->cur[YL_F_시간청산조건] = 0;
             if (((s->cur[YL_F_매매종료시간청산] == 1) && (s->cur[YL_F_매매시간] == 0))) 
                 s->cur[YL_F_시간청산조건] = 1;
@@ -878,10 +960,14 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                 s->cur[YL_F_압축재개청산] = 1;
             if (((((((((((s->cur[YL_F_압축재개청산전환수] > 0) && (s->cur[YL_F_압축재개매도사용] == 1)) && (s->cur[YL_F_가상시작] == (-1))) && (s->cur[YL_F_가상진입번호] >= 10)) && (s->cur[YL_F_가상진입번호] <= 12)) && ((s->cur[YL_F_최종청산손익_매수] + s->cur[YL_F_최종청산손익_매도]) > 0)) && (s->cur[YL_F_보유중압축해제] == 1)) && (s->cur[YL_F_압축지속봉수] > 0)) && (s->cur[YL_F_현재전환수] >= s->cur[YL_F_압축재개청산전환수])) && (b->close < s->cur[YL_F_가상진입가]))) 
                 s->cur[YL_F_압축재개청산] = (-1);
-            if (((s->cur[YL_F_시간청산조건] == 1) && (b->market == 1))) 
+            if ((((s->cur[YL_F_시간청산조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "시간청산매수");
-            if (((s->cur[YL_F_시간청산조건] == 1) && (b->market == (-1)))) 
+            if ((((s->cur[YL_F_시간청산조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "시간청산매수_거래부족");
+            if ((((s->cur[YL_F_시간청산조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "시간청산매도");
+            if ((((s->cur[YL_F_시간청산조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "시간청산매도_거래부족");
             s->cur[YL_F_수익보호조건] = 0;
             if (((((((s->cur[YL_F_수익보호기준틱] > 0) && (s->cur[YL_F_수익보호선틱] > 0)) && (s->cur[YL_F_가상시작] == 1)) && (b->market == 1)) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_수익보호기준틱] * b->price_scale)))) && (b->close <= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_수익보호선틱] * b->price_scale))))) 
                 s->cur[YL_F_수익보호조건] = 1;
@@ -903,23 +989,31 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                     s->cur[YL_F_일차도달] = 1;
                     s->cur[YL_F_일차도달틱] = yl_lag(s, YL_F_현재1차틱, 1);
                 }
-            if ((((((((s->cur[YL_F_일차후본전보장] == 1) && (yl_lag(s, YL_F_일차도달, 1) == 1)) && (yl_lag(s, YL_F_일차도달틱, 1) > 0)) && (s->cur[YL_F_가상시작] == 1)) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (((b->market == 1) || (yl_lag(s, YL_F_MarketPosition, 1) == 1)))) && (b->low <= (s->cur[YL_F_가상진입가] - (((yl_lag(s, YL_F_일차도달틱, 1) * b->price_scale) - s->cur[YL_F_일차후본전여유pt])))))) 
+            if (((((((((s->cur[YL_F_일차후본전보장] == 1) && (s->cur[YL_F_가상그림자] != 3)) && (yl_lag(s, YL_F_일차도달, 1) == 1)) && (yl_lag(s, YL_F_일차도달틱, 1) > 0)) && (s->cur[YL_F_가상시작] == 1)) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (((b->market == 1) || (yl_lag(s, YL_F_MarketPosition, 1) == 1)))) && (b->low <= (s->cur[YL_F_가상진입가] - (((yl_lag(s, YL_F_일차도달틱, 1) * b->price_scale) - s->cur[YL_F_일차후본전여유pt])))))) 
                 s->cur[YL_F_수익보호조건] = 1;
-            if ((((((((s->cur[YL_F_일차후본전보장] == 1) && (yl_lag(s, YL_F_일차도달, 1) == 1)) && (yl_lag(s, YL_F_일차도달틱, 1) > 0)) && (s->cur[YL_F_가상시작] == (-1))) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (((b->market == (-1)) || (yl_lag(s, YL_F_MarketPosition, 1) == (-1))))) && (b->high >= (s->cur[YL_F_가상진입가] + (((yl_lag(s, YL_F_일차도달틱, 1) * b->price_scale) - s->cur[YL_F_일차후본전여유pt])))))) 
+            if (((((((((s->cur[YL_F_일차후본전보장] == 1) && (s->cur[YL_F_가상그림자] != 3)) && (yl_lag(s, YL_F_일차도달, 1) == 1)) && (yl_lag(s, YL_F_일차도달틱, 1) > 0)) && (s->cur[YL_F_가상시작] == (-1))) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (((b->market == (-1)) || (yl_lag(s, YL_F_MarketPosition, 1) == (-1))))) && (b->high >= (s->cur[YL_F_가상진입가] + (((yl_lag(s, YL_F_일차도달틱, 1) * b->price_scale) - s->cur[YL_F_일차후본전여유pt])))))) 
                 s->cur[YL_F_수익보호조건] = 1;
-            if (((s->cur[YL_F_수익보호조건] == 1) && (b->market == 1))) 
+            if ((((s->cur[YL_F_수익보호조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "수익보호청산매수");
-            if (((s->cur[YL_F_수익보호조건] == 1) && (b->market == (-1)))) 
+            if ((((s->cur[YL_F_수익보호조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "수익보호청산매수_거래부족");
+            if ((((s->cur[YL_F_수익보호조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "수익보호청산매도");
+            if ((((s->cur[YL_F_수익보호조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "수익보호청산매도_거래부족");
             s->cur[YL_F_재진입청산조건] = 0;
             if ((((((((s->cur[YL_F_재진입표시] == 1) && (s->cur[YL_F_가상시작] == (-1))) && (b->market == (-1))) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (s->cur[YL_F_가상최저가] <= (s->cur[YL_F_가상진입가] - (4 * b->price_scale)))) && (s->cur[YL_F_DI방향] > 0)) && (b->close > s->cur[YL_F_가상진입가]))) 
                 s->cur[YL_F_재진입청산조건] = 1;
             if ((((((((s->cur[YL_F_재진입표시] == 1) && (s->cur[YL_F_가상시작] == 1)) && (b->market == 1)) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (4 * b->price_scale)))) && (s->cur[YL_F_DI방향] < 0)) && (b->close < s->cur[YL_F_가상진입가]))) 
                 s->cur[YL_F_재진입청산조건] = 1;
-            if (((s->cur[YL_F_재진입청산조건] == 1) && (b->market == 1))) 
+            if ((((s->cur[YL_F_재진입청산조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "재진입청산매수");
-            if (((s->cur[YL_F_재진입청산조건] == 1) && (b->market == (-1)))) 
+            if ((((s->cur[YL_F_재진입청산조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "재진입청산매수_거래부족");
+            if ((((s->cur[YL_F_재진입청산조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "재진입청산매도");
+            if ((((s->cur[YL_F_재진입청산조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "재진입청산매도_거래부족");
             s->cur[YL_F_이차보존조건] = 0;
             if ((((((((s->cur[YL_F_이차보존시작pt] > 0) && (s->cur[YL_F_가상진입번호] == 43)) && (s->cur[YL_F_가상시작] == 1)) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (((b->market == 1) || (yl_lag(s, YL_F_MarketPosition, 1) == 1)))) && ((yl_lag(s, YL_F_가상최고가, 1) - s->cur[YL_F_가상진입가]) >= s->cur[YL_F_이차보존시작pt])) && (b->low <= (yl_lag(s, YL_F_가상최고가, 1) - s->cur[YL_F_이차추적pt])))) 
                 s->cur[YL_F_이차보존조건] = 1;
@@ -933,25 +1027,89 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                     if (((s->cur[YL_F_장대연속발생] == 1) && ((((b->close - s->cur[YL_F_가상진입가])) * s->cur[YL_F_가상시작]) >= (s->cur[YL_F_장대연속청산틱] * b->price_scale)))) 
                         s->cur[YL_F_장대연속청산조건] = 1;
                 }
-            if (((s->cur[YL_F_장대연속청산조건] == 1) && (b->market == 1))) 
+            if ((((s->cur[YL_F_장대연속청산조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "장대연속청산매수");
-            if (((s->cur[YL_F_장대연속청산조건] == 1) && (b->market == (-1)))) 
+            if ((((s->cur[YL_F_장대연속청산조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "장대연속청산매수_거래부족");
+            if ((((s->cur[YL_F_장대연속청산조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "장대연속청산매도");
+            if ((((s->cur[YL_F_장대연속청산조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "장대연속청산매도_거래부족");
             s->cur[YL_F_본장시가아래손절조건] = 0;
             if (((((((((((((s->cur[YL_F_본장시가아래손절] == 1) && (s->cur[YL_F_가상시작] == 1)) && (b->market == 1)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_본장시가] > 0)) && (b->high < s->cur[YL_F_본장시가])) && (s->cur[YL_F_가상진입번호] != 67)) && (((s->cur[YL_F_가상진입번호] != 94) || (s->cur[YL_F_가상진입종류30] != 2)))) && (s->cur[YL_F_선행유효] == 1)) && (s->cur[YL_F_선행위치Cnt] < 0)) && (s->cur[YL_F_DI방향] < 0)) && (b->close < s->cur[YL_F_가상진입가]))) 
                 s->cur[YL_F_본장시가아래손절조건] = 1;
-            if ((s->cur[YL_F_본장시가아래손절조건] == 1)) 
+            if (((s->cur[YL_F_본장시가아래손절조건] == 1) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "본장시가아래손절매수");
+            if (((s->cur[YL_F_본장시가아래손절조건] == 1) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "본장시가아래손절매수_거래부족");
             s->cur[YL_F_진폭역행청산조건] = 0;
             if (((((((((s->cur[YL_F_가상시작] == 1) && (b->market == 1)) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 30)) && (s->cur[YL_F_본장진폭율] >= 150)) && ((s->cur[YL_F_가상최고가] - s->cur[YL_F_가상진입가]) >= (40 * b->price_scale))) && (s->cur[YL_F_선행위치Cnt] < 0)) && (b->close < s->cur[YL_F_가상진입가]))) 
                 s->cur[YL_F_진폭역행청산조건] = 1;
-            if ((s->cur[YL_F_진폭역행청산조건] == 1)) 
+            if (((s->cur[YL_F_진폭역행청산조건] == 1) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "진폭역행청산매수");
+            if (((s->cur[YL_F_진폭역행청산조건] == 1) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "진폭역행청산매수_거래부족");
+            s->cur[YL_F_거래부족익절조건] = 0;
+            if ((((((((s->cur[YL_F_본장중] == 1) && (s->cur[YL_F_본장거래량율] > 0)) && (s->cur[YL_F_본장거래량율] < 95)) && (s->cur[YL_F_실청산봉B] > 0)) && (s->cur[YL_F_실청산봉B] <= s->cur[YL_F_실진입봉0])) && ((s->cur[YL_F_실진입봉0] - s->cur[YL_F_실청산봉B]) <= 60)) && ((s->bar_n - s->cur[YL_F_가상진입봉]) >= 5)))                 {
+                    if (((s->cur[YL_F_가상시작] == 1) && (b->market == 1)))                         {
+                            s->cur[YL_F_거래부족최고틱] = (((s->cur[YL_F_가상최고가] - s->cur[YL_F_가상진입가])) / b->price_scale);
+                            if (((((s->cur[YL_F_거래부족최고틱] >= 5) && (s->cur[YL_F_거래부족최고틱] < 15)) && (b->close >= s->cur[YL_F_가상진입가])) && (b->close <= (s->cur[YL_F_가상진입가] + (((s->cur[YL_F_가상최고가] - s->cur[YL_F_가상진입가])) * 0.5))))) 
+                                s->cur[YL_F_거래부족익절조건] = 1;
+                        }
+                    if (((s->cur[YL_F_가상시작] == (-1)) && (b->market == (-1))))                         {
+                            s->cur[YL_F_거래부족최고틱] = (((s->cur[YL_F_가상진입가] - s->cur[YL_F_가상최저가])) / b->price_scale);
+                            if (((((s->cur[YL_F_거래부족최고틱] >= 5) && (s->cur[YL_F_거래부족최고틱] < 15)) && (b->close <= s->cur[YL_F_가상진입가])) && (b->close >= (s->cur[YL_F_가상진입가] - (((s->cur[YL_F_가상진입가] - s->cur[YL_F_가상최저가])) * 0.5))))) 
+                                s->cur[YL_F_거래부족익절조건] = 1;
+                        }
+                }
+            if (((((b->market != 1) || (s->cur[YL_F_가상진입번호] != 94)) || (s->cur[YL_F_가상진입종류30] != 2)) || (s->bar_n == s->cur[YL_F_가상진입봉]))) 
+                s->cur[YL_F_확장아래1차후손실] = 0;
+            if ((((((((b->market == 1) && (s->cur[YL_F_가상시작] == 1)) && (s->cur[YL_F_가상진입번호] == 94)) && (s->cur[YL_F_가상진입종류30] == 2)) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale)))) && (b->close < s->cur[YL_F_가상진입가]))) 
+                s->cur[YL_F_확장아래1차후손실] = 1;
+            s->cur[YL_F_확장아래회복청산조건] = 0;
+            if (((((s->cur[YL_F_확장아래1차후손실] == 1) && (b->market == 1)) && ((s->bar_n - s->cur[YL_F_가상진입봉]) >= 6)) && (b->close >= (s->cur[YL_F_가상진입가] + (5 * b->price_scale))))) 
+                s->cur[YL_F_확장아래회복청산조건] = 1;
+            if ((s->cur[YL_F_확장아래회복청산조건] == 1)) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "확장아래회복청산매수");
+            if ((((b->market != 1) || (s->cur[YL_F_가상진입번호] != 61)) || (s->bar_n == s->cur[YL_F_가상진입봉]))) 
+                s->cur[YL_F_흡수1차봉] = 0;
+            if (((((((s->cur[YL_F_흡수1차봉] == 0) && (b->market == 1)) && (s->cur[YL_F_가상시작] == 1)) && (s->cur[YL_F_가상진입번호] == 61)) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale))))) 
+                s->cur[YL_F_흡수1차봉] = s->bar_n;
+            s->cur[YL_F_흡수돌파익절조건] = 0;
+            if ((((((s->cur[YL_F_흡수1차봉] > 0) && (b->market == 1)) && ((s->bar_n - s->cur[YL_F_흡수1차봉]) >= 15)) && ((s->cur[YL_F_가상최고가] - s->cur[YL_F_가상진입가]) < (40 * b->price_scale))) && (b->close >= (s->cur[YL_F_가상진입가] + (10 * b->price_scale))))) 
+                s->cur[YL_F_흡수돌파익절조건] = 1;
+            if ((s->cur[YL_F_흡수돌파익절조건] == 1)) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "흡수돌파익절매수");
+            if (((((((b->market == 1) && (s->cur[YL_F_가상포지션] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) == (-60))) && (s->cur[YL_F_진입본장경과] < (-60))) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (b->close < s->cur[YL_F_가상진입가]))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(1), "이벤트전손실청산매수");
+            if (((((((b->market == (-1)) && (s->cur[YL_F_가상포지션] == (-1))) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) == (-60))) && (s->cur[YL_F_진입본장경과] < (-60))) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (b->close > s->cur[YL_F_가상진입가]))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(1), "이벤트전손실청산매도");
+            if (((b->market != 1) || (s->bar_n == s->cur[YL_F_가상진입봉]))) 
+                s->cur[YL_F_매수1차후손실] = 0;
+            if (((b->market != yl_lag(s, YL_F_MarketPosition, 1)) && (b->market != 0))) 
+                s->cur[YL_F_실직전수익진입시] = (((s->cur[YL_F_실세션진입수] > 0) && (s->cur[YL_F_실직전수익] == 0)) ? 0 : 1);
+            if ((((((b->market == 1) && (s->cur[YL_F_가상시작] == 1)) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale)))) && (b->close < s->cur[YL_F_가상진입가]))) 
+                s->cur[YL_F_매수1차후손실] = 1;
+            s->cur[YL_F_매수회복청산조건] = 0;
+            if (((((((((s->cur[YL_F_매수1차후손실] == 1) && (b->market == 1)) && (s->cur[YL_F_가상시작] == 1)) && (b->close >= (s->cur[YL_F_가상진입가] + (5 * b->price_scale)))) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_본장거래량율] > 0)) && (s->cur[YL_F_본장거래량율] <= 100)) && (s->cur[YL_F_전일본장고가] > 0)))                 {
+                    if (((((b->low > s->cur[YL_F_전일본장고가]) && ((s->cur[YL_F_가상최고가] - s->cur[YL_F_가상진입가]) >= (40 * b->price_scale))) && (s->cur[YL_F_선행위치Cnt] < 0)) && (s->cur[YL_F_실직전수익진입시] == 0))) 
+                        s->cur[YL_F_매수회복청산조건] = 2;
+                }
+            if ((s->cur[YL_F_매수회복청산조건] == 1)) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "전고아래회복청산매수");
+            if ((s->cur[YL_F_매수회복청산조건] == 2)) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "전고위회복청산매수");
+            if (((s->cur[YL_F_거래부족익절조건] == 1) && (b->market == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "거래부족익절매수");
+            if (((s->cur[YL_F_거래부족익절조건] == 1) && (b->market == (-1)))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "거래부족익절매도");
             s->cur[YL_F_본장시가복귀청산조건] = 0;
             if ((((((((((s->cur[YL_F_본장시가복귀경과분] > 0) && (s->cur[YL_F_가상시작] == 1)) && (b->market == 1)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_본장시가] > 0)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= s->cur[YL_F_본장시가복귀경과분])) && (s->cur[YL_F_가상최고가] > s->cur[YL_F_본장시가])) && (b->close < s->cur[YL_F_본장시가])) && (b->close > s->cur[YL_F_가상진입가]))) 
                 s->cur[YL_F_본장시가복귀청산조건] = 1;
-            if ((s->cur[YL_F_본장시가복귀청산조건] == 1)) 
+            if (((s->cur[YL_F_본장시가복귀청산조건] == 1) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "본장시가복귀청산매수");
+            if (((s->cur[YL_F_본장시가복귀청산조건] == 1) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "본장시가복귀청산매수_거래부족");
             s->cur[YL_F_장대역행청산조건] = 0;
             if ((((((s->cur[YL_F_장대역행청산틱] > 0) && (s->cur[YL_F_가상시작] != 0)) && (b->market == s->cur[YL_F_가상시작])) && (s->bar_n > s->cur[YL_F_가상진입봉])) && ((b->high - b->low) >= (s->cur[YL_F_장대역행청산틱] * b->price_scale))))                 {
                     if (((((s->cur[YL_F_가상시작] == (-1)) && (b->close > b->open)) && (s->cur[YL_F_DI방향] > 0)) && (b->close < s->cur[YL_F_가상진입가]))) 
@@ -959,10 +1117,42 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                     if (((((s->cur[YL_F_가상시작] == 1) && (b->close < b->open)) && (s->cur[YL_F_DI방향] < 0)) && (b->close > s->cur[YL_F_가상진입가]))) 
                         s->cur[YL_F_장대역행청산조건] = 1;
                 }
-            if (((s->cur[YL_F_장대역행청산조건] == 1) && (b->market == 1))) 
+            if ((((s->cur[YL_F_장대역행청산조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "장대역행청산매수");
-            if (((s->cur[YL_F_장대역행청산조건] == 1) && (b->market == (-1)))) 
+            if ((((s->cur[YL_F_장대역행청산조건] == 1) && (b->market == 1)) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "장대역행청산매수_거래부족");
+            if ((((s->cur[YL_F_장대역행청산조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 0))) 
                 yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "장대역행청산매도");
+            if ((((s->cur[YL_F_장대역행청산조건] == 1) && (b->market == (-1))) && (s->cur[YL_F_거래부족] == 1))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "장대역행청산매도_거래부족");
+            if (((((((((b->market == (-1)) && (s->cur[YL_F_가상포지션] == (-1))) && (s->cur[YL_F_가상진입번호] == 58)) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최저가] <= (s->cur[YL_F_가상진입가] - (s->cur[YL_F_현재1차틱] * b->price_scale)))) && (s->cur[YL_F_본장시가] > 0)) && (b->high > s->cur[YL_F_본장시가])) && (s->cur[YL_F_선행위치Cnt] > 0))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "시가반락손절매도");
+            if (((b->market != (-1)) || (s->cur[YL_F_가상포지션] != (-1))))                 {
+                    s->cur[YL_F_압축2차손실봉] = 0;
+                    s->cur[YL_F_압축2차회복] = 0;
+                }
+            if (((((((b->market == (-1)) && (s->cur[YL_F_가상포지션] == (-1))) && (s->cur[YL_F_가상진입번호] >= 10)) && (s->cur[YL_F_가상진입번호] <= 12)) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최저가] <= (s->cur[YL_F_가상진입가] - (s->cur[YL_F_현재1차틱] * b->price_scale)))))                 {
+                    if (((s->cur[YL_F_압축2차손실봉] >= 6) && (b->low <= (s->cur[YL_F_가상진입가] - (10 * b->price_scale))))) 
+                        s->cur[YL_F_압축2차회복] = 1;
+                    if ((b->close > s->cur[YL_F_가상진입가])) 
+                        s->cur[YL_F_압축2차손실봉] = (s->cur[YL_F_압축2차손실봉] + 1);
+                }
+            if ((((((b->market == (-1)) && (s->cur[YL_F_가상포지션] == (-1))) && (s->cur[YL_F_압축2차회복] == 1)) && (s->cur[YL_F_선행위치Cnt] > 0)) && (b->close > s->cur[YL_F_가상진입가]))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "압축2차손절매도");
+            if (((b->market != (-1)) || (s->cur[YL_F_가상포지션] != (-1)))) 
+                s->cur[YL_F_압축조기청산] = 0;
+            if (((s->cur[YL_F_압축조기청산] == 1) && (b->low <= (s->cur[YL_F_가상진입가] - b->price_scale)))) 
+                s->cur[YL_F_압축조기청산] = 2;
+            if (((((((((((((s->cur[YL_F_압축조기청산] == 0) && (b->market == (-1))) && (s->cur[YL_F_가상포지션] == (-1))) && (s->cur[YL_F_가상진입번호] >= 10)) && (s->cur[YL_F_가상진입번호] <= 12)) && (s->cur[YL_F_가상진입수량] >= 2)) && ((s->bar_n - s->cur[YL_F_가상진입봉]) >= 10)) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최저가] > (s->cur[YL_F_가상진입가] - (s->cur[YL_F_현재1차틱] * b->price_scale)))) && (s->cur[YL_F_압축지속봉수] > 0)) && (yl_lag(s, YL_F_압축지속봉수, 1) == 0)) && (s->cur[YL_F_선행위치Cnt] > 0))) 
+                s->cur[YL_F_압축조기청산] = 1;
+            if (((s->cur[YL_F_압축조기청산] == 1) && (b->market == (-1)))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_LIMIT, (s->cur[YL_F_가상진입가] - b->price_scale), (int)(1), "압축조기청산매도");
+            if ((((((((((b->market == (-1)) && (s->cur[YL_F_가상포지션] == (-1))) && (s->cur[YL_F_가상진입번호] >= 10)) && (s->cur[YL_F_가상진입번호] <= 12)) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (s->cur[YL_F_압축지속봉수] > 0)) && (yl_lag(s, YL_F_압축지속봉수, 1) == 0)) && (s->cur[YL_F_선행위치Cnt] > 0)) && (b->close > (s->cur[YL_F_가상진입가] - (4 * b->price_scale))))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_ONCLOSE, 0, (int)(0), "압축신규청산매도");
+            if (((((((b->market == 1) && (s->cur[YL_F_가상포지션] == 1)) && (s->cur[YL_F_압축전저진입] == 1)) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale)))) && (b->close > s->cur[YL_F_가상진입가]))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "압축전저수익청산매수");
+            if (((((((b->market == 1) && (s->cur[YL_F_가상포지션] == 1)) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= (s->cur[YL_F_매매종료본장후분] - 30))) && (b->close >= (s->cur[YL_F_가상진입가] + (40 * b->price_scale)))) && ((s->cur[YL_F_가상최고가] - s->cur[YL_F_가상진입가]) < 15))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_ONCLOSE, 0, (int)(0), "마감전수익청산매수");
             s->cur[YL_F_가상청산] = 0;
             if (((s->cur[YL_F_가상시작] == 1) && (((((s->cur[YL_F_색방향] == (-1)) && (yl_lag(s, YL_F_색방향, 1) != (-1)))) || (s->cur[YL_F_시간청산조건] == 1))))) 
                 s->cur[YL_F_가상청산] = 1;
@@ -981,6 +1171,28 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
             if ((s->cur[YL_F_본장시가아래손절조건] == 1)) 
                 s->cur[YL_F_가상청산] = 1;
             if ((s->cur[YL_F_진폭역행청산조건] == 1)) 
+                s->cur[YL_F_가상청산] = 1;
+            if ((s->cur[YL_F_거래부족익절조건] == 1)) 
+                s->cur[YL_F_가상청산] = 1;
+            if ((s->cur[YL_F_확장아래회복청산조건] == 1)) 
+                s->cur[YL_F_가상청산] = 1;
+            if ((s->cur[YL_F_흡수돌파익절조건] == 1)) 
+                s->cur[YL_F_가상청산] = 1;
+            if ((((((b->market == (-1)) && (s->cur[YL_F_가상포지션] == (-1))) && (s->cur[YL_F_압축2차회복] == 1)) && (s->cur[YL_F_선행위치Cnt] > 0)) && (b->close > s->cur[YL_F_가상진입가]))) 
+                s->cur[YL_F_가상청산] = 1;
+            if ((((((((((b->market == (-1)) && (s->cur[YL_F_가상포지션] == (-1))) && (s->cur[YL_F_가상진입번호] >= 10)) && (s->cur[YL_F_가상진입번호] <= 12)) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (s->cur[YL_F_압축지속봉수] > 0)) && (yl_lag(s, YL_F_압축지속봉수, 1) == 0)) && (s->cur[YL_F_선행위치Cnt] > 0)) && (b->close > (s->cur[YL_F_가상진입가] - (4 * b->price_scale))))) 
+                s->cur[YL_F_가상청산] = 1;
+            if (((((((b->market == 1) && (s->cur[YL_F_가상포지션] == 1)) && (s->cur[YL_F_압축전저진입] == 1)) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale)))) && (b->close > s->cur[YL_F_가상진입가]))) 
+                s->cur[YL_F_가상청산] = 1;
+            if (((((((b->market == 1) && (s->cur[YL_F_가상포지션] == 1)) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= (s->cur[YL_F_매매종료본장후분] - 30))) && (b->close >= (s->cur[YL_F_가상진입가] + (40 * b->price_scale)))) && ((s->cur[YL_F_가상최고가] - s->cur[YL_F_가상진입가]) < 15))) 
+                s->cur[YL_F_가상청산] = 1;
+            if (((((((((b->market == (-1)) && (s->cur[YL_F_가상포지션] == (-1))) && (s->cur[YL_F_가상진입번호] == 58)) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최저가] <= (s->cur[YL_F_가상진입가] - (s->cur[YL_F_현재1차틱] * b->price_scale)))) && (s->cur[YL_F_본장시가] > 0)) && (b->high > s->cur[YL_F_본장시가])) && (s->cur[YL_F_선행위치Cnt] > 0))) 
+                s->cur[YL_F_가상청산] = 1;
+            if (((((((((b->market == 1) && (s->cur[YL_F_가상포지션] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) == (-60))) && (s->cur[YL_F_진입본장경과] < (-60))) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (b->close < s->cur[YL_F_가상진입가])) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale))))) 
+                s->cur[YL_F_가상청산] = 1;
+            if (((((((((b->market == (-1)) && (s->cur[YL_F_가상포지션] == (-1))) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) == (-60))) && (s->cur[YL_F_진입본장경과] < (-60))) && (s->bar_n > s->cur[YL_F_가상진입봉])) && (b->close > s->cur[YL_F_가상진입가])) && (s->cur[YL_F_현재1차틱] > 0)) && (s->cur[YL_F_가상최저가] <= (s->cur[YL_F_가상진입가] - (s->cur[YL_F_현재1차틱] * b->price_scale))))) 
+                s->cur[YL_F_가상청산] = 1;
+            if ((s->cur[YL_F_매수회복청산조건] > 0)) 
                 s->cur[YL_F_가상청산] = 1;
             if ((s->cur[YL_F_본장시가복귀청산조건] == 1)) 
                 s->cur[YL_F_가상청산] = 1;
@@ -1035,18 +1247,23 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                             else 
                                 s->cur[YL_F_하락직전손실] = 0;
                         }
-                    if ((s->cur[YL_F_가상그림자] == 0)) 
+                    if ((s->cur[YL_F_가상그림자] != 1)) 
                         s->cur[YL_F_실직전손익] = s->cur[YL_F_기록손익];
-                    if ((s->cur[YL_F_가상그림자] == 0)) 
+                    if ((s->cur[YL_F_가상그림자] != 1)) 
                         s->cur[YL_F_실세션손익] = (s->cur[YL_F_실세션손익] + s->cur[YL_F_기록손익]);
-                    if ((s->cur[YL_F_가상그림자] == 0)) 
+                    if ((s->cur[YL_F_가상그림자] != 1)) 
                         s->cur[YL_F_실직전방향] = s->cur[YL_F_가상시작];
-                    if ((s->cur[YL_F_가상그림자] == 0)) 
+                    if ((s->cur[YL_F_가상그림자] != 1)) 
                         s->cur[YL_F_실직전최대틱] = (((s->cur[YL_F_가상시작] == 1) ? (s->cur[YL_F_가상최고가] - s->cur[YL_F_가상진입가]) : (s->cur[YL_F_가상진입가] - s->cur[YL_F_가상최저가])) / b->price_scale);
-                    if ((s->cur[YL_F_가상그림자] == 0)) 
+                    if ((s->cur[YL_F_가상그림자] != 1)) 
                         s->cur[YL_F_실직전수익] = (((s->cur[YL_F_가상거래손익] > 0) || (s->cur[YL_F_수익보호조건] == 1)) ? 1 : 0);
+                    if ((s->cur[YL_F_가상그림자] == 2))                         {
+                            s->cur[YL_F_실청산봉] = s->bar_n;
+                            s->cur[YL_F_실청산봉B] = s->cur[YL_F_실청산봉A];
+                            s->cur[YL_F_실청산봉A] = s->bar_n;
+                        }
                     s->cur[YL_F_기록제외거래] = 0;
-                    if (((s->cur[YL_F_본장압축해제기록분리] == 1) && (((((((((((((((((((s->cur[YL_F_가상진입번호] == 31) || (s->cur[YL_F_가상진입번호] == 34)) || (s->cur[YL_F_가상진입번호] == 37)) || (s->cur[YL_F_가상진입번호] == 40)) || (s->cur[YL_F_가상진입번호] == 43)) || (s->cur[YL_F_가상진입번호] == 46)) || (s->cur[YL_F_가상진입번호] == 49)) || (s->cur[YL_F_가상진입번호] == 52)) || (s->cur[YL_F_가상진입번호] == 55)) || (s->cur[YL_F_가상진입번호] == 58)) || (s->cur[YL_F_가상진입번호] == 61)) || (s->cur[YL_F_가상진입번호] == 64)) || (s->cur[YL_F_가상진입번호] == 67)) || (s->cur[YL_F_가상진입번호] == 79)) || (s->cur[YL_F_가상진입번호] == 82)) || (s->cur[YL_F_가상진입번호] == 85)) || (s->cur[YL_F_가상진입번호] == 88)) || (s->cur[YL_F_가상진입번호] == 94))))) 
+                    if (((s->cur[YL_F_본장압축해제기록분리] == 1) && ((((((((((((((((((((((s->cur[YL_F_가상진입번호] == 31) || (s->cur[YL_F_가상진입번호] == 34)) || (s->cur[YL_F_가상진입번호] == 37)) || (s->cur[YL_F_가상진입번호] == 40)) || (s->cur[YL_F_가상진입번호] == 43)) || (s->cur[YL_F_가상진입번호] == 46)) || (s->cur[YL_F_가상진입번호] == 49)) || (s->cur[YL_F_가상진입번호] == 52)) || (s->cur[YL_F_가상진입번호] == 55)) || (s->cur[YL_F_가상진입번호] == 58)) || (s->cur[YL_F_가상진입번호] == 61)) || (s->cur[YL_F_가상진입번호] == 64)) || (s->cur[YL_F_가상진입번호] == 67)) || (s->cur[YL_F_가상진입번호] == 79)) || (s->cur[YL_F_가상진입번호] == 82)) || (s->cur[YL_F_가상진입번호] == 85)) || (s->cur[YL_F_가상진입번호] == 88)) || (s->cur[YL_F_가상진입번호] == 94)) || (s->cur[YL_F_가상진입번호] == 97)) || (s->cur[YL_F_가상진입번호] == 98)) || (s->cur[YL_F_가상진입번호] == 99))))) 
                         s->cur[YL_F_기록제외거래] = 1;
                     if ((s->cur[YL_F_기록제외거래] == 0))                         {
                             if ((s->cur[YL_F_가상시작] == 1)) 
@@ -1869,6 +2086,15 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                 s->cur[YL_F_실청산봉] = s->bar_n;
             if (((b->market != 0) && (b->market != yl_lag(s, YL_F_MarketPosition, 1)))) 
                 s->cur[YL_F_실세션진입수] = (s->cur[YL_F_실세션진입수] + 1);
+            if (((yl_lag(s, YL_F_MarketPosition, 1) != 0) && (b->market != yl_lag(s, YL_F_MarketPosition, 1))))                 {
+                    s->cur[YL_F_실청산봉B] = s->cur[YL_F_실청산봉A];
+                    s->cur[YL_F_실청산봉A] = s->bar_n;
+                }
+            if (((b->market != 0) && (b->market != yl_lag(s, YL_F_MarketPosition, 1))))                 {
+                    s->cur[YL_F_실진입봉2] = s->cur[YL_F_실진입봉1];
+                    s->cur[YL_F_실진입봉1] = s->cur[YL_F_실진입봉0];
+                    s->cur[YL_F_실진입봉0] = s->bar_n;
+                }
             if (((((((s->cur[YL_F_이차상승신호] == 1) && (s->cur[YL_F_이차A] < 30)) && ((s->cur[YL_F_이차B] * 100) >= (s->cur[YL_F_이차A] * 75))) && (s->cur[YL_F_이차B] < s->cur[YL_F_이차A])) && (s->cur[YL_F_실청산봉] > 0)) && ((s->bar_n - s->cur[YL_F_실청산봉]) < 15)))                 {
                     s->cur[YL_F_이차상승신호] = 0;
                     s->cur[YL_F_이차대기] = 0;
@@ -2088,7 +2314,7 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                                 s->cur[YL_F_시가아래봉수] = (s->cur[YL_F_시가아래봉수] + 1);
                         }
                 }
-            if (((((((((((((((((((((((((((s->cur[YL_F_시가회복매수진입] == 1) && (s->cur[YL_F_주문코드] == 0)) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != 1)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_본장시가] > 0)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 60)) && (s->cur[YL_F_시가회복매수횟수] == 0)) && (b->close > s->cur[YL_F_본장시가])) && (yl_at(yl_lo(s, "C", 5), 1) <= s->cur[YL_F_본장시가])) && (s->cur[YL_F_선행위치Cnt] >= 1)) && (s->cur[YL_F_선행위치Cnt] < 12)) && (s->cur[YL_F_선행기울기Cnt] >= 1)) && (s->cur[YL_F_선행기울기Cnt] < 12)) && (s->cur[YL_F_통합카운트] >= 1)) && (s->cur[YL_F_통합카운트] <= 9)) && (s->cur[YL_F_통합상태] > 0)) && (s->cur[YL_F_통합색상] != yl_rgb(210, 210, 210))) && (s->cur[YL_F_스윙전체폭비] < 100)) && (s->cur[YL_F_본장진폭율] > 0)) && (s->cur[YL_F_본장진폭율] < 80)) && (s->cur[YL_F_본장거래량율] > 100)) && (s->cur[YL_F_직전통합카운트값] <= (-5))) && (((s->cur[YL_F_지속저장목표5] <= 0) || (b->close >= s->cur[YL_F_지속저장목표5])))) && (s->cur[YL_F_시가아래봉수] >= 3)) && (((s->cur[YL_F_수익비늦은매수제외분] <= 0) || (s->cur[YL_F_본장기준봉분] < (s->cur[YL_F_본장시작분] + s->cur[YL_F_수익비늦은매수제외분]))))))                 {
+            if ((((((((((((((((((((((((((((s->cur[YL_F_시가회복매수진입] == 1) && (s->cur[YL_F_주문코드] == 0)) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != 1)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_본장시가] > 0)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 60)) && (s->cur[YL_F_시가회복매수횟수] == 0)) && (b->close > s->cur[YL_F_본장시가])) && (yl_at(yl_lo(s, "C", 5), 1) <= s->cur[YL_F_본장시가])) && (s->cur[YL_F_선행위치Cnt] >= 1)) && (s->cur[YL_F_선행위치Cnt] < 12)) && (s->cur[YL_F_선행기울기Cnt] >= 1)) && (s->cur[YL_F_선행기울기Cnt] < 12)) && (s->cur[YL_F_통합카운트] >= 1)) && (s->cur[YL_F_통합카운트] <= 9)) && (s->cur[YL_F_통합상태] > 0)) && (s->cur[YL_F_통합색상] != yl_rgb(210, 210, 210))) && (s->cur[YL_F_스윙전체폭비] < 100)) && (s->cur[YL_F_본장진폭율] > 0)) && (s->cur[YL_F_본장진폭율] < 80)) && (s->cur[YL_F_본장거래량율] > 100)) && (s->cur[YL_F_직전통합카운트값] <= (-5))) && (((s->cur[YL_F_지속저장목표5] <= 0) || (b->close >= s->cur[YL_F_지속저장목표5])))) && (s->cur[YL_F_추세매도지속봉] < 60)) && (s->cur[YL_F_시가아래봉수] >= 3)) && (((s->cur[YL_F_수익비늦은매수제외분] <= 0) || (s->cur[YL_F_본장기준봉분] < (s->cur[YL_F_본장시작분] + s->cur[YL_F_수익비늦은매수제외분]))))))                 {
                     s->cur[YL_F_주문코드] = ((55 * 10) + s->cur[YL_F_진입계약수]);
                     s->cur[YL_F_가상매수진입] = 1;
                     s->cur[YL_F_가상매도진입] = 0;
@@ -2149,7 +2375,7 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                 }
             if ((s->cur[YL_F_FX초기화] == 1)) 
                 s->cur[YL_F_초기하락매도횟수] = 0;
-            if ((((((((((((((((((((((((s->cur[YL_F_초기하락매도진입] == 1) && (s->cur[YL_F_주문코드] == 0)) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != (-1))) && (s->cur[YL_F_초기하락매도횟수] == 0)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_선행위치Cnt] < 0)) && (s->cur[YL_F_선행위치Cnt] > (-6))) && (s->cur[YL_F_선행기울기Cnt] < 0)) && (s->cur[YL_F_선행기울기Cnt] > (-6))) && (s->cur[YL_F_통합상태] < 0)) && (s->cur[YL_F_통합색상] != yl_rgb(210, 210, 210))) && (s->cur[YL_F_본장진폭율] > 0)) && (s->cur[YL_F_본장진폭율] < 90)) && (s->cur[YL_F_본장시가] > 0)) && (b->close < s->cur[YL_F_본장시가])) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 30)) && ((((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 90) || ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 120)))) && ((((s->cur[YL_F_실세션진입수] == 0) || (s->cur[YL_F_실직전방향] != 1)) || (s->cur[YL_F_실직전수익] == 1)))) && (((((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 60) || ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 90)) || (s->cur[YL_F_실세션진입수] == 0)))) && (s->cur[YL_F_스윙전체폭비] < 70)) && (((s->cur[YL_F_이차대기] == 0) || (s->cur[YL_F_이차A] <= 0)))) && ((-s->cur[YL_F_통합카운트]) < 10)))                 {
+            if (((((((((((((((((((((((((s->cur[YL_F_초기하락매도진입] == 1) && (s->cur[YL_F_주문코드] == 0)) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != (-1))) && (s->cur[YL_F_초기하락매도횟수] == 0)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_선행위치Cnt] < 0)) && (s->cur[YL_F_선행위치Cnt] > (-6))) && (s->cur[YL_F_선행기울기Cnt] < 0)) && (s->cur[YL_F_선행기울기Cnt] > (-6))) && (s->cur[YL_F_통합상태] < 0)) && (s->cur[YL_F_통합색상] != yl_rgb(210, 210, 210))) && (s->cur[YL_F_본장진폭율] > 0)) && (s->cur[YL_F_본장진폭율] < 90)) && (s->cur[YL_F_본장시가] > 0)) && (b->close < s->cur[YL_F_본장시가])) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 30)) && ((((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 90) || ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 120)))) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 180)) && ((((s->cur[YL_F_실세션진입수] == 0) || (s->cur[YL_F_실직전방향] != 1)) || (s->cur[YL_F_실직전수익] == 1)))) && (((((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 60) || ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 90)) || (s->cur[YL_F_실세션진입수] == 0)))) && (s->cur[YL_F_스윙전체폭비] < 70)) && (((s->cur[YL_F_이차대기] == 0) || (s->cur[YL_F_이차A] <= 0)))) && ((-s->cur[YL_F_통합카운트]) < 10)))                 {
                     s->cur[YL_F_초기하락금지] = 0;
                     if (((s->cur[YL_F_S두구간비율] > 90) && (s->cur[YL_F_S신호합계] <= 0))) 
                         s->cur[YL_F_초기하락금지] = 1;
@@ -2173,7 +2399,7 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                 }
             if ((s->cur[YL_F_FX초기화] == 1)) 
                 s->cur[YL_F_초기상승매수횟수] = 0;
-            if (((((((((((((((((((((((((s->cur[YL_F_초기상승매수진입] == 1) && (s->cur[YL_F_주문코드] == 0)) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != 1)) && (s->cur[YL_F_초기상승매수횟수] == 0)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_선행위치Cnt] > 0)) && (s->cur[YL_F_선행위치Cnt] < 6)) && (s->cur[YL_F_선행기울기Cnt] > 0)) && (s->cur[YL_F_선행기울기Cnt] < 6)) && (s->cur[YL_F_통합상태] > 0)) && (s->cur[YL_F_통합색상] != yl_rgb(210, 210, 210))) && (s->cur[YL_F_본장진폭율] > 0)) && (s->cur[YL_F_본장진폭율] < 90)) && (s->cur[YL_F_본장시가] > 0)) && (b->close > s->cur[YL_F_본장시가])) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 30)) && ((((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 90) || ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 120)))) && ((((s->cur[YL_F_실세션진입수] == 0) || (s->cur[YL_F_실직전방향] != (-1))) || (s->cur[YL_F_실직전수익] == 1)))) && (((((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 60) || ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 90)) || (s->cur[YL_F_실세션진입수] == 0)))) && (s->cur[YL_F_스윙전체폭비] < 70)) && (((s->cur[YL_F_실청산봉] <= 0) || ((s->bar_n - s->cur[YL_F_실청산봉]) >= 30)))) && (((s->cur[YL_F_하락대기] == 0) || (s->cur[YL_F_하락A] <= 0)))) && (s->cur[YL_F_통합카운트] < 10)))                 {
+            if ((((((((((((((((((((((((((s->cur[YL_F_초기상승매수진입] == 1) && (s->cur[YL_F_주문코드] == 0)) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != 1)) && (s->cur[YL_F_초기상승매수횟수] == 0)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_선행위치Cnt] > 0)) && (s->cur[YL_F_선행위치Cnt] < 6)) && (s->cur[YL_F_선행기울기Cnt] > 0)) && (s->cur[YL_F_선행기울기Cnt] < 6)) && (s->cur[YL_F_통합상태] > 0)) && (s->cur[YL_F_통합색상] != yl_rgb(210, 210, 210))) && (s->cur[YL_F_본장진폭율] > 0)) && (s->cur[YL_F_본장진폭율] < 90)) && (s->cur[YL_F_본장시가] > 0)) && (b->close > s->cur[YL_F_본장시가])) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 30)) && ((((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 90) || ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 120)))) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 180)) && ((((s->cur[YL_F_실세션진입수] == 0) || (s->cur[YL_F_실직전방향] != (-1))) || (s->cur[YL_F_실직전수익] == 1)))) && (((((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 60) || ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 90)) || (s->cur[YL_F_실세션진입수] == 0)))) && (s->cur[YL_F_스윙전체폭비] < 70)) && (((s->cur[YL_F_실청산봉] <= 0) || ((s->bar_n - s->cur[YL_F_실청산봉]) >= 30)))) && (((s->cur[YL_F_하락대기] == 0) || (s->cur[YL_F_하락A] <= 0)))) && (s->cur[YL_F_통합카운트] < 10)))                 {
                     s->cur[YL_F_초기상승금지] = 0;
                     if (((s->cur[YL_F_S두구간비율] > 90) && (s->cur[YL_F_S신호합계] >= 0))) 
                         s->cur[YL_F_초기상승금지] = 1;
@@ -2205,7 +2431,7 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
             if ((((((s->cur[YL_F_본장중] == 1) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) == 30)) && (s->cur[YL_F_본장시가] > 0)) && (s->cur[YL_F_본장진폭율] > 0)) && (s->cur[YL_F_본장거래량율] > 0)))                 {
                     if ((((((((s->cur[YL_F_본장거래량율] >= 100) && (s->cur[YL_F_본장진폭율] >= 100)) && (b->close < s->cur[YL_F_본장시가])) && (s->cur[YL_F_서머타임] == 1)) && (((s->cur[YL_F_전세션마지막방향] != 1) || (s->cur[YL_F_전세션마지막수익] == 0)))) && (s->cur[YL_F_통합상태] != (-100))) && (((s->cur[YL_F_전일본장고가] <= 0) || (b->close <= s->cur[YL_F_전일본장고가]))))) 
                         s->cur[YL_F_무거래30종류] = 2;
-                    if ((((((((s->cur[YL_F_본장거래량율] >= 100) && (s->cur[YL_F_본장진폭율] < 100)) && (b->close >= s->cur[YL_F_본장시가])) && (((s->cur[YL_F_전일본장저가] <= 0) || (b->close >= s->cur[YL_F_전일본장저가])))) && (((s->cur[YL_F_런던시가] <= 0) || (b->close >= s->cur[YL_F_런던시가])))) && (((s->cur[YL_F_압축폭비율] <= 80) || (s->cur[YL_F_스윙전체폭비] <= 90)))) && ((((s->cur[YL_F_전일본장고가] <= 0) || (s->cur[YL_F_지속저장목표5] <= s->cur[YL_F_전일본장고가])) || (b->close >= s->cur[YL_F_전일본장고가]))))) 
+                    if ((((((((((s->cur[YL_F_본장거래량율] >= 100) && (s->cur[YL_F_본장진폭율] < 100)) && (b->close >= s->cur[YL_F_본장시가])) && (((s->cur[YL_F_전일본장저가] <= 0) || (b->close >= s->cur[YL_F_전일본장저가])))) && (((s->cur[YL_F_런던시가] <= 0) || (b->close >= s->cur[YL_F_런던시가])))) && (((((((((s->cur[YL_F_전일본장고가] <= 0) || (s->cur[YL_F_지속저장목표5] <= 0)) || (s->cur[YL_F_지속저장목표4] <= 0)) || (b->high >= s->cur[YL_F_전일본장고가])) || (b->high >= s->cur[YL_F_지속저장목표5])) || (b->close <= s->cur[YL_F_지속저장목표4])) || (s->cur[YL_F_S삼선비율] < 100)) || (s->cur[YL_F_S두구간비율] <= 95)))) && ((((s->cur[YL_F_전일본장고가] <= 0) || (b->close <= s->cur[YL_F_전일본장고가])) || (s->cur[YL_F_통합상태] >= 0)))) && (((s->cur[YL_F_압축폭비율] <= 80) || (s->cur[YL_F_스윙전체폭비] <= 90)))) && ((((s->cur[YL_F_전일본장고가] <= 0) || (s->cur[YL_F_지속저장목표5] <= s->cur[YL_F_전일본장고가])) || (b->close >= s->cur[YL_F_전일본장고가]))))) 
                         s->cur[YL_F_무거래30종류] = 3;
                 }
             if ((((((((s->cur[YL_F_무거래30진입] == 1) && (s->cur[YL_F_무거래30종류] > 0)) && (s->cur[YL_F_주문코드] == 0)) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != 1)) && (s->cur[YL_F_무거래30횟수] == 0)) && (s->cur[YL_F_실세션진입수] == 0)))                 {
@@ -2213,6 +2439,29 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                     s->cur[YL_F_가상매수진입] = 1;
                     s->cur[YL_F_가상매도진입] = 0;
                     s->cur[YL_F_가상진입종류30] = s->cur[YL_F_무거래30종류];
+                }
+            if (((s->cur[YL_F_본장중] == 1) && (yl_lag(s, YL_F_본장중, 1) == 0))) 
+                s->cur[YL_F_아시아시가] = 0;
+            if ((((((s->cur[YL_F_본장중] == 1) && (s->cur[YL_F_본장시가] > 0)) && (s->cur[YL_F_전일본장고가] > 0)) && (s->cur[YL_F_본장시가] > s->cur[YL_F_전일본장고가])) && (b->high < s->cur[YL_F_본장시가]))) 
+                s->cur[YL_F_아시아시가] = 1;
+            if (((((((((((((((((((s->cur[YL_F_주문코드] == 0) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != 1)) && (s->cur[YL_F_아시아시가] == 0)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_전일본장고가] > 0)) && (s->cur[YL_F_본장시가] > s->cur[YL_F_전일본장고가])) && (s->cur[YL_F_통합카운트] >= 1)) && (s->cur[YL_F_통합카운트] < 4)) && (s->cur[YL_F_선행위치Cnt] >= 1)) && (s->cur[YL_F_선행위치Cnt] < 4)) && (s->cur[YL_F_선행기울기Cnt] >= 1)) && (s->cur[YL_F_선행기울기Cnt] < 4)) && (s->cur[YL_F_스윙전체폭비] < 60)) && (s->cur[YL_F_상승DI] > s->cur[YL_F_하락DI])) && (s->cur[YL_F_압축지속봉수] == 0)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 15)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 90)))                 {
+                    s->cur[YL_F_주문코드] = ((97 * 10) + s->cur[YL_F_진입계약수]);
+                    s->cur[YL_F_가상매수진입] = 1;
+                    s->cur[YL_F_가상매도진입] = 0;
+                    s->cur[YL_F_아시아시가] = 1;
+                }
+            if (((((((((((((((((((s->cur[YL_F_주문코드] == 0) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != (-1))) && (s->cur[YL_F_아시아시가] == 0)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_전일본장저가] > 0)) && (s->cur[YL_F_본장시가] < s->cur[YL_F_전일본장저가])) && (s->cur[YL_F_선행위치Cnt] <= (-1))) && (s->cur[YL_F_선행위치Cnt] > (-9))) && (s->cur[YL_F_선행기울기Cnt] <= (-1))) && (s->cur[YL_F_선행기울기Cnt] > (-9))) && (s->cur[YL_F_통합카운트] <= (-1))) && (s->cur[YL_F_통합카운트] > (-3))) && (s->cur[YL_F_스윙전체폭비] < 40)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 30)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 60)) && (b->high < s->cur[YL_F_본장시가])) && (((s->cur[YL_F_실진입봉0] <= 0) || ((s->bar_n - s->cur[YL_F_실진입봉0]) > (s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]))))))                 {
+                    s->cur[YL_F_주문코드] = ((98 * 10) + s->cur[YL_F_진입계약수]);
+                    s->cur[YL_F_가상매수진입] = 0;
+                    s->cur[YL_F_가상매도진입] = 1;
+                    s->cur[YL_F_아시아시가] = 1;
+                }
+            if ((s->cur[YL_F_FX초기화] == 1)) 
+                s->cur[YL_F_전고반락횟수] = 0;
+            if (((((((((((((((((((((s->cur[YL_F_주문코드] == 0) && (s->cur[YL_F_매매시간] == 1)) && (s->cur[YL_F_가상시작] != (-1))) && (s->cur[YL_F_전고반락횟수] == 0)) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 15)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 30)) && (s->cur[YL_F_전일본장고가] > 0)) && (s->cur[YL_F_당일본장고가] >= (s->cur[YL_F_전일본장고가] - 2))) && (b->close < s->cur[YL_F_전일본장고가])) && (s->cur[YL_F_선행위치Cnt] <= (-1))) && (s->cur[YL_F_선행위치Cnt] > (-6))) && (s->cur[YL_F_선행기울기Cnt] <= (-1))) && (s->cur[YL_F_선행기울기Cnt] > (-6))) && (s->cur[YL_F_통합카운트] <= (-1))) && (s->cur[YL_F_통합카운트] > (-4))) && (s->cur[YL_F_본장시가] > 0)) && (b->close < s->cur[YL_F_본장시가])) && (s->cur[YL_F_본장거래량율] >= 150)) && (s->cur[YL_F_하락DI] > s->cur[YL_F_상승DI])))                 {
+                    s->cur[YL_F_주문코드] = ((99 * 10) + s->cur[YL_F_진입계약수]);
+                    s->cur[YL_F_가상매도진입] = 1;
+                    s->cur[YL_F_가상매수진입] = 0;
                 }
             if ((s->cur[YL_F_FX초기화] == 1)) 
                 s->cur[YL_F_시가반락매도횟수] = 0;
@@ -2327,6 +2576,47 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
             s->cur[YL_F_진단그림자] = ((((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_그림자진입] == 1)) && (s->cur[YL_F_짝그림자] == 0)) && (s->cur[YL_F_실세션진입수] == 0)) && (s->cur[YL_F_본장중] == 1)) && (((((trunc((s->cur[YL_F_주문코드] / 10)) >= 19) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 21))) || (trunc((s->cur[YL_F_주문코드] / 10)) == 43)))) && (fmod(s->cur[YL_F_주문코드], 10) == 1)) && (s->cur[YL_F_런던시가] > 0)) && (b->close >= s->cur[YL_F_런던시가])) ? 1 : 0);
             if ((s->cur[YL_F_진단그림자] == 1)) 
                 s->cur[YL_F_그림자진입] = s->cur[YL_F_짝그림자];
+            if (((s->cur[YL_F_본장중] == 0) || (s->cur[YL_F_압축지속봉수] == 0))) 
+                s->cur[YL_F_압축매도금지중] = 0;
+            if (((((((((s->cur[YL_F_본장중] == 1) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 0)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 10)) && (s->cur[YL_F_압축지속봉수] > 0)) && (s->cur[YL_F_본장시가] > 0)) && (b->close > s->cur[YL_F_본장시가])) && (s->cur[YL_F_상승DI] > s->cur[YL_F_하락DI])) && (s->cur[YL_F_본장최고진폭율] >= 150))) 
+                s->cur[YL_F_압축매도금지중] = 1;
+            if ((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매도진입] == 1)) && (s->cur[YL_F_압축매도금지중] == 1))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if (((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매수진입] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= (-70))) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 0)) && (s->cur[YL_F_직전본장고가V102] > 0)) && (b->low > s->cur[YL_F_직전본장고가V102])) && (s->cur[YL_F_스윙전체폭비] > 90)) && (s->cur[YL_F_세션진폭율] >= 120))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매수진입] == 1)) && (s->cur[YL_F_본장중] == 1)) && (s->cur[YL_F_압축지속봉수] > 0)) && (s->cur[YL_F_압축지속봉수] < 5)) && (s->cur[YL_F_통합카운트] >= 10)) && (s->cur[YL_F_본장거래량율] < 100)) && (yl_lag(s, YL_F_봉길이평균, 1) > 0)) && (s->cur[YL_F_봉길이] < yl_lag(s, YL_F_봉길이평균, 1)))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if (((((((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매수진입] == 1)) && (((trunc((s->cur[YL_F_주문코드] / 10)) == 43) || (((trunc((s->cur[YL_F_주문코드] / 10)) >= 19) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 21)))))) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 90)) && (b->market == 0)) && (yl_pos_profit(s, 1) > 0)) && (yl_bars_since_exit(s, 1) <= (s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]))) && (s->cur[YL_F_S두구간비율] > 80)) && (s->cur[YL_F_압축지속봉수] > 0)) && (s->cur[YL_F_런던시가] > 0)) && (b->high < s->cur[YL_F_런던시가]))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매수진입] == 1)) && ((((trunc((s->cur[YL_F_주문코드] / 10)) == 43) || (((trunc((s->cur[YL_F_주문코드] / 10)) >= 19) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 21)))) || (((trunc((s->cur[YL_F_주문코드] / 10)) >= 1) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 3)))))) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 130)) && (b->market == 0)) && (((s->cur[YL_F_실진입봉0] <= 0) || ((s->bar_n - s->cur[YL_F_실진입봉0]) > (s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]))))) && (s->cur[YL_F_본장거래량율] < 100)) && (s->cur[YL_F_압축지속봉수] > 0))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매도진입] == 1)) && (((((trunc((s->cur[YL_F_주문코드] / 10)) == 58) || (trunc((s->cur[YL_F_주문코드] / 10)) == 98)) || (trunc((s->cur[YL_F_주문코드] / 10)) == 79)) || (trunc((s->cur[YL_F_주문코드] / 10)) == 85)))) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 120)) && (b->market == 0)) && (yl_pos_profit(s, 1) > 0)) && (yl_bars_since_exit(s, 1) <= (s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]))) && (((((yl_is_entry_name(s, "추세매수", 1) || yl_is_entry_name(s, "압축매수", 1)) || yl_is_entry_name(s, "전환매수", 1)) || yl_is_entry_name(s, "개장매수", 1)) || yl_is_entry_name(s, "개장이어받기매수", 1))))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if (((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매수진입] == 1)) && (((trunc((s->cur[YL_F_주문코드] / 10)) == 43) || (((trunc((s->cur[YL_F_주문코드] / 10)) >= 19) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 21)))))) && (s->cur[YL_F_하락대기] == 1)) && (s->cur[YL_F_하락A] > 0)) && (((s->cur[YL_F_이차대기] == 0) || (s->cur[YL_F_이차A] <= 0))))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매도진입] == 1)) && (((((((trunc((s->cur[YL_F_주문코드] / 10)) >= 22) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 24))) || (trunc((s->cur[YL_F_주문코드] / 10)) == 46)) || (trunc((s->cur[YL_F_주문코드] / 10)) == 49)) || (((trunc((s->cur[YL_F_주문코드] / 10)) >= 4) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 6)))))) && (b->market == 0)) && (yl_pos_profit(s, 1) > 0)) && (yl_bars_since_exit(s, 1) <= 30)) && (s->cur[YL_F_압축지속봉수] > 0)) && (s->cur[YL_F_S두구간비율] > 90)) && (((((yl_is_entry_name(s, "추세매도", 1) || yl_is_entry_name(s, "압축매도", 1)) || yl_is_entry_name(s, "전환매도", 1)) || yl_is_entry_name(s, "개장매도", 1)) || yl_is_entry_name(s, "개장이어받기매도", 1))))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if (((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매도진입] == 1)) && (((trunc((s->cur[YL_F_주문코드] / 10)) == 79) || (trunc((s->cur[YL_F_주문코드] / 10)) == 85)))) && (b->market == 0)) && (yl_pos_profit(s, 1) > 0)) && (yl_bars_since_exit(s, 1) <= 30))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_본장중] == 1)) && (trunc((s->cur[YL_F_주문코드] / 10)) >= 10)) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 12)) && (s->cur[YL_F_본장거래량율] < 10))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매도진입] == 1)) && (trunc((s->cur[YL_F_주문코드] / 10)) >= 10)) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 12)) && (s->cur[YL_F_전일본장저가] > 0)) && (b->close < s->cur[YL_F_전일본장저가])) && (s->cur[YL_F_통합카운트] <= (-10))) && (s->cur[YL_F_선행위치Cnt] <= (-15))) && (((((s->cur[YL_F_본장기준봉분] < 1440) && (yl_dow(b->date) == 5))) || (((s->cur[YL_F_본장기준봉분] >= 1440) && (yl_dow(b->date) == 6))))))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매수진입] == 1)) && (s->cur[YL_F_선행위치Cnt] < 0)) && (s->cur[YL_F_통합카운트] >= 10)) && (s->cur[YL_F_통합카운트] >= 30))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매도진입] == 1)) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 120)) && (s->cur[YL_F_런던시가] > 0)) && (b->low > s->cur[YL_F_런던시가])) && (s->cur[YL_F_본장거래량율] <= 70)) && (s->cur[YL_F_이차대기] == 1)) && (s->cur[YL_F_이차A] > 0))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매수진입] == 1)) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 90)) && (s->cur[YL_F_전일본장고가] > 0)) && (fabs((b->close - s->cur[YL_F_전일본장고가])) <= 5)) && (s->cur[YL_F_본장거래량율] < 60))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_본장중] == 0)) && (s->cur[YL_F_그림자진입] == 0))) 
+                s->cur[YL_F_그림자진입] = 2;
+            if (((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매수진입] == 1)) && (s->cur[YL_F_지속저장목표5] > 0)) && (s->cur[YL_F_목표5유지봉] >= 15)) && (b->close > s->cur[YL_F_지속저장목표5])) && (yl_lo(s, "L", 5) <= s->cur[YL_F_지속저장목표5])) && (s->cur[YL_F_본장거래량율] > 0)) && (s->cur[YL_F_본장거래량율] < 50))) 
+                s->cur[YL_F_그림자진입] = 1;
+            if ((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매도진입] == 1)) && (s->cur[YL_F_지속저장목표5] > 0)) && (s->cur[YL_F_목표5지지횟수] >= 2)) && (fabs((b->close - s->cur[YL_F_지속저장목표5])) <= 5)) && (s->cur[YL_F_실세션진입수] > 0)) && (s->cur[YL_F_실직전방향] == 1))) 
+                s->cur[YL_F_그림자진입] = 1;
+            s->cur[YL_F_지속5표시] = 0;
+            if ((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매수진입] == 1)) && (s->cur[YL_F_지속저장목표5] > 0)) && (s->cur[YL_F_목표5저항횟수] >= 2)) && (fabs((b->close - s->cur[YL_F_지속저장목표5])) <= 5)) && (s->cur[YL_F_실세션진입수] > 0)) && (s->cur[YL_F_실직전방향] == (-1)))) 
+                s->cur[YL_F_지속5표시] = 1;
             if (((((((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_가상매도진입] == 1)) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 0)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 2)) && (s->cur[YL_F_이차대기] == 1)) && (s->cur[YL_F_이차A] > 0)) && (s->cur[YL_F_런던시가] > 0)) && (b->close > s->cur[YL_F_런던시가])) && (s->cur[YL_F_전일본장고가] > 0)) && (b->close > s->cur[YL_F_전일본장고가])) && (s->cur[YL_F_본장진폭율] >= 150))) 
                 s->cur[YL_F_그림자진입] = 1;
             s->cur[YL_F_런던시가아래] = 0;
@@ -2336,11 +2626,21 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                     if (((fmod((trunc((s->cur[YL_F_주문코드] / 10)) - 1), 6) >= 3) && (b->low > s->cur[YL_F_런던시가]))) 
                         s->cur[YL_F_런던시가아래] = 1;
                 }
+            s->cur[YL_F_본장실거래] = ((((s->cur[YL_F_본장중] == 1) && (s->cur[YL_F_실진입봉0] > 0)) && ((s->bar_n - s->cur[YL_F_실진입봉0]) <= (s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]))) ? 1 : 0);
+            s->cur[YL_F_그림자유지] = 0;
+            if ((((((s->cur[YL_F_주문코드] > 0) && (trunc((s->cur[YL_F_주문코드] / 10)) >= 10)) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 12)) && (s->cur[YL_F_전일본장고가] > 0)) && ((((b->close > s->cur[YL_F_전일본장고가]) || (((b->close < s->cur[YL_F_전일본장저가]) && (s->cur[YL_F_본장거래량율] < 150)))) || (s->cur[YL_F_본장거래량율] < 80))))) 
+                s->cur[YL_F_그림자유지] = 1;
+            if ((((((s->cur[YL_F_주문코드] > 0) && (trunc((s->cur[YL_F_주문코드] / 10)) >= 7)) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 9)) && (s->cur[YL_F_전일본장고가] > 0)) && ((((b->close >= (s->cur[YL_F_전일본장고가] - 5)) || (s->cur[YL_F_본장거래량율] < 30)) || (b->close < s->cur[YL_F_전일본장저가]))))) 
+                s->cur[YL_F_그림자유지] = 1;
+            if (((s->cur[YL_F_주문코드] > 0) && ((((trunc((s->cur[YL_F_주문코드] / 10)) == 43) || (((trunc((s->cur[YL_F_주문코드] / 10)) >= 19) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 21)))) || (((trunc((s->cur[YL_F_주문코드] / 10)) >= 1) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 3))))))) 
+                s->cur[YL_F_그림자유지] = 1;
+            if ((((((((s->cur[YL_F_주문코드] > 0) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) >= 90)) && (s->cur[YL_F_그림자진입] == 1)) && (s->cur[YL_F_본장실거래] == 0)) && (b->market == 0)) && (s->cur[YL_F_그림자유지] == 0))) 
+                s->cur[YL_F_그림자진입] = 0;
             s->cur[YL_F_진입명번호] = 0;
             if ((s->cur[YL_F_주문코드] > 0))                 {
                     s->cur[YL_F_주문번호] = trunc((s->cur[YL_F_주문코드] / 10));
                     s->cur[YL_F_주문수량] = (s->cur[YL_F_주문코드] - (s->cur[YL_F_주문번호] * 10));
-                    if ((s->cur[YL_F_그림자진입] == 1)) 
+                    if ((s->cur[YL_F_그림자진입] >= 1)) 
                         s->cur[YL_F_주문번호] = 0;
                     if ((s->cur[YL_F_주문번호] == 25)) 
                         s->cur[YL_F_진입명번호] = 1;
@@ -2380,6 +2680,12 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                         s->cur[YL_F_진입명번호] = 34;
                     if ((s->cur[YL_F_주문번호] == 88)) 
                         s->cur[YL_F_진입명번호] = 35;
+                    if ((s->cur[YL_F_주문번호] == 97)) 
+                        s->cur[YL_F_진입명번호] = 41;
+                    if ((s->cur[YL_F_주문번호] == 99)) 
+                        s->cur[YL_F_진입명번호] = 42;
+                    if ((s->cur[YL_F_주문번호] == 98)) 
+                        s->cur[YL_F_진입명번호] = 42;
                     if ((s->cur[YL_F_주문번호] == 94)) 
                         s->cur[YL_F_진입명번호] = 39;
                     if (((s->cur[YL_F_주문번호] == 7) && (s->cur[YL_F_압축부족표시] == 1))) 
@@ -2587,84 +2893,40 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                 s->cur[YL_F_진입그룹] = 21;
             if ((s->cur[YL_F_진입명번호] == 35)) 
                 s->cur[YL_F_진입그룹] = 22;
+            if ((s->cur[YL_F_진입명번호] == 41)) 
+                s->cur[YL_F_진입그룹] = 25;
+            if ((s->cur[YL_F_진입명번호] == 42)) 
+                s->cur[YL_F_진입그룹] = 26;
             if ((s->cur[YL_F_진입명번호] == 39)) 
                 s->cur[YL_F_진입그룹] = 24;
-            if (((s->cur[YL_F_진입그룹] == 1) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "압축매수");
-            if (((s->cur[YL_F_진입그룹] == 2) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "압축매도");
-            if (((s->cur[YL_F_진입그룹] == 3) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "돌파매수");
-            if (((s->cur[YL_F_진입그룹] == 4) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "돌파매도");
-            if (((s->cur[YL_F_진입그룹] == 5) && (s->cur[YL_F_이벤트표시] == 0))) 
+            if ((((s->cur[YL_F_진입그룹] == 5) || (s->cur[YL_F_진입그룹] == 3)) || (s->cur[YL_F_진입그룹] == 13))) 
                 yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "추세매수");
-            if (((s->cur[YL_F_진입그룹] == 6) && (s->cur[YL_F_이벤트표시] == 0))) 
+            if ((((s->cur[YL_F_진입그룹] == 6) || (s->cur[YL_F_진입그룹] == 4)) || (s->cur[YL_F_진입그룹] == 14))) 
                 yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "추세매도");
-            if (((s->cur[YL_F_진입그룹] == 7) && (s->cur[YL_F_이벤트표시] == 0))) 
+            if ((s->cur[YL_F_진입그룹] == 1)) 
+                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "압축매수");
+            if ((s->cur[YL_F_진입그룹] == 2)) 
+                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "압축매도");
+            if ((s->cur[YL_F_진입그룹] == 7)) 
                 yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "전환매수");
-            if (((s->cur[YL_F_진입그룹] == 8) && (s->cur[YL_F_이벤트표시] == 0))) 
+            if ((s->cur[YL_F_진입그룹] == 8)) 
                 yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "전환매도");
-            if (((s->cur[YL_F_진입그룹] == 1) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트고가아래_압축매수");
-            if (((s->cur[YL_F_진입그룹] == 2) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트저가위_압축매도");
-            if (((s->cur[YL_F_진입그룹] == 3) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트고가아래_돌파매수");
-            if (((s->cur[YL_F_진입그룹] == 4) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트저가위_돌파매도");
-            if (((s->cur[YL_F_진입그룹] == 5) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트고가아래_추세매수");
-            if (((s->cur[YL_F_진입그룹] == 6) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트저가위_추세매도");
-            if (((s->cur[YL_F_진입그룹] == 7) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트고가아래_전환매수");
-            if (((s->cur[YL_F_진입그룹] == 8) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트저가위_전환매도");
-            if (((s->cur[YL_F_진입그룹] == 11) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "시가회복매수");
-            if (((s->cur[YL_F_진입그룹] == 11) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트고가아래_시가회복매수");
-            if (((s->cur[YL_F_진입그룹] == 12) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "시가반락매도");
-            if (((s->cur[YL_F_진입그룹] == 12) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트저가위_시가반락매도");
-            if (((s->cur[YL_F_진입그룹] == 13) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "흡수돌파매수");
-            if (((s->cur[YL_F_진입그룹] == 13) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트고가아래_흡수돌파매수");
-            if (((s->cur[YL_F_진입그룹] == 14) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "흡수돌파매도");
-            if (((s->cur[YL_F_진입그룹] == 14) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트저가위_흡수돌파매도");
-            if (((s->cur[YL_F_진입그룹] == 15) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "무거래_확장반등매수");
-            if (((s->cur[YL_F_진입그룹] == 15) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트고가아래_무거래_확장반등매수");
-            if (((s->cur[YL_F_진입그룹] == 19) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "전일저이탈매도");
-            if (((s->cur[YL_F_진입그룹] == 19) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트저가위_전일저이탈매도");
-            if (((s->cur[YL_F_진입그룹] == 20) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "전일고돌파매수");
-            if (((s->cur[YL_F_진입그룹] == 20) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트고가아래_전일고돌파매수");
-            if (((s->cur[YL_F_진입그룹] == 21) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "초기하락매도");
-            if (((s->cur[YL_F_진입그룹] == 21) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트저가위_초기하락매도");
-            if (((s->cur[YL_F_진입그룹] == 22) && (s->cur[YL_F_이벤트표시] == 0))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "초기상승매수");
-            if (((s->cur[YL_F_진입그룹] == 22) && (s->cur[YL_F_이벤트표시] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "이벤트고가아래_초기상승매수");
-            if (((s->cur[YL_F_진입그룹] == 24) && (s->cur[YL_F_무거래30종류] == 1))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "무거래30_한산위매수");
-            if (((s->cur[YL_F_진입그룹] == 24) && (s->cur[YL_F_무거래30종류] == 2))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "무거래30_확장아래매수");
-            if (((s->cur[YL_F_진입그룹] == 24) && (s->cur[YL_F_무거래30종류] == 3))) 
-                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "무거래30_흡수위매수");
+            if (((((((s->cur[YL_F_진입그룹] == 11) || (s->cur[YL_F_진입그룹] == 25)) || (s->cur[YL_F_진입그룹] == 20)) || (s->cur[YL_F_진입그룹] == 22)) || (s->cur[YL_F_진입그룹] == 15)) || (((s->cur[YL_F_진입그룹] == 24) && (((s->cur[YL_F_무거래30종류] == 2) || (s->cur[YL_F_무거래30종류] == 3))))))) 
+                yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "개장매수");
+            if (((((s->cur[YL_F_진입그룹] == 12) || (s->cur[YL_F_진입그룹] == 26)) || (s->cur[YL_F_진입그룹] == 19)) || (s->cur[YL_F_진입그룹] == 21))) 
+                yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)(s->cur[YL_F_주문수량]), "개장매도");
+            if (((((((((((s->cur[YL_F_본장중] == 1) && (yl_lag(s, YL_F_본장중, 1) == 0)) && (s->cur[YL_F_주문코드] == 0)) && (b->market == 0)) && (s->cur[YL_F_가상그림자] == 2)) && (s->cur[YL_F_선행직전상승기울기] < 60)) && (s->cur[YL_F_가상포지션] == 1)) && (b->close > s->cur[YL_F_가상진입가])) && (((s->cur[YL_F_선행위치Cnt] >= 0) || (s->cur[YL_F_선행기울기Cnt] >= 0)))) && (s->cur[YL_F_선행기울기Cnt] < 40)))                 {
+                    yl_order(s, TR_YL_BUY, TR_YL_ONCLOSE, 0, (int)((((s->cur[YL_F_현재1차틱] > 0) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale)))) ? 1 : s->cur[YL_F_진입계약수])), "개장이어받기매수");
+                    s->cur[YL_F_가상그림자] = (((s->cur[YL_F_현재1차틱] > 0) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale)))) ? 3 : 0);
+                    s->cur[YL_F_실세션진입수] = (s->cur[YL_F_실세션진입수] - 1);
+                }
+            if ((((((((((s->cur[YL_F_본장중] == 1) && (yl_lag(s, YL_F_본장중, 1) == 0)) && (s->cur[YL_F_주문코드] == 0)) && (b->market == 0)) && (s->cur[YL_F_가상그림자] == 2)) && (s->cur[YL_F_본장진폭율] < 100)) && (s->cur[YL_F_본장거래량율] < 100)) && (s->cur[YL_F_가상포지션] == (-1))) && (b->close < s->cur[YL_F_가상진입가])))                 {
+                    yl_order(s, TR_YL_SELL, TR_YL_ONCLOSE, 0, (int)((((s->cur[YL_F_현재1차틱] > 0) && (s->cur[YL_F_가상최저가] <= (s->cur[YL_F_가상진입가] - (s->cur[YL_F_현재1차틱] * b->price_scale)))) ? 1 : s->cur[YL_F_진입계약수])), "개장이어받기매도");
+                    s->cur[YL_F_가상그림자] = (((s->cur[YL_F_현재1차틱] > 0) && (s->cur[YL_F_가상최저가] <= (s->cur[YL_F_가상진입가] - (s->cur[YL_F_현재1차틱] * b->price_scale)))) ? 3 : 0);
+                    s->cur[YL_F_실세션진입수] = (s->cur[YL_F_실세션진입수] - 1);
+                }
             if (((s->cur[YL_F_가상매수진입] == 1) || (s->cur[YL_F_가상매도진입] == 1)))                 {
-                    if (((s->cur[YL_F_본장압축해제기록분리] == 0) || (((((((((((((((((((trunc((s->cur[YL_F_주문코드] / 10)) != 31) && (trunc((s->cur[YL_F_주문코드] / 10)) != 34)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 37)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 40)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 43)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 46)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 49)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 52)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 55)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 58)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 61)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 64)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 67)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 79)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 82)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 85)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 88)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 94)))))                         {
+                    if (((s->cur[YL_F_본장압축해제기록분리] == 0) || ((((((((((((((((((((((trunc((s->cur[YL_F_주문코드] / 10)) != 31) && (trunc((s->cur[YL_F_주문코드] / 10)) != 34)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 37)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 40)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 43)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 46)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 49)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 52)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 55)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 58)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 61)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 64)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 67)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 79)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 82)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 85)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 88)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 94)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 97)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 98)) && (trunc((s->cur[YL_F_주문코드] / 10)) != 99)))))                         {
                             s->cur[YL_F_세션진입수] = (s->cur[YL_F_세션진입수] + 1);
                             s->cur[YL_F_마지막진입방향] = ((s->cur[YL_F_가상매수진입] == 1) ? 1 : (-1));
                         }
@@ -2698,6 +2960,10 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                         s->cur[YL_F_초기하락매도횟수] = (s->cur[YL_F_초기하락매도횟수] + 1);
                     else if ((trunc((s->cur[YL_F_주문코드] / 10)) == 88)) 
                         s->cur[YL_F_초기상승매수횟수] = (s->cur[YL_F_초기상승매수횟수] + 1);
+                    else if ((trunc((s->cur[YL_F_주문코드] / 10)) == 99)) 
+                        s->cur[YL_F_전고반락횟수] = (s->cur[YL_F_전고반락횟수] + 1);
+                    else if (((trunc((s->cur[YL_F_주문코드] / 10)) == 97) || (trunc((s->cur[YL_F_주문코드] / 10)) == 98))) 
+                        s->cur[YL_F_아시아시가] = 1;
                     else if ((trunc((s->cur[YL_F_주문코드] / 10)) == 94)) 
                         s->cur[YL_F_무거래30횟수] = (s->cur[YL_F_무거래30횟수] + 1);
                     else if ((trunc((s->cur[YL_F_주문코드] / 10)) == 40)) 
@@ -2730,6 +2996,7 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                     s->cur[YL_F_가상진입봉] = s->bar_n;
                     s->cur[YL_F_일차도달] = 0;
                     s->cur[YL_F_일차도달틱] = 0;
+                    s->cur[YL_F_압축전저진입] = (((((((trunc((s->cur[YL_F_주문코드] / 10)) >= 7) && (trunc((s->cur[YL_F_주문코드] / 10)) <= 9)) && (s->cur[YL_F_본장중] == 1)) && ((s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]) < 15)) && (s->cur[YL_F_전일본장저가] > 0)) && (b->close < s->cur[YL_F_전일본장저가])) ? 1 : 0);
                     s->cur[YL_F_진입본장경과] = (s->cur[YL_F_본장기준봉분] - s->cur[YL_F_본장시작분]);
                     s->cur[YL_F_재진입표시] = 0;
                     if ((((((s->cur[YL_F_실세션진입수] > 0) && (s->cur[YL_F_실청산봉] > 0)) && ((s->bar_n - s->cur[YL_F_실청산봉]) <= 40)) && (s->cur[YL_F_실직전최대틱] >= 50)) && (s->cur[YL_F_실직전방향] == ((s->cur[YL_F_가상매수진입] == 1) ? 1 : (-1))))) 
@@ -2738,6 +3005,12 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                     s->cur[YL_F_가상진입번호] = trunc((s->cur[YL_F_주문코드] / 10));
                     s->cur[YL_F_보유중압축해제] = 0;
                     s->cur[YL_F_가상그림자] = s->cur[YL_F_그림자진입];
+                    if ((s->cur[YL_F_그림자진입] == 2))                         {
+                            s->cur[YL_F_실세션진입수] = (s->cur[YL_F_실세션진입수] + 1);
+                            s->cur[YL_F_실진입봉2] = s->cur[YL_F_실진입봉1];
+                            s->cur[YL_F_실진입봉1] = s->cur[YL_F_실진입봉0];
+                            s->cur[YL_F_실진입봉0] = s->bar_n;
+                        }
                     s->cur[YL_F_수익전환수] = 0;
                     s->cur[YL_F_직전봉평가손익] = 0;
                     if ((((s->cur[YL_F_직전수익1차틱] > 0) && (((s->cur[YL_F_직전수익1차수익필요] == 0) || (s->cur[YL_F_직전거래손익] > 0)))) && ((s->bar_n - s->cur[YL_F_직전청산봉]) <= s->cur[YL_F_직전수익1차봉수]))) 
@@ -2780,28 +3053,28 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
                         }
                 }
             if (((((((s->cur[YL_F_수익보호스톱] == 1) && (s->cur[YL_F_수익보호기준틱] > 0)) && (s->cur[YL_F_수익보호선틱] > 0)) && (s->cur[YL_F_가상포지션] == 1)) && (b->market == 1)) && (s->cur[YL_F_가상최고가] >= (s->cur[YL_F_가상진입가] + (s->cur[YL_F_수익보호기준틱] * b->price_scale))))) 
-                yl_order(s, TR_YL_EXIT_LONG, TR_YL_STOP, (s->cur[YL_F_가상진입가] + (s->cur[YL_F_수익보호선틱] * b->price_scale)), 0, "수익보호스톱매수");
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_STOP, (s->cur[YL_F_가상진입가] + (s->cur[YL_F_수익보호선틱] * b->price_scale)), (int)(0), "수익보호스톱매수");
             if (((((((s->cur[YL_F_수익보호스톱] == 1) && (s->cur[YL_F_수익보호기준틱] > 0)) && (s->cur[YL_F_수익보호선틱] > 0)) && (s->cur[YL_F_가상포지션] == (-1))) && (b->market == (-1))) && (s->cur[YL_F_가상최저가] <= (s->cur[YL_F_가상진입가] - (s->cur[YL_F_수익보호기준틱] * b->price_scale))))) 
-                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_STOP, (s->cur[YL_F_가상진입가] - (s->cur[YL_F_수익보호선틱] * b->price_scale)), 0, "수익보호스톱매도");
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_STOP, (s->cur[YL_F_가상진입가] - (s->cur[YL_F_수익보호선틱] * b->price_scale)), (int)(0), "수익보호스톱매도");
             if ((((((s->cur[YL_F_이차보존시작pt] > 0) && (s->cur[YL_F_가상포지션] == 1)) && (b->market == 1)) && (s->cur[YL_F_가상진입번호] == 43)) && ((s->cur[YL_F_가상최고가] - s->cur[YL_F_가상진입가]) >= s->cur[YL_F_이차보존시작pt]))) 
-                yl_order(s, TR_YL_EXIT_LONG, TR_YL_STOP, (s->cur[YL_F_가상최고가] - s->cur[YL_F_이차추적pt]), 0, "2차추적스톱매수");
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_STOP, (s->cur[YL_F_가상최고가] - s->cur[YL_F_이차추적pt]), (int)(0), "2차추적스톱매수");
             if ((((((s->cur[YL_F_이차보존시작pt] > 0) && (s->cur[YL_F_가상포지션] == (-1))) && (b->market == (-1))) && (s->cur[YL_F_가상진입번호] == 46)) && ((s->cur[YL_F_가상진입가] - s->cur[YL_F_가상최저가]) >= s->cur[YL_F_이차보존시작pt]))) 
-                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_STOP, (s->cur[YL_F_가상최저가] + s->cur[YL_F_이차추적pt]), 0, "2차하락추적스톱매도");
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_STOP, (s->cur[YL_F_가상최저가] + s->cur[YL_F_이차추적pt]), (int)(0), "2차하락추적스톱매도");
             if ((((s->cur[YL_F_비상손절pt] > 0) && (s->cur[YL_F_가상포지션] == 1)) && (b->market == 1))) 
-                yl_order(s, TR_YL_EXIT_LONG, TR_YL_STOP, (s->cur[YL_F_가상진입가] - s->cur[YL_F_비상손절pt]), 0, "비상손절매수");
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_STOP, (s->cur[YL_F_가상진입가] - s->cur[YL_F_비상손절pt]), (int)(0), "비상손절매수");
             if ((((s->cur[YL_F_비상손절pt] > 0) && (s->cur[YL_F_가상포지션] == (-1))) && (b->market == (-1)))) 
-                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_STOP, (s->cur[YL_F_가상진입가] + s->cur[YL_F_비상손절pt]), 0, "비상손절매도");
-            if ((((((s->cur[YL_F_일차후본전보장] == 1) && (s->cur[YL_F_일차도달] == 1)) && (s->cur[YL_F_일차도달틱] > 0)) && (s->cur[YL_F_가상포지션] == 1)) && (b->market == 1))) 
-                yl_order(s, TR_YL_EXIT_LONG, TR_YL_STOP, (s->cur[YL_F_가상진입가] - (((s->cur[YL_F_일차도달틱] * b->price_scale) - s->cur[YL_F_일차후본전여유pt]))), 0, "일차후본전매수");
-            if ((((((s->cur[YL_F_일차후본전보장] == 1) && (s->cur[YL_F_일차도달] == 1)) && (s->cur[YL_F_일차도달틱] > 0)) && (s->cur[YL_F_가상포지션] == (-1))) && (b->market == (-1)))) 
-                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_STOP, (s->cur[YL_F_가상진입가] + (((s->cur[YL_F_일차도달틱] * b->price_scale) - s->cur[YL_F_일차후본전여유pt]))), 0, "일차후본전매도");
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_STOP, (s->cur[YL_F_가상진입가] + s->cur[YL_F_비상손절pt]), (int)(0), "비상손절매도");
+            if (((((((s->cur[YL_F_일차후본전보장] == 1) && (s->cur[YL_F_가상그림자] != 3)) && (s->cur[YL_F_일차도달] == 1)) && (s->cur[YL_F_일차도달틱] > 0)) && (s->cur[YL_F_가상포지션] == 1)) && (b->market == 1))) 
+                yl_order(s, TR_YL_EXIT_LONG, TR_YL_STOP, (s->cur[YL_F_가상진입가] - (((s->cur[YL_F_일차도달틱] * b->price_scale) - s->cur[YL_F_일차후본전여유pt]))), (int)(0), "일차후본전매수");
+            if (((((((s->cur[YL_F_일차후본전보장] == 1) && (s->cur[YL_F_가상그림자] != 3)) && (s->cur[YL_F_일차도달] == 1)) && (s->cur[YL_F_일차도달틱] > 0)) && (s->cur[YL_F_가상포지션] == (-1))) && (b->market == (-1)))) 
+                yl_order(s, TR_YL_EXIT_SHORT, TR_YL_STOP, (s->cur[YL_F_가상진입가] + (((s->cur[YL_F_일차도달틱] * b->price_scale) - s->cur[YL_F_일차후본전여유pt]))), (int)(0), "일차후본전매도");
             if (((s->cur[YL_F_가상포지션] == 1) && (((b->market == 1) || (s->cur[YL_F_가상매수진입] == 1)))))                 {
-                    if ((s->cur[YL_F_현재1차틱] > 0)) 
-                        yl_order(s, TR_YL_EXIT_LONG, TR_YL_LIMIT, (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale)), 1, "1차청산매수");
+                    if (((s->cur[YL_F_현재1차틱] > 0) && (s->cur[YL_F_가상그림자] != 3))) 
+                        yl_order(s, TR_YL_EXIT_LONG, TR_YL_LIMIT, (s->cur[YL_F_가상진입가] + (s->cur[YL_F_현재1차틱] * b->price_scale)), (int)(1), "1차청산매수");
                 }
             if (((s->cur[YL_F_가상포지션] == (-1)) && (((b->market == (-1)) || (s->cur[YL_F_가상매도진입] == 1)))))                 {
-                    if ((s->cur[YL_F_현재1차틱] > 0)) 
-                        yl_order(s, TR_YL_EXIT_SHORT, TR_YL_LIMIT, (s->cur[YL_F_가상진입가] - (s->cur[YL_F_현재1차틱] * b->price_scale)), 1, "1차청산매도");
+                    if (((s->cur[YL_F_현재1차틱] > 0) && (s->cur[YL_F_가상그림자] != 3))) 
+                        yl_order(s, TR_YL_EXIT_SHORT, TR_YL_LIMIT, (s->cur[YL_F_가상진입가] - (s->cur[YL_F_현재1차틱] * b->price_scale)), (int)(1), "1차청산매도");
                 }
         }
 }

@@ -8,6 +8,7 @@ const Sysmon = (() => {
     fx_sig_pair: { name: "짝진입", mode: "pair" },
     fx_sig_zd: { name: "제로데이기초자산", mode: "zd" },
     fx_wr: { name: "승률", mode: "wr" },
+    fx_rr: { name: "수익비", mode: "rr" },
   };
 
   function create() {

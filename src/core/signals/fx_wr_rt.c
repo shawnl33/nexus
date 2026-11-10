@@ -49,14 +49,14 @@ double yl_px(const tr_fxwr_t *s, char which, double k) {
 }
 
 double yl_arr(const tr_fxwr_t *s, int id, int i) {
-    if (id < 0 || id >= YL_A_N || i < 0 || i >= 391) {
+    if (id < 0 || id >= YL_A_N || i < 0 || i >= YL_ARR_LEN) {
         return 0;
     }
     return s->arr[id][i];
 }
 
 void yl_arr_set(tr_fxwr_t *s, int id, int i, double v) {
-    if (id < 0 || id >= YL_A_N || i < 0 || i >= 391) {
+    if (id < 0 || id >= YL_A_N || i < 0 || i >= YL_ARR_LEN) {
         return;
     }
     s->arr[id][i] = v;
@@ -123,6 +123,28 @@ double yl_dow(double yyyymmdd) {
 
 double yl_max(double a, double b) { return a > b ? a : b; }
 double yl_min(double a, double b) { return a < b ? a : b; }
+
+/* PositionProfit(1) · BarsSinceExit(1) · IsEntryName(name, 1) 은 직전 실제 청산이다. */
+double yl_pos_profit(const tr_fxwr_t *s, double n) {
+    if (s == 0 || (int)n != 1 || !s->exit_ok) {
+        return 0;
+    }
+    return s->exit_pnl;
+}
+
+double yl_bars_since_exit(const tr_fxwr_t *s, double n) {
+    if (s == 0 || (int)n != 1 || !s->exit_ok) {
+        return 1000000;
+    }
+    return (double)(s->bar_n - s->exit_bar);
+}
+
+double yl_is_entry_name(const tr_fxwr_t *s, const char *name, double n) {
+    if (s == 0 || name == 0 || (int)n != 1 || !s->exit_ok) {
+        return 0;
+    }
+    return strcmp(s->exit_name, name) == 0 ? 1 : 0;
+}
 
 void yl_order(tr_fxwr_t *s, int action, int price_type, double price, int qty, const char *name) {
     tr_fxwr_ord_t *o;

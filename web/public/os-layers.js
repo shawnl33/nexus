@@ -194,6 +194,12 @@ const OsLayers = (() => {
       v66Shadow: row.length >= 247 ? num(row[244]) : null,
       v66ShadowRgb: row.length >= 247 ? (Number(row[245]) || 0) : 0,
       v66DiRgb: row.length >= 247 ? (Number(row[246]) || 0) : 0,
+      rrDir: row.length >= 253 ? Number(row[247]) || 0 : 0,
+      rrExitDir: row.length >= 253 ? Number(row[248]) || 0 : 0,
+      rrName: row.length >= 253 && typeof row[249] === "string" ? row[249] : "",
+      rrExitName: row.length >= 253 && typeof row[250] === "string" ? row[250] : "",
+      rrQty: row.length >= 253 ? Number(row[251]) || 0 : 0,
+      rrExitQty: row.length >= 253 ? Number(row[252]) || 0 : 0,
       adjKind: row.length >= 156 ? (Number(row[154]) || 0) : 0,
       adjGrade: row.length >= 156 ? (Number(row[155]) || 0) : 0,
     };
@@ -991,9 +997,10 @@ const OsLayers = (() => {
     const sell = markLine();
     const exit = markLine();
     const zd = mode === "zd";
-    const wr = mode === "wr";
+    const rr = mode === "rr";
+    const wr = mode === "wr" || rr;
     const pair = mode === "pair" || zd;
-    const dirOf = (r) => (wr ? r.wrDir : (pair ? (zd ? r.zdDir : r.pairDir) : r.sigDir));
+    const dirOf = (r) => (rr ? r.rrDir : (wr ? r.wrDir : (pair ? (zd ? r.zdDir : r.pairDir) : r.sigDir)));
     const wrOrderName = (n) => ({
       1: "압축매수", 2: "압축매도", 3: "돌파매수", 4: "돌파매도",
       5: "추세매수", 6: "추세매도", 7: "전환매수", 8: "전환매도",
@@ -1002,11 +1009,13 @@ const OsLayers = (() => {
       85: "초기하락매도", 88: "초기상승매수", 94: "무거래30매수",
     }[n] || "");
     const wrNum = (name, qty) => (name ? name + "\n" + qty : "");
-    const wrEntryText = (r) => wrNum(r.wrName || wrOrderName(r.wrOrder) || "", r.wrQty || 0);
+    const wrEntryText = (r) => rr
+      ? wrNum(r.rrName || "", r.rrQty || 0)
+      : wrNum(r.wrName || wrOrderName(r.wrOrder) || "", r.wrQty || 0);
     const exitQtyOf = (r) => (pair ? (zd ? r.zdExitQty : r.pairExitQty) : r.sigExitQty);
     const limitQtyOf = (r) => (zd ? r.zdLimitQty : r.pairLimitQty);
     // 구버전의 수량 누락(null)은 이름만 유지한다. 잔량 0의 가상 청산은 표시하지 않는다.
-    const exitOf = (r) => (wr ? (r.wrExitDir || 0) : (pair && exitQtyOf(r) === 0 ? 0 : (pair ? (zd ? r.zdExit : r.pairExit) : r.sigExit)));
+    const exitOf = (r) => (rr ? (r.rrExitDir || 0) : (wr ? (r.wrExitDir || 0) : (pair && exitQtyOf(r) === 0 ? 0 : (pair ? (zd ? r.zdExit : r.pairExit) : r.sigExit))));
     const limitOf = (r) => (pair && limitQtyOf(r) !== 0 ? (zd ? r.zdLimit : r.pairLimit) : 0);
     const markOf = (r) => exitOf(r) || limitOf(r);
     const lines = [
@@ -1026,7 +1035,7 @@ const OsLayers = (() => {
           const lines = [];
           const hit = limitOf(r);
           if (hit) lines.push(quantityLabel((zd ? "1차청산" : "1차목표청산") + (hit > 0 ? "매수" : "매도"), limitQtyOf(r)));
-          if (exitOf(r)) lines.push(wr && r.wrExitName ? wrNum(r.wrExitName, r.wrExitQty || 0) : quantityLabel(pair ? pairExitLabel(r, zd) : exitName(exitOf(r)), exitQtyOf(r)));
+          if (exitOf(r)) lines.push(rr && r.rrExitName ? wrNum(r.rrExitName, r.rrExitQty || 0) : (wr && r.wrExitName ? wrNum(r.wrExitName, r.wrExitQty || 0) : quantityLabel(pair ? pairExitLabel(r, zd) : exitName(exitOf(r)), exitQtyOf(r))));
           return lines.join("\n");
         } },
     ];

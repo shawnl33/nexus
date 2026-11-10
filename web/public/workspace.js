@@ -76,7 +76,7 @@ const Workspace = (() => {
     return rec;
   }
 
-  const SYSTEM_IDS = ["pair-long", "pair-short", "vb-strangle", "fx_wr"];
+  const SYSTEM_IDS = ["pair-long", "pair-short", "vb-strangle", "fx_wr", "fx_rr"];
 
   function readSystems(list) {
     const out = [];

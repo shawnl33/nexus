@@ -131,6 +131,7 @@ const YlTree = (() => {
     "#우드스탁_위클리_프라이스링크_양매수.txt": { kind: "indicator", id: "w_link_long" },
     "#우드스탁_위클리_프라이스링크_양매도.txt": { kind: "indicator", id: "w_link_short" },
     "signals/#우드스탁_ES기초자산_승률.txt": { kind: "indicator", id: "fx_wr" },
+    "signals/#우드스탁_ES기초자산_수익비.txt": { kind: "indicator", id: "fx_rr" },
     "#우드스탁_위클리_페어시스템_양매수.txt": { kind: "system", id: "pair-long", side: 1, leg: "w_link_long", inputs: LONG_INPUTS },
     "#우드스탁_위클리_페어시스템_양매도.txt": { kind: "system", id: "pair-short", side: -1, leg: "w_link_short", inputs: SHORT_INPUTS },
   };

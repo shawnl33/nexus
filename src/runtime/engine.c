@@ -7,6 +7,7 @@
 
 #include "core/model/civil_time.h"
 #include "core/paintbar/fx_judge_v66.h"
+#include "core/signals/fx_rr.h"
 
 static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_candle_t *bar);
 static void civil_stamp(tr_time_us_t t, int32_t utc_offset_min, int64_t *date, int64_t *tod);
@@ -16,6 +17,10 @@ static void v66_reset(tr_pipeline_t *p);
 static void v66_apply(tr_pipeline_t *p, tr_fxos_out_t *o, int64_t date, int64_t tod,
                       tr_time_us_t bar_open, double open, double high, double low,
                       double close, double volume, int is_new);
+static void rr_reset(tr_pipeline_t *p);
+static void rr_apply(tr_pipeline_t *p, tr_fxos_out_t *o, int64_t date, int64_t tod,
+                     tr_time_us_t bar_open, double open, double high, double low,
+                     double close, double volume);
 
 /* 원본 PriceScale 대응: raw 가격 단위의 1틱 — tick_raw 명시(해외선물) > 자동(선물 0.05pt×100=5,
  * 주식 1원×100=100). raw는 주식·선물 모두 실제 × 100 스케일 (ls_chart.c parse_price_scaled) */
@@ -50,7 +55,7 @@ uint32_t tr_engine_set_ind_need(tr_engine_t *e, uint64_t instrument_id, uint32_t
         if (!was || !p->is_ovs) {
             return 0;
         }
-        added = (need & ~old) & (TR_NEED_CURVE | TR_NEED_OS | TR_NEED_VB | TR_NEED_WR);
+        added = (need & ~old) & (TR_NEED_CURVE | TR_NEED_OS | TR_NEED_VB | TR_NEED_WR | TR_NEED_RR);
         if (added == 0 || tr_ring_count(&p->bb.bars) == 0) {
             return 0;
         }
@@ -146,6 +151,61 @@ void tr_engine_replay_os(tr_pipeline_t *p) {
     }
     free(replay_fx);
     }
+}
+
+static void rr_reset(tr_pipeline_t *p) {
+    if (p == 0 || p->rr == 0) {
+        return;
+    }
+    tr_fxrr_drive_free(p->rr);
+    p->rr = 0;
+}
+
+static void rr_copy(tr_fxos_out_t *o, const tr_fxrr_drive_t *d) {
+    if (o == 0) {
+        return;
+    }
+    o->rr_dir = tr_fxrr_drive_entry(d);
+    o->rr_exit_dir = tr_fxrr_drive_exit(d);
+    o->rr_qty = tr_fxrr_drive_entry_qty(d);
+    o->rr_exit_qty = tr_fxrr_drive_exit_qty(d);
+    snprintf(o->rr_name, sizeof(o->rr_name), "%s", tr_fxrr_drive_entry_name(d));
+    snprintf(o->rr_exit_name, sizeof(o->rr_exit_name), "%s", tr_fxrr_drive_exit_name(d));
+}
+
+/* 수익비. 엔진 봉은 raw(×100)라 포인트로 나눠 넣는다. */
+static void rr_apply(tr_pipeline_t *p, tr_fxos_out_t *o, int64_t date, int64_t tod,
+                     tr_time_us_t bar_open, double open, double high, double low,
+                     double close, double volume) {
+    tr_fxrr_bar_t bar;
+    double unit = 100.0;
+    double ps;
+    if (p == 0 || o == 0) {
+        return;
+    }
+    ps = tick_scale(p) / unit;
+    if (!(ps > 0.0)) {
+        ps = 0.25;
+    }
+    if (p->rr == 0) {
+        p->rr = tr_fxrr_drive_new(ps);
+    }
+    if (p->rr == 0) {
+        return;
+    }
+    memset(&bar, 0, sizeof(bar));
+    bar.date = date;
+    bar.time = tod;
+    bar.bar_open = bar_open;
+    bar.open = open / unit;
+    bar.high = high / unit;
+    bar.low = low / unit;
+    bar.close = close / unit;
+    bar.volume = volume;
+    bar.price_scale = ps;
+    bar.is_new_bar = 1;
+    tr_fxrr_drive_bar(p->rr, &bar);
+    rr_copy(o, p->rr);
 }
 
 static void v66_reset(tr_pipeline_t *p) {
@@ -360,6 +420,33 @@ static void replay_vb(tr_pipeline_t *p) {
     }
 }
 
+static void replay_rr(tr_pipeline_t *p) {
+    size_t n;
+    size_t back;
+    if (p == 0 || !p->is_ovs) {
+        return;
+    }
+    rr_reset(p);
+    n = tr_ring_count(&p->bb.bars);
+    for (back = n; back-- > 0;) {
+        tr_candle_t bar;
+        tr_bar_status_t *st;
+        int64_t date = 0;
+        int64_t tod = 0;
+        if (!tr_ring_at(&p->bb.bars, back, &bar)) {
+            continue;
+        }
+        civil_stamp(bar.open_time_us, p->session.utc_offset_min, &date, &tod);
+        st = status_slot_mut(p, bar.open_time_us);
+        if (st == 0) {
+            continue;
+        }
+        rr_apply(p, &st->os_full, date, tod, bar.open_time_us,
+                 (double)bar.open, (double)bar.high, (double)bar.low,
+                 (double)bar.close, (double)bar.volume);
+    }
+}
+
 static void replay_wr(tr_pipeline_t *p) {
     size_t n;
     size_t back;
@@ -412,6 +499,9 @@ static void replay_ind(tr_pipeline_t *p, uint32_t old_need, uint32_t added) {
     }
     if ((added & TR_NEED_WR) != 0) {
         replay_wr(p);
+    }
+    if ((added & TR_NEED_RR) != 0) {
+        replay_rr(p);
     }
 }
 
@@ -1644,6 +1734,7 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         bool want_os = !p->ind_need_set || (p->ind_need & TR_NEED_OS) != 0;
         bool want_snco = !p->ind_need_set || (p->ind_need & TR_NEED_SNCO) != 0;
         bool want_wr = !p->ind_need_set || (p->ind_need & TR_NEED_WR) != 0;
+        bool want_rr = !p->ind_need_set || (p->ind_need & TR_NEED_RR) != 0;
         bool want_mirae = want_curve || want_gap || want_snco;
         if (want_mirae) {
         tr_fxmirae_eval(&p->fx, &fin);
@@ -1801,6 +1892,10 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
         if (want_wr) {
             tr_fxos_wr_bar(&p->os_scope, &oin);
         }
+        if (want_rr) {
+            rr_apply(p, &p->os_scope.out, oin.date, oin.time, oin.bar_open,
+                     oin.open, oin.high, oin.low, oin.close, oin.volume);
+        }
         if (want_os) {
             osout = p->os_scope.out;
             v66_apply(p, &osout, oin.date, oin.time, oin.bar_open,
@@ -1813,6 +1908,12 @@ static void engine_on_bar(void *ctx, const tr_event_envelope_t *env, const tr_ca
             osout.wr_exit_qty = p->os_scope.out.wr_exit_qty;
             memcpy(osout.wr_name, p->os_scope.out.wr_name, sizeof(osout.wr_name));
             memcpy(osout.wr_exit_name, p->os_scope.out.wr_exit_name, sizeof(osout.wr_exit_name));
+            osout.rr_dir = p->os_scope.out.rr_dir;
+            osout.rr_exit_dir = p->os_scope.out.rr_exit_dir;
+            osout.rr_qty = p->os_scope.out.rr_qty;
+            osout.rr_exit_qty = p->os_scope.out.rr_exit_qty;
+            memcpy(osout.rr_name, p->os_scope.out.rr_name, sizeof(osout.rr_name));
+            memcpy(osout.rr_exit_name, p->os_scope.out.rr_exit_name, sizeof(osout.rr_exit_name));
         }
         }
         if (want_curve) {

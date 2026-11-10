@@ -14,6 +14,8 @@ ARRAYS = {
     "회복진폭4": 391, "회복진폭5": 391,
     "회복량오늘": 391, "회복량1": 391, "회복량2": 391, "회복량3": 391,
     "회복량4": 391, "회복량5": 391,
+    "진세션오늘": 1441, "진세션1": 1441, "진세션2": 1441, "진세션3": 1441,
+    "진세션4": 1441, "진세션5": 1441,
 }
 
 
@@ -187,15 +189,32 @@ def e_prim(p):
         c = expr(p)
         p.need(")")
         return f"({a} ? {b} : {c})"
-    if name in ("Max", "Min", "Abs"):
+    if name in ("Max", "Min", "Abs", "AbsValue"):
         p.need("(")
         args = [expr(p)]
         while p.peek()[1] == ",":
             p.take()
             args.append(expr(p))
         p.need(")")
-        fn = {"Max": "yl_max", "Min": "yl_min", "Abs": "fabs"}[name]
+        fn = {"Max": "yl_max", "Min": "yl_min", "Abs": "fabs", "AbsValue": "fabs"}[name]
         return f"{fn}({', '.join(args)})"
+    if name == "PositionProfit":
+        p.need("(")
+        n = expr(p)
+        p.need(")")
+        return f"yl_pos_profit(s, {n})"
+    if name == "BarsSinceExit":
+        p.need("(")
+        n = expr(p)
+        p.need(")")
+        return f"yl_bars_since_exit(s, {n})"
+    if name == "IsEntryName":
+        p.need("(")
+        label = expr(p)
+        p.need(",")
+        n = expr(p)
+        p.need(")")
+        return f"yl_is_entry_name(s, {label}, {n})"
     if name == "IntPortion":
         p.need("(")
         a = expr(p)
@@ -247,6 +266,8 @@ def e_prim(p):
                 p.take()
                 args.append(expr(p))
         p.need(")")
+        if name == "WSF_FXSyntheticLinesV1" and args:
+            return f"yl_{name}(s, b, (int)({args[0]}))"
         return f"yl_{name}(s, b)"
     if p.peek()[1] == "(":
         p.take()
@@ -449,7 +470,9 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     arrs = [("도달기록", 50), ("회복진폭오늘", 391), ("회복진폭1", 391), ("회복진폭2", 391),
             ("회복진폭3", 391), ("회복진폭4", 391), ("회복진폭5", 391),
             ("회복량오늘", 391), ("회복량1", 391), ("회복량2", 391), ("회복량3", 391),
-            ("회복량4", 391), ("회복량5", 391)]
+            ("회복량4", 391), ("회복량5", 391),
+            ("진세션오늘", 1441), ("진세션1", 1441), ("진세션2", 1441), ("진세션3", 1441),
+            ("진세션4", 1441), ("진세션5", 1441)]
     h = ["#ifndef TR_FX_WR_YL_H", "#define TR_FX_WR_YL_H",
          "#include <stdint.h>", '#include "core/backtest/yl_fill.h"', ""]
     h.append("enum {")
@@ -463,6 +486,7 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     h.append("    YL_A_N")
     h.append("};")
     h.append("#define YL_LAG 32")
+    h.append("#define YL_ARR_LEN 1441")
     h.append("typedef struct {")
     h.append("    int64_t date, time, bar_open;")
     h.append("    double open, high, low, close, volume, price_scale;")
@@ -476,8 +500,9 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     h.append("} tr_fxwr_ord_t;")
     h.append("typedef struct tr_fxwr {")
     h.append("    double cur[YL_F_N];")
+    h.append("    double open_cur[YL_F_N];")
     h.append("    double lag[YL_LAG][YL_F_N];")
-    h.append("    double arr[YL_A_N][391];")
+    h.append("    double arr[YL_A_N][YL_ARR_LEN];")
     h.append("    double ph[64], hh[64], lh[64], ch[64], vh[64];")
     h.append("    int hist_n;")
     h.append("    int bar_n;")
@@ -485,8 +510,23 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     h.append("    int inited;")
     h.append("    tr_fxwr_ord_t ords[24];")
     h.append("    int mkt_side;")
+    h.append("    double last_o, last_h, last_l, last_c, last_v;")
+    h.append("    int64_t last_date, last_time;")
+    h.append("    void *eng;")
+    h.append("    int exit_ok;")
+    h.append("    int exit_bar;")
+    h.append("    double exit_pnl;")
+    h.append("    char exit_name[64];")
+    h.append("    int open_active;")
+    h.append("    double open_pnl;")
+    h.append("    char open_entry[64];")
     h.append("} tr_fxwr_t;")
+    h.append("void tr_fxwr_load_defaults(tr_fxwr_t *s);")
     h.append("void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b);")
+    h.append("void tr_fxwr_on_bar(tr_fxwr_t *s, const tr_fxwr_bar_t *b);")
+    h.append("double yl_pos_profit(const tr_fxwr_t *s, double n);")
+    h.append("double yl_bars_since_exit(const tr_fxwr_t *s, double n);")
+    h.append("double yl_is_entry_name(const tr_fxwr_t *s, const char *name, double n);")
     h.append("double yl_lag(const tr_fxwr_t *s, int id, double k);")
     h.append("double yl_px(const tr_fxwr_t *s, char which, double k);")
     h.append("double yl_arr(const tr_fxwr_t *s, int id, int i);")
@@ -501,7 +541,10 @@ void tr_fxwr_yl_body(tr_fxwr_t *s, const tr_fxwr_bar_t *b) {
     h.append("static inline double yl_at(double v, double i) { (void)i; return v; }")
     h.append("void yl_order(tr_fxwr_t *s, int action, int price_type, double price, int qty, const char *name);")
     for w in sorted(set(re.findall(r"yl_(WSF_[A-Za-z0-9_]+)", code))):
-        h.append(f"double yl_{w}(tr_fxwr_t *s, const tr_fxwr_bar_t *b);")
+        if w == "WSF_FXSyntheticLinesV1":
+            h.append(f"double yl_{w}(tr_fxwr_t *s, const tr_fxwr_bar_t *b, int minutes);")
+        else:
+            h.append(f"double yl_{w}(tr_fxwr_t *s, const tr_fxwr_bar_t *b);")
     h.append("#endif")
     (ROOT / "src/core/signals/fx_wr_yl.h").write_text("\n".join(h) + "\n")
     init = ROOT / "src/core/signals/fx_wr_init.inc"

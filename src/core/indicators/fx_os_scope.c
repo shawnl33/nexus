@@ -1423,8 +1423,9 @@ int tr_fxos_format(char *buf, size_t cap, const tr_fxos_out_t *o) {
     if (n < 0 || (size_t)m + (size_t)n >= cap) return -1;
     m += n;
     /* 241~246. 본장전용 V66C 실제진입·그림자·DI. */
-    n = snprintf(buf + m, cap - (size_t)m, ",%d,%.10g,%u,%.10g,%u,%u",
-                 o->v66_on, o->v66_real, o->v66_real_rgb, o->v66_shadow, o->v66_shadow_rgb, o->v66_di_rgb);
+    n = snprintf(buf + m, cap - (size_t)m, ",%d,%.10g,%u,%.10g,%u,%u,%d,%d,\"%s\",\"%s\",%d,%d",
+                 o->v66_on, o->v66_real, o->v66_real_rgb, o->v66_shadow, o->v66_shadow_rgb, o->v66_di_rgb,
+                 o->rr_dir, o->rr_exit_dir, o->rr_name, o->rr_exit_name, o->rr_qty, o->rr_exit_qty);
     if (n < 0 || (size_t)m + (size_t)n >= cap) return -1;
     return m + n;
 }

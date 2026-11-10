@@ -110,6 +110,9 @@ add_library(core STATIC
     src/core/paintbar/fx_judge_paint95.c
     ${CMAKE_SOURCE_DIR}/../nakedstrike/src/core/paintbar/fx_judge_v66_rt.c
     ${CMAKE_SOURCE_DIR}/../nakedstrike/src/core/paintbar/fx_judge_v66_yl.c
+    ${CMAKE_SOURCE_DIR}/../nakedstrike/src/core/signals/fx_rr_rt.c
+    ${CMAKE_SOURCE_DIR}/../nakedstrike/src/core/signals/fx_rr_yl.c
+    ${CMAKE_SOURCE_DIR}/../nakedstrike/src/core/signals/fx_rr_drive.c
     src/core/signals/fx_wr_rt.c
     src/core/signals/fx_wr_yl.c
     src/core/signals/volburst_strangle.c

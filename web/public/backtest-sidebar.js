@@ -37,6 +37,7 @@ const BtSide = (() => {
     fx_sig_pair: { createHandle: (chart) => OsLayers.sigHandle(chart, "pair") },
     fx_sig_zd: { createHandle: (chart) => OsLayers.sigHandle(chart, "zd") },
     fx_wr: { createHandle: (chart) => OsLayers.sigHandle(chart, "wr") },
+    fx_rr: { createHandle: (chart) => OsLayers.sigHandle(chart, "rr") },
     fx_pnl: { createHandle: (chart) => OsLayers.pnlHandle(chart) },
     fx_pos_v1: { createHandle: (chart) => OsLayers.posHandle(chart, 1) },
     fx_pos_v2: { createHandle: (chart) => OsLayers.posHandle(chart, 2) },
@@ -602,6 +603,7 @@ const BtSide = (() => {
     const pane = frame?.panes?.[0];
     const ids = [];
     if (pane?.systems?.has("fx_wr") || pane?.wanted?.has("fx_wr")) ids.push("fx_wr");
+    if (pane?.systems?.has("fx_rr") || pane?.wanted?.has("fx_rr")) ids.push("fx_rr");
     if (pane?.systems?.has("pair-long")) ids.push("pair-long");
     if (pane?.systems?.has("pair-short")) ids.push("pair-short");
     if (pane?.wanted?.has("fx_sig_v6")) ids.push("fx_sig_v6");

@@ -89,6 +89,7 @@ const RENDERERS = {
   fx_sig_pair: { createHandle: (chart) => OsLayers.sigHandle(chart, "pair") },
   fx_sig_zd: { createHandle: (chart) => OsLayers.sigHandle(chart, "zd") },
   fx_wr: { createHandle: (chart) => OsLayers.sigHandle(chart, "wr") },
+  fx_rr: { createHandle: (chart) => OsLayers.sigHandle(chart, "rr") },
   fx_pnl: { createHandle: (chart) => OsLayers.pnlHandle(chart) },
   fx_pos_v1: { createHandle: (chart) => OsLayers.posHandle(chart, 1) },
   fx_pos_v2: { createHandle: (chart) => OsLayers.posHandle(chart, 2) },

@@ -163,6 +163,13 @@ typedef struct {
     double v66_shadow;
     uint32_t v66_shadow_rgb;
     uint32_t v66_di_rgb;
+    /* 247~252. 본장전용 V66C 수익비 신호. */
+    int rr_dir;
+    int rr_exit_dir;
+    char rr_name[64];
+    char rr_exit_name[64];
+    int rr_qty;
+    int rr_exit_qty;
 } tr_fxos_out_t;
 
 /* 진입신호매매 Input 중 이 계산이 봉마다 읽는 값. 비어 있으면 식의 기본값. */
