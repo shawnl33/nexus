@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/model/civil_time.h"
@@ -37,6 +38,61 @@ static int yl_dow(int64_t bdate) {
     return (int)wd;
 }
 
+static int long_save_ok(const tr_wplot_config_t *cfg, const tr_wplot_bar_t *b) {
+    double sum;
+    double gap;
+    double px;
+    if (!(b->close > 0.0) || !(b->d3_close > 0.0)) {
+        return 0;
+    }
+    sum = b->close + b->d3_close;
+    gap = b->close - b->d3_close;
+    if (gap < 0.0) {
+        gap = -gap;
+    }
+    if (b->d2_day_index < 30 && gap > sum * 0.075) {
+        return 0;
+    }
+    px = (b->close + b->d3_close) / 2.0;
+    if (cfg->meet_mode == 1) {
+        px = (dmax(b->low, b->d3_low) + dmin(b->high, b->d3_high)) / 2.0;
+    }
+    if (!(px >= 2.1) || !(px < 5.0)) {
+        return 0;
+    }
+    if (b->d2_day_index <= 45 && !(px < 4.0) && !(gap < sum * 0.075)) {
+        return 0;
+    }
+    if (b->d2_day_index < 90) {
+        double rate;
+        if (!b->d2_has_gap || !(b->d2_prev_close > 0.0) || !(b->d2_day_open > 0.0)) {
+            return 0;
+        }
+        rate = b->d2_day_open - b->d2_prev_close;
+        if (rate < 0.0) {
+            rate = -rate;
+        }
+        rate = rate / b->d2_prev_close * 100.0;
+        if (rate >= 1.0 && px < 2.3) {
+            return 0;
+        }
+    }
+    if (px < 3.0) {
+        if (!(gap < sum * 0.125)) {
+            return 0;
+        }
+    } else if (!(gap < sum * 0.10)) {
+        return 0;
+    }
+    return 1;
+}
+
+static int minute_of(int64_t hhmmss) {
+    int64_t hour = hhmmss / 10000;
+    int64_t minute = (hhmmss / 100) % 100;
+    return (int)(hour * 60 + minute);
+}
+
 static int self_1m(const tr_wplot_bar_t *b) {
     return b->compress == 2 && b->interval == 1;
 }
@@ -47,6 +103,27 @@ static int d3_1m(const tr_wplot_bar_t *b) {
 
 static int d2_1m(const tr_wplot_bar_t *b) {
     return b->d2_compress == 2 && b->d2_interval == 1;
+}
+
+/* 프라이스링크 양매수 1481~1503. 오전 60 이하는 삼선 상한만, 60 초과는 가격비율 100 미만.
+ * 오후는 오전 고가가 20을 넘은 적이 있으면 70 이하, 없으면 오후 상한 이하. */
+static int long_three_ok(const tr_wplot_config_t *cfg, const tr_wplot_bar_t *b, int morn_high) {
+    double applied;
+    if (!(b->d2_date == b->sdate && d2_1m(b) && b->three_ready == 1 && b->three_peak > 0.0)) {
+        return 0;
+    }
+    if (b->d2_day_index < imax(0, cfg->afternoon_switch)) {
+        int under;
+        applied = dmin(70.0, cfg->morning_three_max);
+        under = b->three_ratio < applied;
+        if (b->three_ratio <= 60.0) {
+            return under;
+        }
+        return under && b->d2_time == b->stime && b->calc_ready == 1 && b->break_ready == 1 &&
+               b->two_max > 0.0 && b->price_ratio < 100.0;
+    }
+    applied = morn_high ? 70.0 : dmin(50.0, cfg->afternoon_three_max);
+    return b->three_ratio <= applied;
 }
 
 void tr_wplot_default_config(tr_wplot_config_t *cfg) {
@@ -60,6 +137,7 @@ void tr_wplot_default_config(tr_wplot_config_t *cfg) {
     cfg->morning_three_max = 70.0;
     cfg->afternoon_three_max = 50.0;
     cfg->entry_start_time = 90000;
+    cfg->flat_time = 151500;
 }
 
 int tr_wplot_init(tr_wplot_t *st, int side, const tr_wplot_config_t *cfg) {
@@ -90,21 +168,42 @@ int tr_wplot_eval(tr_wplot_t *st, const tr_wplot_bar_t *bar, tr_wplot_out_t *out
         st->valid = 0;
         st->saved_bdate = bar->bdate;
         st->has_day = 1;
+        st->open_target_min = -1;
+        st->self_open = 0.0;
+        st->opp_open = 0.0;
+    }
+    if (st->side == TR_WPLOT_LONG && st->high_date != bar->bdate) {
+        st->high_date = bar->bdate;
+        st->morn_hi_self = 0;
+        st->morn_hi_opp = 0;
+        st->morn_hi_any = 0;
+        st->high_block = 0;
+    }
+    if (st->side == TR_WPLOT_LONG && bar->d2_date == bar->sdate &&
+        bar->d2_day_index < imax(0, cfg->afternoon_switch)) {
+        if (bar->high > 20.0) {
+            st->morn_hi_self++;
+            st->morn_hi_any = 1;
+        }
+        if (bar->d3_date == bar->sdate && bar->d3_high > 20.0) {
+            st->morn_hi_opp++;
+            st->morn_hi_any = 1;
+        }
+        if (st->morn_hi_self >= 3 || st->morn_hi_opp >= 3) {
+            st->high_block = 1;
+        }
     }
     tol = cfg->tolerance > 0.0 ? cfg->tolerance : 0.0;
     if (st->side == TR_WPLOT_LONG) {
-        const double applied = bar->d2_day_index < imax(0, cfg->afternoon_switch)
-                                   ? cfg->morning_three_max
-                                   : cfg->afternoon_three_max;
-        int three_ok = bar->d2_date == bar->sdate && d2_1m(bar) && bar->three_ready == 1 &&
-                       bar->three_peak > 0.0 && bar->three_ratio < applied;
-        /* 금요일 오전만 동시각 가격비율 100 미만. 양매수.txt 739~743. */
-        if (yl_dow(bar->bdate) == 5 && bar->d2_day_index < imax(0, cfg->afternoon_switch)) {
-            three_ok = three_ok && bar->d2_time == bar->stime && bar->calc_ready == 1 &&
-                       bar->break_ready == 1 && bar->two_max > 0.0 && bar->price_ratio < 100.0;
-        }
-        track = cfg->trade_off == 0 && self_1m(bar) && three_ok &&
-                bar->d2_day_index >= imax(0, cfg->entry_start_bar);
+        const int three_ok = long_three_ok(cfg, bar, st->morn_hi_any);
+        const int release = bar->sq_release && bar->three_ready == 1 && bar->three_peak > 0.0 &&
+                            bar->three_ratio <= 100.0;
+        const int wide = bar->sq_ready && bar->sq_ratio >= 50.0;
+        const int start = imax(30, imax(0, cfg->entry_start_bar));
+        track = cfg->trade_off == 0 && self_1m(bar) && wide && (three_ok || release) &&
+                bar->d2_date == bar->sdate && bar->d2_time == bar->stime &&
+                bar->d2_day_index >= start && bar->stime < cfg->flat_time &&
+                bar->next_sdate == bar->sdate && bar->next_stime < cfg->flat_time;
     } else {
         const int dow = yl_dow(bar->bdate);
         const int day_ok = (dow == 2 || dow == 3 || dow == 5) && d2_1m(bar);
@@ -119,7 +218,13 @@ int tr_wplot_eval(tr_wplot_t *st, const tr_wplot_bar_t *bar, tr_wplot_out_t *out
             meet = bar->close - tol <= bar->d3_close && bar->close + tol >= bar->d3_close;
         }
     }
-    if (track && !st->valid && meet && bar->close > 0.0) {
+    if (st->side == TR_WPLOT_LONG &&
+        (!long_save_ok(cfg, bar) || st->high_block ||
+         (bar->d2_day_index < imax(0, cfg->afternoon_switch) && st->morn_hi_any))) {
+        meet = 0;
+    }
+    if (track && !st->valid && meet && bar->close > 0.0 &&
+        (st->side != TR_WPLOT_LONG || (bar->close > 1.5 && bar->d3_close > 1.5))) {
         if (cfg->meet_mode == 1) {
             st->stored = (dmax(bar->low, bar->d3_low) + dmin(bar->high, bar->d3_high)) / 2.0;
         } else {
@@ -128,17 +233,32 @@ int tr_wplot_eval(tr_wplot_t *st, const tr_wplot_bar_t *bar, tr_wplot_out_t *out
         st->self_meet = bar->close;
         st->opp_meet = bar->d3_close;
         st->valid = 1;
+        st->open_target_min = minute_of(bar->stime) + 1;
+        st->self_open = 0.0;
+        st->opp_open = 0.0;
+    }
+    if (st->side == TR_WPLOT_LONG && st->valid && st->open_target_min >= 0) {
+        if (!(st->self_open > 0.0) && minute_of(bar->stime) == st->open_target_min && bar->open > 0.0) {
+            st->self_open = bar->open;
+            st->open_date = bar->sdate;
+            st->open_time = bar->stime;
+        }
+        if (st->self_open > 0.0 && !(st->opp_open > 0.0) && bar->d3_date == st->open_date &&
+            bar->d3_time == st->open_time && bar->d3_open > 0.0) {
+            st->opp_open = bar->d3_open;
+        }
     }
     if (self_1m(bar) && st->valid) {
         out->link_on = 1;
         out->link = st->stored;
     }
-    if (self_1m(bar) && d3_1m(bar) && st->valid && st->self_meet > 0.0 && st->opp_meet > 0.0 &&
-        bar->close > 0.0 && bar->d3_close > 0.0 && bar->d3_date == bar->sdate &&
-        bar->d3_time == bar->stime) {
+    if (self_1m(bar) && d3_1m(bar) && st->valid && bar->close > 0.0 && bar->d3_close > 0.0 &&
+        bar->d3_date == bar->sdate && bar->d3_time == bar->stime &&
+        ((st->side == TR_WPLOT_LONG && st->self_open > 0.0 && st->opp_open > 0.0) ||
+         (st->side != TR_WPLOT_LONG && st->self_meet > 0.0 && st->opp_meet > 0.0))) {
         out->ret_on = 1;
         if (st->side == TR_WPLOT_LONG) {
-            out->ret = ((bar->close / st->self_meet - 1.0) + (bar->d3_close / st->opp_meet - 1.0)) * 50.0;
+            out->ret = ((bar->close / st->self_open - 1.0) + (bar->d3_close / st->opp_open - 1.0)) * 50.0;
         } else {
             out->ret =
                 ((1.0 - bar->close / st->self_meet) + (1.0 - bar->d3_close / st->opp_meet)) * 50.0;
@@ -197,7 +317,14 @@ int tr_wplot_replay(tr_wplot_t *st, const tr_wpair_pxbar_t *self, size_t nself,
     size_t fed = 0;
     size_t opp_at = 0;
     size_t fut_at = 0;
+    int64_t gap_ymd = 0;
+    double gap_open = 0.0;
+    double gap_prev = 0.0;
+    double gap_last = 0.0;
+    int gap_has_prev = 0;
+    int gap_has_today = 0;
     int long_side;
+    tr_wsq_point_t *sq = 0;
 
     if (st == 0 || (nself > 0 && self == 0) || (nopp > 0 && opp == 0) || (nfut > 0 && fut == 0) ||
         nlink == 0 || nret == 0 || (link_cap > 0 && link == 0) || (ret_cap > 0 && ret == 0)) {
@@ -220,6 +347,13 @@ int tr_wplot_replay(tr_wplot_t *st, const tr_wpair_pxbar_t *self, size_t nself,
             return -1;
         }
     }
+    if (nfut > 0) {
+        sq = calloc(nfut, sizeof(*sq));
+        if (sq == 0 || tr_wsq_eval(fut, nfut, 0, sq) != 0) {
+            free(sq);
+            return -1;
+        }
+    }
 
     for (size_t i = 0; i < nself; i++) {
         const tr_wpair_pxbar_t *s = &self[i];
@@ -231,6 +365,16 @@ int tr_wplot_replay(tr_wplot_t *st, const tr_wpair_pxbar_t *self, size_t nself,
         if (long_side) {
             while (fed < nfut && fut[fed].open_us <= s->open_us) {
                 tr_ksscore_input_t in;
+                if (fut[fed].ymd != gap_ymd) {
+                    if (gap_has_today) {
+                        gap_prev = gap_last;
+                        gap_has_prev = 1;
+                    }
+                    gap_ymd = fut[fed].ymd;
+                    gap_open = fut[fed].open;
+                    gap_has_today = 1;
+                }
+                gap_last = fut[fed].close;
                 memset(&in, 0, sizeof(in));
                 in.bdate = fut[fed].ymd;
                 in.day_index = fut[fed].day_index;
@@ -250,8 +394,11 @@ int tr_wplot_replay(tr_wplot_t *st, const tr_wpair_pxbar_t *self, size_t nself,
         bar.bdate = s->ymd;
         bar.sdate = s->ymd;
         bar.stime = s->hhmmss;
+        bar.next_sdate = i + 1 < nself ? self[i + 1].ymd : s->ymd;
+        bar.next_stime = i + 1 < nself ? self[i + 1].hhmmss : s->hhmmss;
         bar.compress = 2;
         bar.interval = 1;
+        bar.open = s->open;
         bar.high = s->high;
         bar.low = s->low;
         bar.close = s->close;
@@ -263,6 +410,7 @@ int tr_wplot_replay(tr_wplot_t *st, const tr_wpair_pxbar_t *self, size_t nself,
             bar.d3_time = o->hhmmss;
             bar.d3_compress = 2;
             bar.d3_interval = 1;
+            bar.d3_open = o->open;
             bar.d3_high = o->high;
             bar.d3_low = o->low;
             bar.d3_close = o->close;
@@ -275,20 +423,34 @@ int tr_wplot_replay(tr_wplot_t *st, const tr_wpair_pxbar_t *self, size_t nself,
             bar.d2_compress = 2;
             bar.d2_interval = 1;
             bar.d2_day_index = f->day_index;
+            if (gap_has_prev && gap_has_today && f->ymd == gap_ymd) {
+                bar.d2_has_gap = 1;
+                bar.d2_prev_close = gap_prev;
+                bar.d2_day_open = gap_open;
+            }
+            if (sq != 0) {
+                bar.sq_ready = sq[fi].ready;
+                bar.sq_ratio = sq[fi].ratio;
+                bar.sq_release = sq[fi].release;
+            }
             if (long_side && fed > 0 && px_key(&fut[fed - 1]) == px_key(s)) {
                 apply_score(&bar, &g_wplot_score.out);
             }
         }
         if (tr_wplot_eval(st, &bar, &out) != 0) {
+            free(sq);
             return -1;
         }
         if (out.link_on && push_pt(link, link_cap, nlink, s->open_us / INT64_C(1000000), out.link) != 0) {
+            free(sq);
             return -1;
         }
         if (out.ret_on && push_pt(ret, ret_cap, nret, s->open_us / INT64_C(1000000), out.ret) != 0) {
+            free(sq);
             return -1;
         }
     }
+    free(sq);
     return 0;
 }
 

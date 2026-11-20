@@ -1,7 +1,9 @@
 #include "core/signals/weekly_pair_v1.h"
 
 #include "core/backtest/yl_fill.h"
+#include "core/functions/fx_session_profile_v2.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/model/civil_time.h"
@@ -67,7 +69,18 @@ static void mark_order(tr_wpair_rt *r, int kind, int32_t qty, int reason, const 
     r->order_name = name;
 }
 
-static const char *exit_all_name(int reason, int v45) {
+static const char *path_exit_name(const tr_wpair_rt *r, const char *three, const char *squeeze,
+                                  const char *plain) {
+    if (r->entry_path == 1) {
+        return three;
+    }
+    if (r->entry_path == 2) {
+        return squeeze;
+    }
+    return plain;
+}
+
+static const char *exit_all_name(int reason, int v12) {
     switch (reason) {
     case 1:
         return "합산익절";
@@ -82,11 +95,13 @@ static const char *exit_all_name(int reason, int v45) {
     case 10:
         return "잔량익절보호";
     case 11:
-        return v45 ? "만기익절2차최종" : "만기잔량익절";
+        return v12 ? "만기익절2차최종" : "만기잔량익절";
     case 12:
         return "만기잔량손실청산";
     case 14:
-        return "만기2차추적청산";
+        return v12 ? "2차추적청산" : "만기2차추적청산";
+    case 16:
+        return "잔량1차절반손절";
     default:
         return "기타청산";
     }
@@ -130,6 +145,16 @@ static void reset_day(tr_wpair_rt *r) {
     r->model_notional = 0;
     r->self_first = 0;
     r->opp_first = 0;
+    r->self_entry = 0;
+    r->opp_entry = 0;
+    r->open_target_min = -1;
+    r->rec_meet = 0;
+    r->rec_bar = -1;
+    r->rec_fire_bar = -1;
+    r->rec_total = 0;
+    r->rec_loss = 0;
+    r->rec_cur_loss = 0;
+    r->rec_date = 0;
 }
 
 static void apply_fill(tr_wpair_rt *r, int side) {
@@ -141,12 +166,101 @@ static void apply_fill(tr_wpair_rt *r, int side) {
         if (r->contracts <= 0) {
             r->contracts = 0;
             r->market_position = 0;
+            r->entry_path = 0;
         }
     } else if (r->order_kind == TR_WPAIR_ORDER_EXIT_ALL) {
         r->contracts = 0;
         r->market_position = 0;
+        r->entry_path = 0;
     }
     clear_order(r);
+}
+
+static int minute_of(int64_t hhmmss) {
+    int64_t hour = hhmmss / 10000;
+    int64_t minute = (hhmmss / 100) % 100;
+    return (int)(hour * 60 + minute);
+}
+
+static double meet_px(const tr_wpair_config_t *cfg, const tr_wpair_bar_t *b) {
+    if (cfg->meet_mode == 1) {
+        return (dmax(b->low, b->d3_low) + dmin(b->high, b->d3_high)) / 2.0;
+    }
+    return (b->close + b->d3_close) / 2.0;
+}
+
+/* V14 양매수 첫 진입. 30봉 미만 종가간격 15%, 만남가격 2.1 이상,
+ * 45봉까지 4.0 이상은 종가간격이 15% 미만일 때만.
+ * 전 구간은 만남가격 3 미만이면 간격 25% 미만, 3 이상이면 20% 미만. */
+static int long_entry_px_ok(const tr_wpair_config_t *cfg, const tr_wpair_bar_t *b) {
+    double sum;
+    double gap;
+    double px;
+    if (!(b->close > 0.0) || !(b->d3_close > 0.0)) {
+        return 0;
+    }
+    sum = b->close + b->d3_close;
+    gap = b->close - b->d3_close;
+    if (gap < 0.0) {
+        gap = -gap;
+    }
+    if (b->d2_day_index < 30 && gap > sum * 0.075) {
+        return 0;
+    }
+    px = (b->close + b->d3_close) / 2.0;
+    if (cfg->meet_mode == 1) {
+        px = (dmax(b->low, b->d3_low) + dmin(b->high, b->d3_high)) / 2.0;
+    }
+    if (!(px >= 2.1) || !(px < 5.0)) {
+        return 0;
+    }
+    if (b->d2_day_index <= 45 && !(px < 4.0) && !(gap < sum * 0.075)) {
+        return 0;
+    }
+    /* 90봉 전: 전일 종가가 없으면 막고, 갭 1% 이상이면서 만남가격 2.3 미만도 막는다. */
+    if (b->d2_day_index < 90) {
+        double rate;
+        if (!b->d2_has_gap || !(b->d2_prev_close > 0.0) || !(b->d2_day_open > 0.0)) {
+            return 0;
+        }
+        rate = b->d2_day_open - b->d2_prev_close;
+        if (rate < 0.0) {
+            rate = -rate;
+        }
+        rate = rate / b->d2_prev_close * 100.0;
+        if (rate >= 1.0 && px < 2.3) {
+            return 0;
+        }
+    }
+    if (px < 3.0) {
+        if (!(gap < sum * 0.125)) {
+            return 0;
+        }
+    } else if (!(gap < sum * 0.10)) {
+        return 0;
+    }
+    return 1;
+}
+
+/* 양매수 V12 2391~2423. 오전 60 이하는 삼선 상한만, 60 초과는 가격비율 100 미만이 더 필요하다.
+ * 오후는 오전 고가가 20을 넘은 적이 있으면 70 이하, 없으면 오후 상한 이하. */
+static int v12_three_ok(const tr_wpair_config_t *cfg, const tr_wpair_bar_t *b, int morn_high) {
+    double applied;
+    if (!(b->d2_date == b->sdate && d2_1m(b) && b->three_ready == 1 && b->three_peak > 0.0)) {
+        return 0;
+    }
+    if (b->d2_day_index < imax(0, cfg->afternoon_switch_bar)) {
+        int under;
+        applied = dmin(70.0, cfg->morning_three_max);
+        under = b->three_ratio < applied;
+        if (b->three_ratio <= 60.0) {
+            return under;
+        }
+        return under && b->d2_time == b->stime && b->calc_ready == 1 && b->break_ready == 1 &&
+               b->two_max > 0.0 && b->price_ratio < 100.0;
+    }
+    applied = morn_high ? 70.0 : dmin(50.0, cfg->afternoon_three_max);
+    return b->three_ratio <= applied;
 }
 
 static int ranges_meet(const tr_wpair_config_t *cfg, const tr_wpair_bar_t *b) {
@@ -166,15 +280,37 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
     const int side = st->side;
     const int held = r->market_position == side;
     const double sgn = (double)side;
-    const int v45 = side == TR_WPAIR_LONG && cfg->ruleset == TR_WPAIR_RULES_V45;
+    const int v12 = side == TR_WPAIR_LONG && cfg->ruleset == TR_WPAIR_RULES_V12;
     const int expiry = yl_dow(b->bdate) == 1 || yl_dow(b->bdate) == 4 ||
-                       (v45 && cfg->expiry_override == 1);
+                       (v12 && cfg->expiry_override == 1);
     const int period_ok = b->compress == 2 && b->interval == 1 && b->d3_compress == 2 &&
                           b->d3_interval == 1;
     const int synced = b->d3_date == b->sdate && b->d3_time == b->stime && b->close > 0.0 &&
                        b->d3_close > 0.0;
 
     clear_order(r);
+
+    if (side > 0 && r->high_date != b->bdate) {
+        r->high_date = b->bdate;
+        r->morn_hi_self = 0;
+        r->morn_hi_opp = 0;
+        r->high_block = 0;
+        r->morn_hi_any = 0;
+    }
+    if (side > 0 && b->d2_date == b->sdate &&
+        b->d2_day_index < imax(0, cfg->afternoon_switch_bar)) {
+        if (b->high > 20.0) {
+            r->morn_hi_self++;
+            r->morn_hi_any = 1;
+        }
+        if (b->d3_date == b->sdate && b->d3_high > 20.0) {
+            r->morn_hi_opp++;
+            r->morn_hi_any = 1;
+        }
+        if (r->morn_hi_self >= 3 || r->morn_hi_opp >= 3) {
+            r->high_block = 1;
+        }
+    }
 
     /* 양매수.txt 718~765. 남은 포지션과 진입대기는 날짜가 바뀌어도 유지하고 청산이 우선. */
     if (r->saved_date != b->bdate) {
@@ -188,30 +324,57 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
         }
     }
 
-    /* 양매수.txt 771~788. 모델은 신호 다음 봉, 같은 날, 동시봉일 때만 잠근다. */
+    /* 모델은 신호 다음 봉에서 잠근다. V14 양매수는 그 봉이 신호 시각+1분일 때만 시가를 쓴다. */
     if (held && !r->holding) {
         r->holding = 1;
+        r->three40_watch = 0;
+        r->three40_hit = 0;
         r->entry_pending = 0;
-        if (r->signal_date == b->bdate && b->index == r->signal_bar + 1 && synced) {
+        r->rec_bar = -1;
+        r->rec_fire_bar = -1;
+        r->rec_total = 0;
+        r->rec_loss = 0;
+        r->rec_cur_loss = 0;
+        r->rec_date = 0;
+        if (!v12 && r->signal_date == b->bdate && b->index == r->signal_bar + 1 && synced) {
             r->self_entry = r->self_first;
             r->opp_entry = r->opp_first;
             r->model_notional =
                 (r->self_first * (double)r->self_qty + r->opp_first * (double)r->opp_qty) * k_mult;
             r->model_valid = r->model_notional > 0.0;
-        } else {
+        } else if (!v12) {
             r->model_valid = 0;
+        }
+    }
+    if (v12 && held && r->holding && !r->model_valid && r->signal_date == b->bdate) {
+        if (!(r->self_entry > 0.0) && b->index == r->signal_bar + 1 &&
+            minute_of(b->stime) == r->open_target_min && b->open > 0.0) {
+            r->open_date = b->sdate;
+            r->open_time = b->stime;
+            r->self_entry = b->open;
+        }
+        if (r->self_entry > 0.0 && !(r->opp_entry > 0.0) && b->d3_date == r->open_date &&
+            b->d3_time == r->open_time && b->d3_open > 0.0) {
+            r->opp_entry = b->d3_open;
+        }
+        if (r->self_entry > 0.0 && r->opp_entry > 0.0 && r->self_qty > 0 && r->opp_qty > 0) {
+            r->model_notional =
+                (r->self_entry * (double)r->self_qty + r->opp_entry * (double)r->opp_qty) * k_mult;
+            r->model_valid = r->model_notional > 0.0;
         }
     }
 
     /* 양매수.txt 791~804, 양매도.txt 800·805. 장부는 이 차트만, 수량 감소 봉 시가. */
-    if (r->self_first > 0.0 && r->self_qty > 0 && (r->holding || r->book_qty > 0)) {
+    if ((r->self_entry > 0.0 || r->self_first > 0.0) && r->self_qty > 0 &&
+        (r->holding || r->book_qty > 0)) {
+        const double basis = r->self_entry > 0.0 ? r->self_entry : r->self_first;
         int32_t dropped = imax(0, r->book_qty - r->contracts);
-        r->book_principal = r->self_first * (double)r->self_qty * k_mult;
+        r->book_principal = basis * (double)r->self_qty * k_mult;
         if (dropped > 0) {
-            r->book_realized += sgn * (b->open - r->self_first) * (double)dropped * k_mult;
+            r->book_realized += sgn * (b->open - basis) * (double)dropped * k_mult;
         }
         r->book_qty = r->contracts;
-        r->book_unreal = sgn * (b->close - r->self_first) * (double)r->book_qty * k_mult;
+        r->book_unreal = sgn * (b->close - basis) * (double)r->book_qty * k_mult;
         r->book_total = r->book_realized + r->book_unreal;
         r->book_total_pct = r->book_total / r->book_principal * 100.0;
     }
@@ -257,6 +420,7 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
     }
 
     if (held) {
+        int rec_ok = 0;
         /* 양매수.txt 864~871. 시간 청산은 모델이 없어도 실행되고 사유 4를 덮어쓴다. */
         if (b->stime >= cfg->flat_time ||
             (b->next_sdate == b->sdate && b->next_stime >= cfg->flat_time) ||
@@ -265,6 +429,8 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
             r->exit_reason = 3;
         }
         if (r->model_valid && synced && !r->exit_req) {
+            const double self_basis = v12 ? r->self_entry : r->self_first;
+            const double opp_basis = v12 ? r->opp_entry : r->opp_first;
             const double self_px = b->close;
             const double opp_px = b->d3_close;
             const int ratio_ok = d2_sync(b) && b->calc_ready == 1 && b->break_ready == 1 &&
@@ -273,17 +439,42 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                                  b->three_peak > 0.0 && b->three_ratio >= 70.0;
             const int second_time_valid = r->entry_fut_bar >= 0 && r->entry_fut_date == b->sdate &&
                                           d2_sync(b);
-            r->pair_pnl = (sgn * (self_px - r->self_first) * (double)r->self_qty +
-                           sgn * (opp_px - r->opp_first) * (double)r->opp_qty) *
+            r->pair_pnl = (sgn * (self_px - self_basis) * (double)r->self_qty +
+                           sgn * (opp_px - opp_basis) * (double)r->opp_qty) *
                           k_mult;
-            r->pair_pct = (sgn * (self_px / r->self_first - 1.0) +
-                           sgn * (opp_px / r->opp_first - 1.0)) *
+            r->pair_pct = (sgn * (self_px / self_basis - 1.0) +
+                           sgn * (opp_px / opp_basis - 1.0)) *
                           50.0;
+            if (v12 && d2_sync(b)) {
+                double goal;
+                if (r->rec_date != b->sdate) {
+                    r->rec_total = 0;
+                    r->rec_loss = 0;
+                    r->rec_bar = -1;
+                    r->rec_cur_loss = 0;
+                    r->rec_date = b->sdate;
+                }
+                if (r->rec_bar < 0 || b->d2_day_index > r->rec_bar) {
+                    r->rec_total++;
+                    r->rec_cur_loss = r->pair_pct < 0.0 ? 1 : 0;
+                    r->rec_loss += r->rec_cur_loss;
+                    r->rec_bar = b->d2_day_index;
+                } else if (b->d2_day_index == r->rec_bar) {
+                    r->rec_loss -= r->rec_cur_loss;
+                    r->rec_cur_loss = r->pair_pct < 0.0 ? 1 : 0;
+                    r->rec_loss += r->rec_cur_loss;
+                }
+                goal = r->rec_meet >= 3.0 ? 5.0 : 10.0;
+                rec_ok = r->rec_meet > 0.0 && r->rec_bar == b->d2_day_index && r->rec_total > 0 &&
+                         r->rec_loss * 100 >= r->rec_total * 70 && r->entry_fut_bar >= 0 &&
+                         r->entry_fut_date == b->sdate && r->entry_elapsed >= 30 &&
+                         r->pair_pct >= goal && !r->low_done && !r->first_done && !r->first_pending &&
+                         r->contracts >= 2 && cfg->low_cut_pct > 0.0;
+            }
             r->self_resid_pct = sgn * (self_px - r->self_entry) / r->self_entry * 100.0;
-            if (v45 && cfg->split_exit == 1 && r->first_done && !r->first_pending && expiry) {
+            if (v12 && cfg->split_exit == 1 && r->first_done && !r->first_pending) {
                 const double interval = dmax(0.01, cfg->trail_interval);
                 if (!r->trail_active && second_time_valid &&
-                    r->entry_elapsed < imax(0, cfg->early_second_min) &&
                     r->pair_pct >= cfg->take_pct * 4.0) {
                     r->trail_active = 1;
                     r->trail_target = cfg->take_pct * 4.0;
@@ -300,30 +491,41 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                                                 interval);
                 }
             }
-            if (r->pair_pct <= -cfg->stop_pct) {
-                r->exit_req = 1;
-                r->exit_reason = 2;
-            } else if (v45) {
-                if (cfg->split_exit == 1 && r->first_done && !r->first_pending && expiry &&
-                    r->trail_active && r->pair_pct <= r->trail_protect) {
+            if (side > 0 && d2_sync(b) && b->three_ready == 1 && b->three_peak > 0.0) {
+                r->three40_watch = 1;
+                if (b->three_ratio >= 40.0) {
+                    r->three40_hit = 1;
+                }
+            }
+            {
+                /* V14: 삼선을 봤고 40에 닿은 적이 없으며 진입 70분 미만이면 공통 손절은 -25. */
+                double stop = cfg->stop_pct;
+                if (v12 && r->three40_watch && !r->three40_hit && r->entry_fut_bar >= 0 &&
+                    r->entry_fut_date == b->sdate && d2_sync(b) && r->entry_elapsed < 70) {
+                    stop = 25.0;
+                }
+                if (r->pair_pct <= -stop) {
+                    r->exit_req = 1;
+                    r->exit_reason = 2;
+                }
+            }
+            if (r->exit_req) {
+                /* 위에서 손절을 정했다. 아래 사슬은 손절이 아닐 때만 탄다. */
+            } else if (v12) {
+                if (cfg->split_exit == 1 && r->first_done && !r->first_pending &&
+                    r->first_basis_pct > 0.0 && r->pair_pct <= -r->first_basis_pct * 0.5) {
+                    r->exit_req = 1;
+                    r->exit_reason = 16;
+                } else if (cfg->split_exit == 1 && r->first_done && !r->first_pending &&
+                           r->trail_active && r->pair_pct <= r->trail_protect) {
                     r->exit_req = 1;
                     r->exit_reason = 14;
-                } else if (cfg->split_exit == 1 && r->first_done && !r->first_pending && expiry &&
-                           !r->trail_active && second_time_valid &&
-                           r->entry_elapsed >= imax(0, cfg->early_second_min) &&
-                           r->pair_pct >= cfg->take_pct * 4.0) {
-                    r->exit_req = 1;
-                    r->exit_reason = 11;
-                } else if (cfg->split_exit == 1 && r->first_done && !r->first_pending &&
-                           ((!expiry && r->pair_pct < cfg->take_pct) ||
-                            (expiry && r->self_resid_pct < cfg->take_pct && three_ok && ratio_ok &&
-                             b->price_ratio >= 100.0))) {
-                    r->exit_req = 1;
-                    r->exit_reason = 10;
-                } else if (!r->low_pending && !r->first_done &&
-                           ((r->self_first > 0.0 && r->self_first < 3.0 &&
-                             r->pair_pct >= cfg->take_pct * 1.5) ||
-                            (r->self_first >= 3.0 && r->pair_pct >= cfg->take_pct))) {
+                } else if (!r->first_done && !rec_ok &&
+                           (r->rec_fire_bar < 0 || b->d2_day_index > r->rec_fire_bar) &&
+                           second_time_valid &&
+                           r->pair_pct >=
+                               cfg->take_pct * ((r->self_first < 3.0 || r->opp_first < 3.0) ? 1.5
+                                                                                           : 1.0)) {
                     r->exit_req = 1;
                     r->exit_reason = expiry ? 9 : 1;
                 }
@@ -355,10 +557,57 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
             }
         }
 
-        /* 양매수.txt 946~960. 일차 상태와 따로며 일차처리를 켜지 않는다. */
+        /* 5봉 연속 관측에서 현재가 직전·5봉 전보다 낮고 기준률 이하일 때만 저수익. */
+        if (r->model_valid && synced && d2_sync(b)) {
+            r->low_drop_ok = 0;
+            r->low_extra_ok = 0;
+            if (r->low_obs_date != b->sdate || r->low_obs_bar < 0 ||
+                b->d2_day_index < r->low_obs_bar || b->d2_day_index > r->low_obs_bar + 1) {
+                r->low_extra_peak = r->pair_pct;
+                r->low_extra_wait = -1;
+                r->low_hist_n = 0;
+                r->low_p1 = r->low_p2 = r->low_p3 = r->low_p4 = r->low_p5 = 0.0;
+            } else if (b->d2_day_index == r->low_obs_bar + 1) {
+                r->low_p5 = r->low_p4;
+                r->low_p4 = r->low_p3;
+                r->low_p3 = r->low_p2;
+                r->low_p2 = r->low_p1;
+                r->low_p1 = r->low_cur;
+                if (r->low_hist_n < 5) {
+                    r->low_hist_n++;
+                }
+            }
+            r->low_obs_date = b->sdate;
+            r->low_obs_bar = b->d2_day_index;
+            r->low_cur = r->pair_pct;
+            r->low_drop_ok = r->low_hist_n >= 5 && r->pair_pct <= cfg->low_pct &&
+                             r->pair_pct < r->low_p1 && r->pair_pct < r->low_p5;
+            if (r->low_done && !r->low_extra_done && !r->first_done && !r->first_pending &&
+                r->low_extra_bar >= 0 && b->d2_day_index > r->low_extra_bar) {
+                const double width = dmax(0.01, cfg->low_rewiden);
+                r->low_extra_peak = dmax(r->low_extra_peak, r->pair_pct);
+                if (r->pair_pct > cfg->low_pct || r->low_extra_peak - r->pair_pct < width) {
+                    r->low_extra_wait = -1;
+                } else if (r->low_extra_wait < 0) {
+                    r->low_extra_wait = b->d2_day_index;
+                }
+                r->low_extra_ok = r->low_hist_n >= 1 && r->low_extra_wait >= 0 &&
+                                  b->d2_day_index - r->low_extra_wait >= imax(0, cfg->low_recover_min) &&
+                                  r->pair_pct < r->low_p1 && r->pair_pct <= cfg->low_pct;
+            }
+        } else {
+            r->low_drop_ok = 0;
+            r->low_extra_ok = 0;
+        }
+        if (r->low_pending && !r->low_drop_ok && !rec_ok) {
+            r->low_pending = 0;
+        }
+        /* 60분 하락 저수익 또는 30분 이후 손실봉 70%의 즉시 부분청산. 이름은 같다. */
         if (!r->exit_req && !r->first_pending && !r->low_done && r->model_valid && synced &&
             r->entry_fut_bar >= 0 && r->entry_fut_date == b->sdate && d2_sync(b) &&
-            r->entry_elapsed >= imax(0, cfg->low_wait_min) && r->pair_pct <= cfg->low_pct) {
+            ((r->entry_elapsed >= imax(0, cfg->low_wait_min) && r->low_drop_ok &&
+              r->pair_pct <= cfg->low_pct) ||
+             rec_ok)) {
             const double cut = dmin(100.0, dmax(0.0, cfg->low_cut_pct));
             r->low_done = 1;
             r->low_prev_qty = r->contracts;
@@ -369,12 +618,37 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                 r->low_qty = 0;
             }
             r->low_pending = r->low_qty > 0;
+            if (r->low_pending) {
+                r->low_extra_bar = b->d2_day_index;
+                r->low_extra_peak = r->pair_pct;
+                r->low_extra_wait = -1;
+                if (rec_ok) {
+                    r->rec_fire_bar = b->d2_day_index;
+                }
+            }
         }
         if (r->exit_req) {
             r->low_pending = 0;
         }
         if (r->low_pending && !r->exit_req) {
-            mark_order(r, TR_WPAIR_ORDER_EXIT_PART, r->low_qty, 13, "시간저수익부분청산");
+            mark_order(r, TR_WPAIR_ORDER_EXIT_PART, r->low_qty, 13,
+                       path_exit_name(r, "시간저수익부분청산_삼선", "시간저수익부분청산_압축", "시간저수익부분청산"));
+        }
+        if (!r->exit_req && !r->first_done && !r->first_pending && r->low_extra_ok &&
+            !r->low_extra_done && r->order_kind == TR_WPAIR_ORDER_NONE &&
+            b->d2_day_index > r->low_extra_bar && r->pair_pct <= cfg->low_pct) {
+            int32_t extra = int_portion((double)r->contracts * 0.3);
+            if (r->contracts >= 2) {
+                extra = imin(r->contracts - 1, imax(1, extra));
+            } else {
+                extra = 0;
+            }
+            if (extra > 0) {
+                r->low_extra_done = 1;
+                r->low_extra_wait = -1;
+                mark_order(r, TR_WPAIR_ORDER_EXIT_PART, extra, 15,
+                           path_exit_name(r, "저수익재악화추가청산_삼선", "저수익재악화추가청산_압축", "저수익재악화추가청산"));
+            }
         }
 
         /* 양매수.txt 976~989. 익절 1·9만 나누고 손절·시간·날짜는 잔량을 모두 낸다. */
@@ -397,31 +671,51 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
         }
         if (r->first_pending && !r->exit_req) {
             mark_order(r, TR_WPAIR_ORDER_EXIT_PART, r->first_qty, r->first_reason,
-                       r->first_reason == 9 ? "만기익절1차" : "합산익절1차");
+                       r->first_reason == 9
+                           ? path_exit_name(r, "만기익절1차_삼선", "만기익절1차_압축", "만기익절1차")
+                           : path_exit_name(r, "합산익절1차_삼선", "합산익절1차_압축", "합산익절1차"));
         }
         if (r->exit_req) {
             mark_order(r, TR_WPAIR_ORDER_EXIT_ALL, r->contracts, r->exit_reason,
-                       exit_all_name(r->exit_reason, v45));
+                       exit_all_name(r->exit_reason, v12));
         }
     }
 
     /* 양매수.txt 1038~1082, 양매도.txt 1037~1076. */
     {
         int meet = 0;
+        int entry_path = 0;
         if (side > 0) {
             const double applied = b->d2_day_index < imax(0, cfg->afternoon_switch_bar)
                                        ? cfg->morning_three_max
                                        : cfg->afternoon_three_max;
+            const int morning = b->d2_day_index < imax(0, cfg->afternoon_switch_bar);
             int three_ok = b->d2_date == b->sdate && d2_1m(b) && b->three_ready == 1 &&
                            b->three_peak > 0.0 && b->three_ratio < applied;
-            if (yl_dow(b->bdate) == 5 && b->d2_day_index < imax(0, cfg->afternoon_switch_bar)) {
+            if (v12) {
+                const int three_line = v12_three_ok(cfg, b, r->morn_hi_any);
+                const int release = b->sq_release && b->three_ready == 1 && b->three_peak > 0.0 &&
+                                    b->three_ratio <= 100.0;
+                const int wide = b->sq_ready && b->sq_ratio >= 50.0;
+                if (three_line) {
+                    entry_path = 1;
+                } else if (release) {
+                    entry_path = 2;
+                }
+                three_ok = wide && entry_path != 0;
+            } else if (yl_dow(b->bdate) == 5 && morning) {
                 three_ok = three_ok && b->d2_time == b->stime && b->calc_ready == 1 &&
                            b->break_ready == 1 && b->two_max > 0.0 && b->price_ratio < 100.0;
+            }
+            if (v12 && b->d2_day_index < 30) {
+                three_ok = 0;
             }
             if (period_ok && synced && three_ok && b->d2_day_index >= imax(0, cfg->entry_start_bar) &&
                 b->stime < cfg->flat_time && b->next_sdate == b->sdate &&
                 b->next_stime < cfg->flat_time && cfg->capital > 0.0 && cfg->take_pct > 0.0 &&
-                cfg->stop_pct > 0.0) {
+                cfg->stop_pct > 0.0 &&
+                (!v12 || (long_entry_px_ok(cfg, b) && !r->high_block &&
+                          !(morning && r->morn_hi_any)))) {
                 meet = ranges_meet(cfg, b);
             }
         } else {
@@ -435,18 +729,24 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
             }
         }
         if (cfg->trade_off == 0 && r->market_position == 0 && !r->used_today && !r->entry_pending &&
-            !r->exit_req && meet && (!v45 || (b->close > 1.5 && b->d3_close > 1.5))) {
+            !r->exit_req && meet && (!v12 || (b->close > 1.5 && b->d3_close > 1.5))) {
             r->used_today = 1;
             r->self_first = b->close;
             r->opp_first = b->d3_close;
+            r->signal_time = b->stime;
+            r->open_target_min = minute_of(b->stime) + 1;
+            r->rec_meet = meet_px(cfg, b);
+            r->self_entry = 0.0;
+            r->opp_entry = 0.0;
             r->self_qty = int_portion((cfg->capital / 2.0) / (b->close * k_mult));
             r->opp_qty = int_portion((cfg->capital / 2.0) / (b->d3_close * k_mult));
             if (r->self_qty >= 1 && r->opp_qty >= 1) {
                 r->signal_bar = b->index;
                 r->signal_date = b->bdate;
                 r->entry_pending = 1;
+                r->entry_path = side > 0 && v12 ? entry_path : 0;
                 mark_order(r, TR_WPAIR_ORDER_ENTRY, r->self_qty, 0,
-                           side > 0 ? "페어진입" : "양매도진입");
+                           r->entry_path == 2 ? "압축진입" : r->entry_path == 1 ? "삼선진입" : side > 0 ? "페어진입" : "양매도진입");
             }
         }
     }
@@ -517,6 +817,8 @@ void tr_wpair_default_config(tr_wpair_config_t *cfg) {
     cfg->low_wait_min = 60;
     cfg->low_pct = 5.0;
     cfg->low_cut_pct = 30.0;
+    cfg->low_rewiden = 5.0;
+    cfg->low_recover_min = 30;
     cfg->ruleset = TR_WPAIR_RULES_V34;
     cfg->expiry_override = 0;
     cfg->early_second_min = 30;
@@ -532,7 +834,13 @@ int tr_wpair_init(tr_wpair_t *st, int side, const tr_wpair_config_t *cfg) {
     st->cfg = *cfg;
     st->now.entry_fut_bar = -1;
     st->now.signal_bar = -1;
+    st->now.low_obs_bar = -1;
+    st->now.low_extra_bar = -1;
+    st->now.low_extra_wait = -1;
     st->now.first_fut_bar = -1;
+    st->now.open_target_min = -1;
+    st->now.rec_bar = -1;
+    st->now.rec_fire_bar = -1;
     st->now.order_name = "";
     return 0;
 }
@@ -619,6 +927,13 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
     size_t fed = 0;
     size_t opp_at = 0;
     size_t fut_at = 0;
+    int64_t gap_ymd = 0;
+    double gap_open = 0.0;
+    double gap_prev = 0.0;
+    double gap_last = 0.0;
+    int gap_has_prev = 0;
+    int gap_has_today = 0;
+    tr_wsq_point_t *sq = 0;
 
     if (st == 0 || (nself > 0 && self == 0) || (nopp > 0 && opp == 0) || (nfut > 0 && fut == 0) ||
         (cap > 0 && ev == 0)) {
@@ -636,6 +951,13 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
     if (!tr_ksscore_init(&g_wpair_score, scfg)) {
         return -1;
     }
+    if (nfut > 0) {
+        sq = calloc(nfut, sizeof(*sq));
+        if (sq == 0 || tr_wsq_eval(fut, nfut, 0, sq) != 0) {
+            free(sq);
+            return -1;
+        }
+    }
 
     for (size_t i = 0; i < nself; i++) {
         const tr_wpair_pxbar_t *s = &self[i];
@@ -647,6 +969,16 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
 
         while (fed < nfut && fut[fed].open_us <= s->open_us) {
             tr_ksscore_input_t in;
+            if (fut[fed].ymd != gap_ymd) {
+                if (gap_has_today) {
+                    gap_prev = gap_last;
+                    gap_has_prev = 1;
+                }
+                gap_ymd = fut[fed].ymd;
+                gap_open = fut[fed].open;
+                gap_has_today = 1;
+            }
+            gap_last = fut[fed].close;
             memset(&in, 0, sizeof(in));
             in.bdate = fut[fed].ymd;
             in.day_index = fut[fed].day_index;
@@ -687,6 +1019,7 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
             bar.d3_time = o->hhmmss;
             bar.d3_compress = 2;
             bar.d3_interval = 1;
+            bar.d3_open = o->open;
             bar.d3_high = o->high;
             bar.d3_low = o->low;
             bar.d3_close = o->close;
@@ -699,6 +1032,16 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
             bar.d2_compress = 2;
             bar.d2_interval = 1;
             bar.d2_day_index = f->day_index;
+            if (gap_has_prev && gap_has_today && f->ymd == gap_ymd) {
+                bar.d2_has_gap = 1;
+                bar.d2_prev_close = gap_prev;
+                bar.d2_day_open = gap_open;
+            }
+            if (sq != 0) {
+                bar.sq_ready = sq[fi].ready;
+                bar.sq_ratio = sq[fi].ratio;
+                bar.sq_release = sq[fi].release;
+            }
         }
         if (fed > 0) {
             apply_score(&bar, &g_wpair_score.out);
@@ -715,6 +1058,7 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
             tr_yl_book_open(book, &yb);
         }
         if (tr_wpair_eval(st, &bar, &out) != 0) {
+            free(sq);
             return -1;
         }
         if (book != 0 && out.order_kind != TR_WPAIR_ORDER_NONE) {
@@ -751,6 +1095,7 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
     if (book != 0) {
         tr_yl_book_finish(book);
     }
+    free(sq);
     return (int)total;
 }
 
@@ -768,4 +1113,168 @@ int tr_wpair_fill(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
         return -1;
     }
     return replay_body(st, self, nself, opp, nopp, fut, nfut, score_cfg, 0, 0, book);
+}
+
+static int minute_of_bar(int64_t hhmmss) {
+    return (int)((hhmmss / 10000) * 60 + (hhmmss / 100) % 100);
+}
+
+static void push_width(double *hist, int *n, double width) {
+    if (*n < 256) {
+        (*n)++;
+    }
+    for (int i = *n - 1; i > 0; i--) {
+        hist[i] = hist[i - 1];
+    }
+    hist[0] = width;
+}
+
+static double max_width(const double *hist, int n, int window) {
+    double max = 0.0;
+    int use = window < n ? window : n;
+    for (int i = 0; i < use; i++) {
+        if (hist[i] > max) {
+            max = hist[i];
+        }
+    }
+    return max;
+}
+
+void tr_wsq_default_config(tr_wsq_config_t *cfg) {
+    if (cfg == 0) {
+        return;
+    }
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->value_mult = 1.5;
+    cfg->min_bars = 5;
+    cfg->width_bars = 30;
+    cfg->ratio_bars = 90;
+    cfg->start_bar = 30;
+    cfg->price_scale = 0.05;
+}
+
+int tr_wsq_eval(const tr_wpair_pxbar_t *fut, size_t n, const tr_wsq_config_t *cfg, tr_wsq_point_t *out) {
+    tr_fxprof_t prof;
+    double hist[256];
+    int hist_n = 0;
+    int session_bars = 0;
+    int start_ok = 0;
+    int prev_day = -1;
+    int64_t prev_date = 0;
+    int streak = 0;
+    int prev_ready = 0;
+    double prev_width = 0.0;
+    int rel_min = -1;
+    int64_t rel_date = 0;
+    int n30 = 0;
+    int n40 = 0;
+    int n50 = 0;
+    int n60 = 0;
+    int begun = 0;
+    tr_wsq_config_t fallback;
+
+    if ((n > 0 && fut == 0) || (n > 0 && out == 0)) {
+        return -1;
+    }
+    if (cfg == 0) {
+        tr_wsq_default_config(&fallback);
+        cfg = &fallback;
+    }
+    tr_fxprof_init(&prof);
+    for (size_t i = 0; i < n; i++) {
+        const tr_wpair_pxbar_t *b = &fut[i];
+        const int day = b->day_index;
+        const int reset = !begun || b->ymd != prev_date || day < prev_day || (day == 0 && prev_day != 0);
+        tr_fxprof_input_t in;
+        double width = 0.0;
+        double span = 0.0;
+        double ratio = 0.0;
+        int valid = 0;
+        int ready = 0;
+        int prev_streak = streak;
+        int minute = minute_of_bar(b->hhmmss);
+
+        begun = 1;
+        if (reset) {
+            session_bars = 1;
+            start_ok = day == 0 ? 1 : 0;
+            streak = 0;
+            prev_streak = 0;
+            prev_ready = 0;
+            prev_width = 0.0;
+            rel_min = -1;
+            rel_date = 0;
+            n30 = n40 = n50 = n60 = 0;
+            hist_n = 0;
+        } else {
+            session_bars++;
+        }
+        memset(&in, 0, sizeof(in));
+        in.session_reset = reset;
+        in.is_new_bar = true;
+        in.bar_open = b->open_us;
+        in.high = b->high;
+        in.low = b->low;
+        in.close = b->close;
+        in.volume = b->volume;
+        in.price_scale = cfg->price_scale > 0.0 ? cfg->price_scale : 0.05;
+        in.value_mult = cfg->value_mult > 0.0 ? cfg->value_mult : 1.5;
+        in.min_bars = cfg->min_bars > 0 ? cfg->min_bars : 5;
+        in.period = cfg->width_bars > 0 ? cfg->width_bars : 30;
+        tr_fxprof_eval(&prof, &in);
+        valid = prof.out.valid;
+        if (valid) {
+            width = prof.out.hi1 - prof.out.lo1;
+            if (width < 0.0) {
+                width = 0.0;
+            }
+        }
+        push_width(hist, &hist_n, width);
+        {
+            int ratio_bars = cfg->ratio_bars > 0 ? cfg->ratio_bars : 90;
+            int window = session_bars < ratio_bars ? session_bars : ratio_bars;
+            span = max_width(hist, hist_n, window);
+        }
+        if (span > 0.0) {
+            ratio = width / span * 100.0;
+        }
+        {
+            int start_bar = cfg->start_bar > 0 ? cfg->start_bar : 30;
+            int width_bars = cfg->width_bars > 0 ? cfg->width_bars : 30;
+            ready = start_ok && day >= start_bar && session_bars >= width_bars && valid && span > 0.0;
+        }
+        if (!ready) {
+            n30 = n40 = n50 = n60 = 0;
+            streak = 0;
+            rel_min = -1;
+        } else {
+            n30 = ratio < 30.0 ? (reset ? 1 : n30 + 1) : 0;
+            n40 = ratio < 40.0 ? (reset ? 1 : n40 + 1) : 0;
+            n50 = ratio < 50.0 ? (reset ? 1 : n50 + 1) : 0;
+            n60 = ratio < 60.0 ? (reset ? 1 : n60 + 1) : 0;
+            if (ratio < 50.0) {
+                streak = reset ? 1 : prev_streak + 1;
+                rel_min = -1;
+            } else {
+                streak = 0;
+                if (!reset && prev_ready && prev_streak >= 15 && width > prev_width) {
+                    rel_min = minute;
+                    rel_date = b->ymd;
+                }
+            }
+        }
+        out[i].ready = ready;
+        out[i].ratio = ratio;
+        out[i].release = ready && day >= 60 && rel_min >= 0 && b->ymd == rel_date && minute >= rel_min &&
+                         minute - rel_min <= 30;
+        out[i].n30 = ready && n30 > 0 ? n30 : 0;
+        out[i].n40 = ready && n40 > 0 ? n40 : 0;
+        out[i].n50 = ready && n50 > 0 ? n50 : 0;
+        out[i].n60 = ready && n60 > 0 ? n60 : 0;
+        prev_ready = ready;
+        prev_width = width;
+        prev_day = day;
+        prev_date = b->ymd;
+    }
+    return 0;
 }

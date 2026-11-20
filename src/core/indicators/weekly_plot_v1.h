@@ -30,6 +30,7 @@ typedef struct {
     double morning_three_max; /* 오전삼선만남최대비율 */
     double afternoon_three_max; /* 오후삼선만남최대비율 */
     int64_t entry_start_time; /* 양매도 진입시작 HHMMSS */
+    int64_t flat_time; /* 전량청산 HHMMSS */
 } tr_wplot_config_t;
 
 /* 이 봉의 Data1·Data3·Data2. 없는 다리는 compress를 0으로 둔다. */
@@ -37,12 +38,14 @@ typedef struct {
     int64_t bdate;
     int64_t sdate;
     int64_t stime;
+    int64_t next_sdate;
+    int64_t next_stime;
     int compress;
     int interval;
-    double high, low, close;
+    double open, high, low, close;
     int64_t d3_date, d3_time;
     int d3_compress, d3_interval;
-    double d3_high, d3_low, d3_close;
+    double d3_open, d3_high, d3_low, d3_close;
     int64_t d2_date, d2_time;
     int d2_compress, d2_interval;
     int32_t d2_day_index;
@@ -53,6 +56,12 @@ typedef struct {
     int break_ready;
     double two_max;
     double price_ratio;
+    int d2_has_gap;
+    double d2_prev_close;
+    double d2_day_open;
+    int sq_ready;
+    double sq_ratio;
+    int sq_release;
 } tr_wplot_bar_t;
 
 typedef struct {
@@ -71,6 +80,16 @@ typedef struct {
     double stored;
     double self_meet;
     double opp_meet;
+    int64_t high_date;
+    int32_t morn_hi_self;
+    int32_t morn_hi_opp;
+    int high_block;
+    int morn_hi_any; /* 오전 고가 20 초과가 한 봉이라도 있으면 1 */
+    int32_t open_target_min; /* 만남 시각의 다음 1분. 합산수익률 분모 */
+    int64_t open_date;
+    int64_t open_time;
+    double self_open;
+    double opp_open;
 } tr_wplot_t;
 
 typedef struct {

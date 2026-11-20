@@ -47,6 +47,7 @@ static tr_wpair_bar_t bar_at(int32_t index, int64_t date, int64_t t, int32_t day
     b.d3_time = t;
     b.d3_compress = 2;
     b.d3_interval = 1;
+    b.d3_open = px;
     b.d3_high = px + 1.0;
     b.d3_low = px - 1.0;
     b.d3_close = px;
@@ -55,6 +56,9 @@ static tr_wpair_bar_t bar_at(int32_t index, int64_t date, int64_t t, int32_t day
     b.d2_compress = 2;
     b.d2_interval = 1;
     b.d2_day_index = day;
+    b.d2_has_gap = 1;
+    b.d2_prev_close = 100.0;
+    b.d2_day_open = 100.0;
     b.calc_ready = 1;
     b.three_ready = 1;
     b.three_peak = 1.0;
@@ -62,6 +66,8 @@ static tr_wpair_bar_t bar_at(int32_t index, int64_t date, int64_t t, int32_t day
     b.break_ready = 1;
     b.two_max = 1.0;
     b.price_ratio = 50.0;
+    b.sq_ready = 1;
+    b.sq_ratio = 60.0;
     return b;
 }
 
@@ -84,11 +90,28 @@ static void again_ledger(tr_wpair_t *st, tr_wpair_bar_t b);
 
 static int32_t open_pos(tr_wpair_t *st, int32_t index, int64_t date, double px, int32_t day,
                         tr_wpair_out_t *fill) {
-    tr_wpair_out_t sig = step(st, bar_at(index, date, 100000, day, px));
+    int32_t sig_day = day;
+    if (st->side == TR_WPAIR_LONG && st->cfg.ruleset == TR_WPAIR_RULES_V12 && sig_day < 30) {
+        sig_day = 30;
+    }
+    tr_wpair_bar_t sig_bar = bar_at(index, date, 100000, sig_day, px);
+    if (st->side == TR_WPAIR_LONG && st->cfg.ruleset == TR_WPAIR_RULES_V12 && px >= 5.0) {
+        sig_bar.low = 3.5;
+        sig_bar.high = 4.5;
+        sig_bar.d3_low = 3.5;
+        sig_bar.d3_high = 4.5;
+    }
+    if (px < 2.1) {
+        sig_bar.low = 1.2;
+        sig_bar.high = 3.0;
+        sig_bar.d3_low = 1.2;
+        sig_bar.d3_high = 3.0;
+    }
+    tr_wpair_out_t sig = step(st, sig_bar);
     TR_CHECK(sig.order_kind == TR_WPAIR_ORDER_ENTRY);
     TR_CHECK(sig.market_position == 0);
     TR_CHECK(sig.entry_pending == 1);
-    *fill = step(st, bar_at(index + 1, date, 100100, day + 1, px));
+    *fill = step(st, bar_at(index + 1, date, 100100, sig_day + 1, px));
     TR_CHECK(fill->market_position == st->side);
     TR_CHECK(fill->contracts == sig.order_qty);
     TR_CHECK(fill->model_valid == 1);
@@ -395,6 +418,7 @@ static void test_pnl_sign_stop_and_time(void) {
     TR_CHECK(o.pair_pct > -10.0);
 
     b = bar_at(next + 1, TUE, 110100, 31, 8.0);
+    b.three_ratio = 40.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
     TR_CHECK(o.order_reason == 2);
@@ -629,9 +653,18 @@ static void test_residual_take_and_low_cut(void) {
 
     fresh(&st, TR_WPAIR_LONG);
     next = open_pos(&st, 1, TUE, 10.0, 20, &o);
-    b = bar_at(next, TUE, 120000, 81, 10.0);
+    b = bar_at(next, TUE, 120000, 81, 10.6);
     o = step(&st, b);
     TR_CHECK(o.entry_elapsed == 60);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    {
+        const double px[5] = {10.5, 10.4, 10.3, 10.2, 10.1};
+        int k;
+        for (k = 0; k < 5; k++) {
+            b = bar_at(next + 1 + k, TUE, 120100 + k * 100, 82 + k, px[k]);
+            o = step(&st, b);
+        }
+    }
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
     TR_CHECK(o.order_reason == 13);
     TR_CHECK(o.order_qty == 1);
@@ -649,18 +682,24 @@ static void test_residual_take_and_low_cut(void) {
     fresh(&st, TR_WPAIR_LONG);
     next = open_pos(&st, 1, TUE, 2.0, 20, &o);
     TR_CHECK(o.contracts == 10);
-    b = bar_at(next, TUE, 120000, 81, 2.0);
-    o = step(&st, b);
+    {
+        const double px[6] = {2.12, 2.10, 2.08, 2.06, 2.04, 2.02};
+        int k;
+        for (k = 0; k < 6; k++) {
+            b = bar_at(next + k, TUE, 120000 + k * 100, 81 + k, px[k]);
+            o = step(&st, b);
+        }
+    }
     TR_CHECK(o.order_reason == 13);
     TR_CHECK(o.order_qty == 3);
     TR_CHECK(o.first_done == 0);
-    b = bar_at(next + 1, TUE, 120100, 82, 2.0);
+    b = bar_at(next + 6, TUE, 120600, 87, 2.0);
     o = step(&st, b);
     TR_CHECK(o.contracts == 7);
     TR_CHECK(o.low_pending == 0);
     TR_CHECK(o.first_done == 0);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
-    b = bar_at(next + 2, TUE, 120200, 83, 2.2);
+    b = bar_at(next + 7, TUE, 120700, 88, 2.2);
     o = step(&st, b);
     TR_CHECK(o.order_reason == 1);
     TR_CHECK(o.order_qty == 5);
@@ -670,8 +709,14 @@ static void test_residual_take_and_low_cut(void) {
     fresh(&st, TR_WPAIR_LONG);
     next = open_pos(&st, 1, TUE, 20.0, 20, &o);
     TR_CHECK(o.contracts == 1);
-    b = bar_at(next, TUE, 120000, 81, 20.0);
-    o = step(&st, b);
+    {
+        const double px[6] = {21.2, 21.0, 20.8, 20.6, 20.4, 20.2};
+        int k;
+        for (k = 0; k < 6; k++) {
+            b = bar_at(next + k, TUE, 120000 + k * 100, 81 + k, px[k]);
+            o = step(&st, b);
+        }
+    }
     TR_CHECK(o.low_done == 1);
     TR_CHECK(o.low_qty == 0);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
@@ -878,7 +923,7 @@ static void test_trade_off_keeps_exit(void) {
 static void fresh_v45(tr_wpair_t *st, int side) {
     tr_wpair_config_t cfg;
     tr_wpair_default_config(&cfg);
-    cfg.ruleset = TR_WPAIR_RULES_V45;
+    cfg.ruleset = TR_WPAIR_RULES_V12;
     TR_CHECK(tr_wpair_init(st, side, &cfg) == 0);
 }
 
@@ -889,14 +934,14 @@ static int32_t v45_first_done(tr_wpair_t *st) {
 
     fresh_v45(st, TR_WPAIR_LONG);
     next = open_pos(st, 1, THU, 10.0, 20, &o);
-    b = bar_at(next, THU, 110000, 30, 11.6);
+    b = bar_at(next, THU, 110000, 40, 11.6);
     b.price_ratio = 100.0;
     o = step(st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
     TR_CHECK(o.order_reason == 9);
     TR_CHECK(o.first_done == 1);
     TR_CHECK(o.first_pending == 1);
-    b = bar_at(next + 1, THU, 110100, 31, 11.6);
+    b = bar_at(next + 1, THU, 110100, 41, 11.6);
     b.price_ratio = 100.0;
     o = step(st, b);
     TR_CHECK(o.contracts == 1);
@@ -964,14 +1009,17 @@ static void test_v45_entry_price_gate(void) {
     fresh_v45(&st, TR_WPAIR_LONG);
     o = step(&st, bar_at(1, TUE, 100000, 20, 1.5));
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
-    b = bar_at(2, TUE, 100100, 21, 2.0);
+    b = bar_at(2, TUE, 100100, 41, 2.0);
     b.d3_close = 4.0;
     b.d3_low = 3.1;
     b.d3_high = 4.1;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
     TR_CHECK(o.used_today == 0);
-    o = step(&st, bar_at(3, TUE, 100200, 22, 2.0));
+    b = bar_at(3, TUE, 100200, 42, 2.0);
+    b.low = 1.2;
+    b.d3_low = 1.2;
+    o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
     TR_CHECK(o.self_first == 2.0);
     TR_CHECK(o.opp_first == 2.0);
@@ -979,11 +1027,17 @@ static void test_v45_entry_price_gate(void) {
 
 static void test_v45_entry_budget_after_price_gate(void) {
     tr_wpair_t st;
+    tr_wpair_bar_t b;
     tr_wpair_out_t o;
 
     fresh_v45(&st, TR_WPAIR_LONG);
     st.cfg.capital = 100000.0;
-    o = step(&st, bar_at(1, TUE, 100000, 20, 2.0));
+    b = bar_at(1, TUE, 100000, 40, 2.0);
+    b.low = 1.2;
+    b.high = 3.0;
+    b.d3_low = 1.2;
+    b.d3_high = 3.0;
+    o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
     TR_CHECK(o.used_today == 1);
     TR_CHECK(o.self_first == 2.0);
@@ -991,7 +1045,12 @@ static void test_v45_entry_budget_after_price_gate(void) {
     TR_CHECK(o.self_qty == 0);
     TR_CHECK(o.opp_qty == 0);
     st.cfg.capital = 10000000.0;
-    o = step(&st, bar_at(2, TUE, 100100, 21, 2.0));
+    b = bar_at(2, TUE, 100100, 41, 2.0);
+    b.low = 1.2;
+    b.high = 3.0;
+    b.d3_low = 1.2;
+    b.d3_high = 3.0;
+    o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
     TR_CHECK(o.used_today == 1);
 }
@@ -1004,12 +1063,12 @@ static void test_v45_first_profit_thresholds(void) {
 
     fresh_v45(&st, TR_WPAIR_LONG);
     next = open_pos(&st, 1, TUE, 2.0, 20, &o);
-    b = bar_at(next, TUE, 110000, 30, 2.2);
+    b = bar_at(next, TUE, 110000, 40, 2.2);
     b.price_ratio = 50.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
     TR_CHECK(o.first_done == 0);
-    b = bar_at(next + 1, TUE, 110100, 31, 2.4);
+    b = bar_at(next + 1, TUE, 110100, 41, 2.4);
     b.price_ratio = 50.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
@@ -1019,12 +1078,12 @@ static void test_v45_first_profit_thresholds(void) {
 
     fresh_v45(&st, TR_WPAIR_LONG);
     next = open_pos(&st, 1, THU, 3.0, 20, &o);
-    b = bar_at(next, THU, 110000, 30, 3.31);
+    b = bar_at(next, THU, 110000, 40, 3.31);
     b.price_ratio = 50.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
     TR_CHECK(o.order_reason == 9);
-    TR_CHECK(strcmp(o.order_name, "만기익절1차") == 0);
+    TR_CHECK(strcmp(o.order_name, "만기익절1차_삼선") == 0);
     TR_CHECK(o.first_done == 1);
 }
 
@@ -1037,7 +1096,7 @@ static void test_v45_first_low_price_exact_boundary(void) {
     fresh_v45(&st, TR_WPAIR_LONG);
     next = open_pos(&st, 1, THU, 2.0, 20, &o);
     st.cfg.take_pct = 25.0;
-    b = bar_at(next, THU, 110000, 30, nextafter(2.75, 0.0));
+    b = bar_at(next, THU, 110000, 40, nextafter(2.75, 0.0));
     b.price_ratio = 50.0;
     o = step(&st, b);
     TR_CHECK(o.pair_pct < 37.5);
@@ -1069,7 +1128,7 @@ static void test_v45_first_high_price_exact_boundary(void) {
     fresh_v45(&st, TR_WPAIR_LONG);
     next = open_pos(&st, 1, THU, 4.0, 20, &o);
     st.cfg.take_pct = 25.0;
-    b = bar_at(next, THU, 110000, 30, nextafter(5.0, 0.0));
+    b = bar_at(next, THU, 110000, 40, nextafter(5.0, 0.0));
     b.price_ratio = 50.0;
     o = step(&st, b);
     TR_CHECK(o.pair_pct < 25.0);
@@ -1099,8 +1158,12 @@ static void test_v45_expiry_override_keeps_friday_filter(void) {
     int32_t next;
 
     fresh_v45(&st, TR_WPAIR_LONG);
-    st.cfg.expiry_override = 1;
-    b = bar_at(1, FRI, 100000, 20, 2.0);
+    b = bar_at(1, FRI, 100000, 40, 2.0);
+    b.low = 1.2;
+    b.high = 3.0;
+    b.d3_low = 1.2;
+    b.d3_high = 3.0;
+    b.three_ratio = 65.0;
     b.price_ratio = 100.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
@@ -1110,14 +1173,25 @@ static void test_v45_expiry_override_keeps_friday_filter(void) {
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
 
     fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, FRI, 100000, 40, 2.0);
+    b.low = 1.2;
+    b.high = 3.0;
+    b.d3_low = 1.2;
+    b.d3_high = 3.0;
+    b.three_ratio = 10.0;
+    b.price_ratio = 100.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
     st.cfg.expiry_override = 1;
     next = open_pos(&st, 1, TUE, 10.0, 20, &o);
-    b = bar_at(next, TUE, 110000, 30, 11.0);
+    b = bar_at(next, TUE, 110000, 40, 11.0);
     b.price_ratio = 50.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
     TR_CHECK(o.order_reason == 9);
-    TR_CHECK(strcmp(o.order_name, "만기익절1차") == 0);
+    TR_CHECK(strcmp(o.order_name, "만기익절1차_삼선") == 0);
 }
 
 static void test_v45_second_final_above_target_at_entry_thirty(void) {
@@ -1126,7 +1200,7 @@ static void test_v45_second_final_above_target_at_entry_thirty(void) {
     tr_wpair_out_t o;
     int32_t next = v45_first_done(&st);
 
-    b = bar_at(next, THU, 120000, 51, 14.01);
+    b = bar_at(next, THU, 120000, 61, 14.01);
     b.d2_time = 115959;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
@@ -1134,10 +1208,8 @@ static void test_v45_second_final_above_target_at_entry_thirty(void) {
     b.d2_time = b.stime;
     o = step(&st, b);
     TR_CHECK(o.entry_elapsed == 30);
-    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
-    TR_CHECK(o.order_reason == 11);
-    TR_CHECK(strcmp(o.order_name, "만기익절2차최종") == 0);
-    TR_CHECK(o.trail_active == 0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 1);
 }
 
 static void test_v45_trailing_exact_target_boundary(void) {
@@ -1147,7 +1219,7 @@ static void test_v45_trailing_exact_target_boundary(void) {
     int32_t next = v45_first_done(&st);
 
     st.cfg.take_pct = 12.5;
-    b = bar_at(next, THU, 115000, 50, nextafter(15.0, 0.0));
+    b = bar_at(next, THU, 115000, 60, nextafter(15.0, 0.0));
     o = step(&st, b);
     TR_CHECK(o.entry_elapsed == 29);
     TR_CHECK(o.pair_pct < 50.0);
@@ -1180,7 +1252,7 @@ static void test_v45_second_final_exact_target_boundary(void) {
     int32_t next = v45_first_done(&st);
 
     st.cfg.take_pct = 12.5;
-    b = bar_at(next, THU, 120000, 51, nextafter(15.0, 0.0));
+    b = bar_at(next, THU, 120000, 61, nextafter(15.0, 0.0));
     o = step(&st, b);
     TR_CHECK(o.entry_elapsed == 30);
     TR_CHECK(o.pair_pct < 50.0);
@@ -1191,17 +1263,15 @@ static void test_v45_second_final_exact_target_boundary(void) {
     b.d3_close = 15.0;
     o = step(&st, b);
     TR_CHECK(o.pair_pct == 50.0);
-    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
-    TR_CHECK(o.order_reason == 11);
-    TR_CHECK(strcmp(o.order_name, "만기익절2차최종") == 0);
-    TR_CHECK(o.trail_active == 0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 1);
 
     b.close = nextafter(15.0, INFINITY);
     b.d3_close = b.close;
     o = step(&st, b);
     TR_CHECK(o.pair_pct > 50.0);
-    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
-    TR_CHECK(o.order_reason == 11);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.trail_active == 1);
 }
 
 static void test_v45_trailing_steps_checkpoint_and_reset(void) {
@@ -1210,7 +1280,7 @@ static void test_v45_trailing_steps_checkpoint_and_reset(void) {
     tr_wpair_out_t o;
     int32_t next = v45_first_done(&st);
 
-    b = bar_at(next, THU, 115000, 50, 14.01);
+    b = bar_at(next, THU, 115000, 60, 14.01);
     o = step(&st, b);
     TR_CHECK(o.entry_elapsed == 29);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
@@ -1219,7 +1289,7 @@ static void test_v45_trailing_steps_checkpoint_and_reset(void) {
     TR_CHECK(near(o.trail_peak, 40.1));
     TR_CHECK(near(o.trail_protect, 30.0));
 
-    b = bar_at(next + 1, THU, 115100, 51, 14.5);
+    b = bar_at(next + 1, THU, 115100, 61, 14.5);
     o = step(&st, b);
     TR_CHECK(o.entry_elapsed == 30);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
@@ -1227,12 +1297,12 @@ static void test_v45_trailing_steps_checkpoint_and_reset(void) {
     TR_CHECK(near(o.trail_peak, 45.0));
     TR_CHECK(near(o.trail_protect, 30.0));
 
-    b = bar_at(next + 2, THU, 115200, 52, 15.0);
+    b = bar_at(next + 2, THU, 115200, 62, 15.0);
     o = step(&st, b);
     TR_CHECK(near(o.trail_peak, 50.0));
     TR_CHECK(near(o.trail_protect, 40.0));
 
-    b = bar_at(next + 3, THU, 115300, 53, 16.0);
+    b = bar_at(next + 3, THU, 115300, 63, 16.0);
     o = step(&st, b);
     TR_CHECK(near(o.trail_peak, 60.0));
     TR_CHECK(near(o.trail_protect, 50.0));
@@ -1243,17 +1313,17 @@ static void test_v45_trailing_steps_checkpoint_and_reset(void) {
     TR_CHECK(near(o.trail_peak, 50.0));
     TR_CHECK(near(o.trail_protect, 40.0));
 
-    b = bar_at(next + 4, THU, 115400, 54, 9.0);
+    b = bar_at(next + 4, THU, 115400, 64, 9.0);
     b.d3_close = 17.0;
     b.price_ratio = 100.0;
     b.three_ratio = 80.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
     TR_CHECK(o.order_reason == 14);
-    TR_CHECK(strcmp(o.order_name, "만기2차추적청산") == 0);
+    TR_CHECK(strcmp(o.order_name, "2차추적청산") == 0);
     TR_CHECK(o.self_resid_pct < 0.0);
 
-    o = step(&st, bar_at(next + 5, FRI, 100000, 0, 10.0));
+    o = step(&st, bar_at(next + 5, FRI, 100000, 10, 10.0));
     TR_CHECK(o.market_position == 0);
     TR_CHECK(o.used_today == 0);
     TR_CHECK(o.trail_active == 0);
@@ -1268,25 +1338,25 @@ static void test_v45_disables_v34_residual_exits(void) {
     tr_wpair_out_t o;
     int32_t next = v45_first_done(&st);
 
-    b = bar_at(next, THU, 110200, 32, 9.0);
+    b = bar_at(next, THU, 110200, 42, 9.0);
     b.d3_close = 10.0;
     b.price_ratio = 50.0;
     b.three_ratio = 80.0;
     o = step(&st, b);
     TR_CHECK(o.self_resid_pct < 0.0);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
-    b = bar_at(next + 1, THU, 110300, 33, 7.9);
+    b = bar_at(next + 1, THU, 110300, 43, 7.9);
     b.d3_close = 10.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
     TR_CHECK(o.order_reason == 2);
 
     next = v45_first_done(&st);
-    b = bar_at(next, THU, 110200, 32, 11.6);
+    b = bar_at(next, THU, 110200, 42, 11.6);
     b.price_ratio = 99.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
-    b = bar_at(next + 1, THU, 120000, 46, 16.0);
+    b = bar_at(next + 1, THU, 120000, 56, 16.0);
     b.d3_close = 11.8;
     b.price_ratio = 100.0;
     b.three_ratio = 69.0;
@@ -1304,8 +1374,14 @@ static void test_v45_low_cut_unchanged(void) {
 
     fresh_v45(&st, TR_WPAIR_LONG);
     next = open_pos(&st, 1, TUE, 10.0, 20, &o);
-    o = step(&st, bar_at(next, TUE, 120000, 81, 10.0));
-    TR_CHECK(o.entry_elapsed == 60);
+    {
+        const double px[6] = {10.6, 10.5, 10.4, 10.3, 10.2, 10.1};
+        int k;
+        for (k = 0; k < 6; k++) {
+            o = step(&st, bar_at(next + k, TUE, 120000 + k * 100, 91 + k, px[k]));
+        }
+    }
+    TR_CHECK(o.entry_elapsed >= 60);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
     TR_CHECK(o.order_reason == 13);
     TR_CHECK(o.order_qty == 1);
@@ -1323,13 +1399,19 @@ static void test_v45_replay_long_entry(void) {
 
     fresh_v45(&st, TR_WPAIR_LONG);
     st.cfg.entry_start_bar = 0;
-    st.cfg.morning_three_max = 1000000.0;
     for (int i = 0; i < N; i++) {
         double option_px = i + 1 == N ? 2.0 : 1.5;
         self[i] = px_at(TUE, 90000 + i * 100, 20 + i, option_px, 1000000 + i * 60000);
         opp[i] = self[i];
-        fut[i] = px_at(TUE, 90000 + i * 100, 20 + i, 100.0 + i, 1000000 + i * 60000);
+        {
+            double c = 100.0 + (i < 15 ? i * 8.0 : 40.0);
+            fut[i] = px_at(TUE, 90000 + i * 100, i == 0 ? 0 : 90 + i, c, 900000 + i * 60000);
+        }
+        self[i].day_index = 100 + i;
+        opp[i].day_index = 100 + i;
     }
+    self[N - 1].low = 1.2;
+    opp[N - 1].low = 1.2;
     n = tr_wpair_replay(&st, self, N, opp, N, fut, N, 0, ev, N);
     TR_CHECK(n == 1);
     TR_CHECK(ev[0].kind == TR_WPAIR_ORDER_ENTRY);
@@ -1337,6 +1419,229 @@ static void test_v45_replay_long_entry(void) {
     TR_CHECK(ev[0].qty == 10);
     TR_CHECK(st.now.signal_bar == N);
     TR_CHECK(st.now.self_first == 2.0);
+}
+
+static void test_v12_gap_and_high_block(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int i;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 20, 2.2);
+    b.low = 1.2;
+    b.high = 3.0;
+    b.d3_low = 1.2;
+    b.d3_high = 3.0;
+    b.d2_prev_close = 100.0;
+    b.d2_day_open = 102.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 0);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    for (i = 0; i < 3; i++) {
+        b = bar_at(i + 1, TUE, 100000 + i * 100, 20 + i, 3.0);
+        b.high = 21.0;
+        b.three_ready = 0;
+        o = step(&st, b);
+        TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    }
+    b = bar_at(4, TUE, 100300, 23, 3.0);
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 0);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 20, 3.0);
+    b.high = 21.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 0);
+    b = bar_at(2, TUE, 130000, 195, 3.0);
+    b.three_ratio = 60.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 130000, 195, 3.0);
+    b.three_ratio = 50.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 130000, 195, 3.0);
+    b.three_ratio = 51.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+}
+
+static void test_v12_either_leg_take_and_weekday_trail(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 40, 3.1);
+    b.low = 2.6;
+    b.high = 3.4;
+    b.d3_close = 2.9;
+    b.d3_low = 2.4;
+    b.d3_high = 3.2;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+    b = bar_at(2, TUE, 100100, 41, 3.1);
+    b.d3_open = 2.9;
+    b.d3_close = 2.9;
+    o = step(&st, b);
+    TR_CHECK(o.market_position == TR_WPAIR_LONG);
+    TR_CHECK(o.model_valid == 1);
+
+    b = bar_at(3, TUE, 100200, 42, 3.41);
+    b.d3_close = 3.19;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct < 15.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+
+    b = bar_at(4, TUE, 100300, 43, 3.565);
+    b.d3_close = 3.335;
+    o = step(&st, b);
+    TR_CHECK(o.pair_pct >= 15.0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 1);
+    TR_CHECK(strcmp(o.order_name, "합산익절1차_삼선") == 0);
+
+    b = bar_at(5, TUE, 100400, 44, 3.565);
+    b.d3_close = 3.335;
+    o = step(&st, b);
+    TR_CHECK(o.first_pending == 0);
+    TR_CHECK(o.trail_active == 0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+
+    b = bar_at(6, TUE, 100500, 45, 4.65);
+    b.d3_close = 4.35;
+    o = step(&st, b);
+    TR_CHECK(o.trail_active == 1);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+
+    b = bar_at(7, TUE, 100600, 46, 3.72);
+    b.d3_close = 3.48;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
+    TR_CHECK(o.order_reason == 14);
+    TR_CHECK(strcmp(o.order_name, "2차추적청산") == 0);
+}
+
+static void test_v14_open_loss_share_and_bands(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+    int i;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 40, 4.0);
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+    b = bar_at(2, TUE, 100200, 41, 6.0);
+    o = step(&st, b);
+    TR_CHECK(o.market_position == TR_WPAIR_LONG);
+    TR_CHECK(o.model_valid == 0);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 40, 3.0);
+    b.d3_close = 4.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 40, 2.2);
+    b.low = 2.0;
+    b.high = 2.6;
+    b.d3_close = 2.6;
+    b.d3_low = 2.2;
+    b.d3_high = 2.8;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    st.cfg.stop_pct = 20.0;
+    next = open_pos(&st, 1, TUE, 10.0, 20, &o);
+    b = bar_at(next, TUE, 120000, 101, 7.9);
+    o = step(&st, b);
+    TR_CHECK(strcmp(o.order_name, "합산손절") == 0);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, TUE, 4.0, 100, &o);
+    for (i = 0; i < 7; i++) {
+        b = bar_at(next + i, TUE, 100200 + (int64_t)i * 100, 102 + i, 3.6);
+        o = step(&st, b);
+        TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    }
+    b = bar_at(next + 7, TUE, 110000, 131, 4.24);
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(strcmp(o.order_name, "시간저수익부분청산_삼선") == 0);
+}
+
+static void test_v12_spread_and_soft_stop(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+
+    fresh(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 10, 2.0);
+    b.d3_close = 4.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+
+    fresh(&st, TR_WPAIR_LONG);
+    st.cfg.stop_pct = 20.0;
+    next = open_pos(&st, 1, TUE, 10.0, 20, &o);
+    b = bar_at(next, TUE, 110000, 30, 8.0);
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    b = bar_at(next + 1, TUE, 110100, 31, 7.5);
+    o = step(&st, b);
+    TR_CHECK(strcmp(o.order_name, "합산손절") == 0);
+}
+
+static void test_v12_width_price_and_release(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 40, 2.2);
+    b.sq_ratio = 49.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 0);
+
+    b.sq_ratio = 60.0;
+    b.index = 2;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+    TR_CHECK(strcmp(o.order_name, "삼선진입") == 0);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 110000, 70, 2.2);
+    b.three_ratio = 90.0;
+    b.sq_release = 1;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_ENTRY);
+    TR_CHECK(strcmp(o.order_name, "압축진입") == 0);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 40, 2.2);
+    b.low = 4.5;
+    b.high = 5.5;
+    b.d3_low = 4.5;
+    b.d3_high = 5.5;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
+    TR_CHECK(o.used_today == 0);
 }
 
 int main(void) {
@@ -1347,6 +1652,11 @@ int main(void) {
     test_fill_model_and_reentry();
     test_confirm_miss_and_same_day_block();
     test_pnl_sign_stop_and_time();
+    test_v12_spread_and_soft_stop();
+    test_v14_open_loss_share_and_bands();
+    test_v12_gap_and_high_block();
+    test_v12_width_price_and_release();
+    test_v12_either_leg_take_and_weekday_trail();
     test_partial_profit_and_protection();
     test_expiry_priority();
     test_residual_take_and_low_cut();

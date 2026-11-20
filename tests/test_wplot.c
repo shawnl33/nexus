@@ -33,6 +33,8 @@ static tr_wplot_bar_t meet_bar(int64_t date, int64_t t) {
     b.bdate = date;
     b.sdate = date;
     b.stime = t;
+    b.next_sdate = date;
+    b.next_stime = t + 100;
     b.compress = 2;
     b.interval = 1;
     b.high = 10.0;
@@ -49,7 +51,12 @@ static tr_wplot_bar_t meet_bar(int64_t date, int64_t t) {
     b.d2_time = t;
     b.d2_compress = 2;
     b.d2_interval = 1;
-    b.d2_day_index = 20;
+    b.d2_day_index = 40;
+    b.sq_ready = 1;
+    b.sq_ratio = 60.0;
+    b.d2_has_gap = 1;
+    b.d2_prev_close = 100.0;
+    b.d2_day_open = 100.0;
     b.calc_ready = 1;
     b.three_ready = 1;
     b.three_peak = 1.0;
@@ -58,6 +65,15 @@ static tr_wplot_bar_t meet_bar(int64_t date, int64_t t) {
     b.two_max = 1.0;
     b.price_ratio = 50.0;
     return b;
+}
+
+static void cheap(tr_wplot_bar_t *b) {
+    b->high = 2.4;
+    b->low = 1.6;
+    b->close = 2.0;
+    b->d3_high = 2.6;
+    b->d3_low = 1.8;
+    b->d3_close = 2.2;
 }
 
 static void test_reject(void) {
@@ -192,17 +208,20 @@ static void test_long_three_gates(void) {
 
     fresh(&st, TR_WPLOT_LONG);
     b = meet_bar(TUE, 90000);
-    b.d2_day_index = 14;
+    b.d2_day_index = 29;
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
     TR_CHECK(o.link_on == 0);
 
-    b.d2_day_index = 15;
+    b.d2_day_index = 40;
+    cheap(&b);
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
-    TR_CHECK(near(o.link, 9.5));
+    TR_CHECK(near(o.link, 2.1));
     TR_CHECK(near(o.ret, 0.0));
     b.stime = 90100;
     b.d3_time = 90100;
     b.d2_time = 90100;
+    b.open = 9.0;
+    b.d3_open = 10.0;
     b.close = 8.0;
     b.d3_close = 12.0;
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
@@ -210,28 +229,31 @@ static void test_long_three_gates(void) {
 
     fresh(&st, TR_WPLOT_LONG);
     b = meet_bar(TUE, 90000);
-    b.d2_day_index = 15;
+    b.d2_day_index = 40;
     b.three_ratio = 70.0;
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
     TR_CHECK(o.link_on == 0);
     b.three_ratio = 69.0;
+    cheap(&b);
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
     TR_CHECK(o.link_on == 1);
 
     fresh(&st, TR_WPLOT_LONG);
     b = meet_bar(TUE, 120000);
     b.d2_day_index = 195;
-    b.three_ratio = 50.0;
+    b.three_ratio = 51.0;
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
     TR_CHECK(o.link_on == 0);
-    b.three_ratio = 49.0;
+    b.three_ratio = 50.0;
+    cheap(&b);
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
     TR_CHECK(o.link_on == 1);
 
     fresh(&st, TR_WPLOT_LONG);
     b = meet_bar(TUE, 90000);
-    b.d2_day_index = 15;
+    b.d2_day_index = 40;
     b.price_ratio = 100.0;
+    cheap(&b);
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
     TR_CHECK(o.link_on == 1);
 }
@@ -243,7 +265,8 @@ static void test_long_friday_morning(void) {
 
     fresh(&st, TR_WPLOT_LONG);
     b = meet_bar(FRI, 90000);
-    b.d2_day_index = 15;
+    b.d2_day_index = 40;
+    b.three_ratio = 65.0;
     b.price_ratio = 100.0;
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
     TR_CHECK(o.link_on == 0);
@@ -254,6 +277,16 @@ static void test_long_friday_morning(void) {
     TR_CHECK(o.link_on == 0);
 
     b.d2_time = 90000;
+    cheap(&b);
+    TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
+    TR_CHECK(o.link_on == 1);
+
+    fresh(&st, TR_WPLOT_LONG);
+    b = meet_bar(FRI, 90000);
+    b.d2_day_index = 40;
+    b.three_ratio = 10.0;
+    b.price_ratio = 100.0;
+    cheap(&b);
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
     TR_CHECK(o.link_on == 1);
 
@@ -262,6 +295,7 @@ static void test_long_friday_morning(void) {
     b.d2_day_index = 195;
     b.three_ratio = 40.0;
     b.price_ratio = 100.0;
+    cheap(&b);
     TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
     TR_CHECK(o.link_on == 1);
 }
@@ -279,6 +313,64 @@ static tr_wpair_pxbar_t px(int64_t sec, int64_t ymd, int64_t hms, int32_t day, d
     b.close = c;
     b.volume = 1.0;
     return b;
+}
+
+static void test_long_morning_high(void) {
+    tr_wplot_t st;
+    tr_wplot_out_t o;
+    tr_wplot_bar_t b;
+    int i;
+
+    fresh(&st, TR_WPLOT_LONG);
+    b = meet_bar(TUE, 90000);
+    b.d2_day_index = 20;
+    b.high = 21.0;
+    TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
+    TR_CHECK(o.link_on == 0);
+    b = meet_bar(TUE, 120000);
+    b.d2_day_index = 195;
+    b.three_ratio = 60.0;
+    cheap(&b);
+    TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
+    TR_CHECK(o.link_on == 1);
+
+    fresh(&st, TR_WPLOT_LONG);
+    for (i = 0; i < 3; i++) {
+        b = meet_bar(TUE, 90000 + i * 100);
+        b.d2_day_index = 20 + i;
+        b.high = 21.0;
+        TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
+        TR_CHECK(o.link_on == 0);
+    }
+    b = meet_bar(TUE, 120000);
+    b.d2_day_index = 195;
+    b.three_ratio = 40.0;
+    TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
+    TR_CHECK(o.link_on == 0);
+}
+
+static void test_long_return_uses_next_open(void) {
+    tr_wplot_t st;
+    tr_wplot_bar_t b = meet_bar(TUE, 100000);
+    tr_wplot_out_t o;
+    fresh(&st, TR_WPLOT_LONG);
+    cheap(&b);
+    b.open = 9.0;
+    b.d3_open = 10.0;
+    TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
+    TR_CHECK(o.link_on == 1);
+    TR_CHECK(o.ret_on == 0);
+    b.stime = 100100;
+    b.d2_time = 100100;
+    b.d3_time = 100100;
+    b.open = 9.0;
+    b.d3_open = 10.0;
+    b.close = 9.9;
+    b.d3_close = 11.0;
+    TR_CHECK(tr_wplot_eval(&st, &b, &o) == 0);
+    TR_CHECK(o.link_on == 1);
+    TR_CHECK(o.ret_on == 1);
+    TR_CHECK(near(o.ret, ((9.9 / 9.0 - 1.0) + (11.0 / 10.0 - 1.0)) * 50.0));
 }
 
 static void test_replay_short_and_long(void) {
@@ -383,6 +475,8 @@ int main(void) {
     test_short_mode2();
     test_long_three_gates();
     test_long_friday_morning();
+    test_long_morning_high();
+    test_long_return_uses_next_open();
     test_replay_short_and_long();
     test_pack();
     TR_TEST_SUMMARY();

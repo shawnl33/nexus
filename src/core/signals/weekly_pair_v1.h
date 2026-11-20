@@ -2,10 +2,12 @@
 #define TR_WEEKLY_PAIR_V1_H
 
 /* 위클리 옵션 페어 주문.
- * 양매수 V34: reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매수.txt 704~1083.
- * 양매수 V45: 같은 파일 16~20, 715~785, 864~1078. ruleset으로 명시 선택한다.
+ * 양매수 V14: reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매수.txt
+ *   (WSF-WEEKLY-20261117-V14). 손익은 신호 다음 1분 봉 시가. 전구간 종가간격,
+ *   삼선 40 미도달이면서 70분 미만일 때만 손절 -25, 손실봉 70% 부분청산.
+ * 양매수 V34: 같은 계열의 이전 사슬.
  * 양매도 V3:  reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매도.txt 704~1076.
- * V34와 양매도는 청산 사슬이 같고 V45 양매수는 만기 2차 추적 사슬을 추가한다.
+ * V34와 양매도는 청산 사슬이 같고 V12 양매수는 1차 다음 봉부터 요일과 관계없이 2차 추적을 쓴다.
  * 양매도는 손익 부호와 진입 조건만 다르다.
  * 점수는 넣지 않는다. 삼선·이탈 값은 호출자가 tr_ksscore_eval 결과를 넘긴다.
  * 화면 시뮬은 tr_wpair_replay가 보유 1분봉을 다시 돌려 신호만 만든다.
@@ -27,6 +29,7 @@
 
 #define TR_WPAIR_RULES_V34 0
 #define TR_WPAIR_RULES_V45 1
+#define TR_WPAIR_RULES_V12 2
 
 #define TR_WPAIR_ORDER_NONE 0
 #define TR_WPAIR_ORDER_ENTRY 1
@@ -53,7 +56,9 @@ typedef struct {
     int32_t low_wait_min; /* 저수익대기분 */
     double low_pct; /* 저수익기준률 */
     double low_cut_pct; /* 저수익청산비율 */
-    int ruleset; /* TR_WPAIR_RULES_*. V45는 양매수에만 적용 */
+    double low_rewiden; /* 저수익재악화폭 */
+    int32_t low_recover_min; /* 저수익회복대기분 */
+    int ruleset; /* TR_WPAIR_RULES_*. V12가 현재 양매수 원본 */
     int expiry_override; /* V45 만기당일지정 */
     int32_t early_second_min; /* V45 조기이차기준분 */
     double trail_interval; /* V45 이차추적간격 */
@@ -72,7 +77,7 @@ typedef struct {
     double open, high, low, close;
     int64_t d3_date, d3_time;
     int d3_compress, d3_interval;
-    double d3_high, d3_low, d3_close;
+    double d3_open, d3_high, d3_low, d3_close;
     int64_t d2_date, d2_time;
     int d2_compress, d2_interval;
     int32_t d2_day_index;
@@ -83,6 +88,12 @@ typedef struct {
     int break_ready; /* 이탈_삼선준비 */
     double two_max; /* 이탈_두구간최대가격범위 */
     double price_ratio; /* 이탈_두구간가격비율 */
+    int d2_has_gap; /* 1이면 전일 종가와 당일 시가가 있다 */
+    double d2_prev_close;
+    double d2_day_open;
+    int sq_ready; /* 압준비. 1이면 개장 30분 이후 매물대 폭이 있다 */
+    double sq_ratio; /* 압비율. 최근 90봉 최대폭 대비 백분율 */
+    int sq_release; /* 50% 미만 15봉 뒤 폭이 넓어진 30분 창 */
 } tr_wpair_bar_t;
 
 typedef struct {
@@ -166,6 +177,17 @@ typedef struct {
     double opp_first;
     int32_t signal_bar;
     int64_t signal_date;
+    int64_t signal_time;
+    int32_t open_target_min; /* 신호 시각의 다음 1분. 그 봉 시가만 손익 기준 */
+    int64_t open_date;
+    int64_t open_time;
+    double rec_meet; /* 진입 신호의 공통 만남가격 */
+    int64_t rec_date;
+    int32_t rec_bar;
+    int32_t rec_total;
+    int32_t rec_loss;
+    int rec_cur_loss;
+    int32_t rec_fire_bar; /* 손실봉 부분청산을 낸 선물 봉. 그 봉의 1차 익절은 보류 */
     int entry_pending;
     int exit_reason;
     double pair_pnl;
@@ -181,6 +203,24 @@ typedef struct {
     double trail_target;
     double trail_peak;
     double trail_protect;
+    int three40_watch; /* 진입 후 삼선 비율을 한 번이라도 봤으면 1 */
+    int three40_hit; /* 그 비율이 40 이상인 적이 있으면 1 */
+    int64_t low_obs_date;
+    int32_t low_obs_bar;
+    int low_hist_n;
+    double low_cur, low_p1, low_p2, low_p3, low_p4, low_p5;
+    int low_drop_ok;
+    int low_extra_done;
+    int32_t low_extra_bar;
+    double low_extra_peak;
+    int32_t low_extra_wait;
+    int low_extra_ok;
+    int64_t high_date;
+    int32_t morn_hi_self;
+    int32_t morn_hi_opp;
+    int high_block; /* 오전 고가 20 초과가 한쪽이라도 3봉이면 그날 진입 금지 */
+    int morn_hi_any; /* 오전 고가 20 초과가 한 봉이라도 있으면 오전 진입 금지, 오후 삼선 상한 70 */
+    int entry_path; /* V12 양매수 1 삼선, 2 압축해제. 0이면 이전 주문명 */
 } tr_wpair_rt;
 
 typedef struct {
@@ -226,6 +266,28 @@ typedef struct {
  * 마지막 봉이 낸 주문은 체결하지 않고 pending으로 남긴다.
  * 성공 시 신호 개수(cap보다 클 수 있다). ev에는 시간순으로 최근 cap개.
  * score_cfg가 NULL이면 틱 0.05 기본값. 실패 시 -1. */
+/* 선물 1분봉의 매물대 압축. out은 n개. 실패 시 -1. */
+typedef struct {
+    int ready;
+    double ratio;
+    int release;
+    int n30, n40, n50, n60;
+} tr_wsq_point_t;
+
+/* 압축비교 입력. 페어 원본은 이 기본값을 식 안에 고정한다.
+ * price_scale은 Data2 코스피200 선물 PriceScale 0.05. */
+typedef struct {
+    double value_mult;
+    int32_t min_bars;
+    int32_t width_bars;
+    int32_t ratio_bars;
+    int32_t start_bar;
+    double price_scale;
+} tr_wsq_config_t;
+
+void tr_wsq_default_config(tr_wsq_config_t *cfg);
+int tr_wsq_eval(const tr_wpair_pxbar_t *fut, size_t n, const tr_wsq_config_t *cfg, tr_wsq_point_t *out);
+
 int tr_wpair_replay(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nself,
                     const tr_wpair_pxbar_t *opp, size_t nopp, const tr_wpair_pxbar_t *fut,
                     size_t nfut, const tr_ksscore_config_t *score_cfg, tr_wpair_event_t *ev,
