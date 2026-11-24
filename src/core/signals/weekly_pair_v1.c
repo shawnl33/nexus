@@ -206,6 +206,12 @@ static void v9_reset(tr_wpair_rt *r, int32_t qty, int minute, int64_t date) {
     r->v9_saw10 = 0;
     r->v9_early_done = 0;
     r->v9_book_done = 0;
+    r->v9_time_done = 0;
+    r->v9_saw_m10 = 0;
+    r->v9_follow_done = 0;
+    r->v9_follow_min = -1;
+    r->v9_follow_date = 0;
+    r->v9_prev_qty = qty;
     r->v9_lead = 0;
     r->v9_book_with = 0;
     r->v9_book_flip = 0;
@@ -252,6 +258,9 @@ static void v9_observe(tr_wpair_rt *r, const tr_wpair_bar_t *b, double pct) {
     }
     if (!r->first_done && pct >= 10.0) {
         r->v9_saw10 = 1;
+    }
+    if (pct <= -10.0) {
+        r->v9_saw_m10 = 1;
     }
     r->v9_obs++;
     if (pct < 0.0) {
@@ -341,6 +350,25 @@ static int long_entry_px_ok(const tr_wpair_config_t *cfg, const tr_wpair_bar_t *
             return 0;
         }
     }
+    /* V11: 절대갭 2% 이상이면 공통만남가격은 [2.15, 4.2). 자료가 없으면 4.2 이상도 보류. */
+    {
+        double rate = 0.0;
+        int have = 0;
+        if (b->d2_has_gap && b->d2_prev_close > 0.0 && b->d2_day_open > 0.0) {
+            rate = b->d2_day_open - b->d2_prev_close;
+            if (rate < 0.0) {
+                rate = -rate;
+            }
+            rate = rate / b->d2_prev_close * 100.0;
+            have = 1;
+        }
+        if (have && rate >= 2.0 && px < 2.15) {
+            return 0;
+        }
+        if (!(px < 4.2) && (!have || rate >= 2.0)) {
+            return 0;
+        }
+    }
     if (px < 3.0) {
         if (!(gap < sum * 0.125)) {
             return 0;
@@ -390,6 +418,27 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
     const int held = r->market_position == side;
     const double sgn = (double)side;
     const int v12 = side == TR_WPAIR_LONG && cfg->ruleset == TR_WPAIR_RULES_V12;
+    if (v12) {
+        double rate = 0.0;
+        int have = b->d2_has_gap && b->d2_prev_close > 0.0 && b->d2_day_open > 0.0;
+        if (r->range_date != b->sdate) {
+            r->range_block = 0;
+            r->range_date = b->sdate;
+        }
+        r->range_bar_block = 0;
+        if (have) {
+            rate = b->d2_day_open - b->d2_prev_close;
+            if (rate < 0.0) {
+                rate = -rate;
+            }
+            rate = rate / b->d2_prev_close * 100.0;
+            if (rate >= 2.0 && !b->d2_range_valid) {
+                r->range_bar_block = 1;
+            } else if (rate >= 2.0 && b->d2_today_range > b->d2_yday_range) {
+                r->range_block = 1;
+            }
+        }
+    }
     const int expiry = yl_dow(b->bdate) == 1 || yl_dow(b->bdate) == 4 ||
                        (v12 && cfg->expiry_override == 1);
     const int period_ok = b->compress == 2 && b->interval == 1 && b->d3_compress == 2 &&
@@ -517,6 +566,18 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
     }
     if (held && r->first_pending && r->contracts <= r->first_prev_qty - r->first_qty) {
         r->first_pending = 0;
+    }
+    if (held && v12 && r->holding && r->v9_prev_qty > r->contracts && r->contracts > 0 &&
+        r->v9_follow_min < 0 && b->open > 0.0 && b->d3_open > 0.0 &&
+        r->self_entry > 0.0 && r->opp_entry > 0.0) {
+        const double open_pct = ((b->open / r->self_entry - 1.0) + (b->d3_open / r->opp_entry - 1.0)) * 50.0;
+        if (open_pct > 0.0) {
+            r->v9_follow_min = minute_of(b->stime);
+            r->v9_follow_date = b->sdate;
+        }
+    }
+    if (held && v12 && r->contracts > 0) {
+        r->v9_prev_qty = r->contracts;
     }
     if (held && r->first_done && !r->first_pending && d2_sync(b)) {
         if (r->first_fut_bar < 0) {
@@ -653,28 +714,38 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                            r->trail_active && r->pair_pct <= r->trail_protect) {
                     r->exit_req = 1;
                     r->exit_reason = 14;
-                } else if (!r->v9_early_done && elapsed30 && sq60 && full_ok && r->v9_obs > 0 &&
+                } else if (!r->v9_follow_done && r->v9_follow_min >= 0 && r->v9_follow_date == b->sdate &&
+                           r->v9_entry_date == b->sdate && since_entry >= 120 &&
+                           minute - r->v9_follow_min >= 60 && !r->first_pending && r->contracts > 0 &&
+                           b->sq_ready == 1 && b->sq_ratio < 40.0 && r->pair_pct >= 8.0) {
+                    v9_reason = 24;
+                } else if (!r->first_done && !r->first_pending && elapsed30 &&
+                           b->sq_ready == 1 && b->sq_ratio < 50.0 && r->pair_pct >= 7.0) {
+                    r->exit_req = 1;
+                    r->exit_reason = expiry ? 9 : 1;
+                } else if (!r->v9_time_done && !r->v9_early_done && elapsed30 && sq60 && full_ok &&
+                           r->v9_trough < -9.0 && r->v9_obs > 0 &&
                            r->v9_loss * 100 >= r->v9_obs * 70 && r->v9_recovering &&
                            r->pair_pct < 0.0 && r->v9_recover_high - r->pair_pct >= 2.0) {
                     v9_reason = 22;
-                } else if (!r->v9_early_done && elapsed30 && sq60 && full_ok &&
+                } else if (!r->v9_time_done && !r->v9_early_done && elapsed30 && sq60 && full_ok &&
                            r->v9_peak >= 5.0 && r->v9_peak <= 10.0 && r->v9_peak_min >= 0 &&
                            minute - r->v9_peak_min >= 10 && r->pair_pct < 0.0 &&
                            r->v9_hist_n >= 2 && r->v9_p[1] < 0.0 && r->v9_p[2] < 0.0 &&
                            minute - r->v9_m[1] == 1 && minute - r->v9_m[2] == 2) {
                     v9_reason = 23;
-                } else if (!r->v9_early_done && sq60 && r->v9_entry_date == b->sdate &&
-                           r->contracts > 0 && !r->first_pending && elapsed30 &&
+                } else if (!r->v9_time_done && !r->v9_early_done && sq60 && r->v9_entry_date == b->sdate &&
+                           r->contracts > 0 && !r->first_pending && elapsed30 && r->v9_saw_m10 &&
                            r->v9_peak < 5.0 && r->pair_pct < 0.0 && hist5 &&
                            r->pair_pct < r->v9_p[5]) {
                     v9_reason = 20;
-                } else if (!r->v9_early_done && sq60 && r->v9_entry_date == b->sdate &&
-                           r->contracts > 0 && !r->first_pending && r->v9_peak >= 5.0 &&
+                } else if (!r->v9_time_done && !r->v9_early_done && sq60 && r->v9_entry_date == b->sdate &&
+                           r->contracts > 0 && !r->first_pending && full_ok && r->v9_peak >= 5.0 &&
                            r->v9_peak <= 10.0 && r->v9_peak_min >= 0 &&
                            minute - r->v9_peak_min >= 10 && r->pair_pct > 0.0 &&
                            r->pair_pct < r->v9_peak * 0.5) {
                     v9_reason = 21;
-                } else if (!r->v9_book_done && !r->first_pending && r->contracts > 0 &&
+                } else if (!r->v9_time_done && !r->v9_book_done && !r->first_pending && r->contracts > 0 &&
                            r->v9_book_flip && r->v9_book_min >= 0 && r->v9_book_date == b->sdate &&
                            minute - r->v9_book_min >= 15 && r->pair_pct < r->v9_peak * 0.5 &&
                            b->book_valid && b->flat_valid &&
@@ -685,17 +756,23 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                 if (v9_reason != 0) {
                     const int32_t qty = round_pct30(r->contracts);
                     if (qty > 0) {
-                        const char *name = v9_reason == 22 ? path_exit_name(r, "손실회복재악화30_삼선", "손실회복재악화30_압축", "손실회복재악화30")
+                        const char *name = v9_reason == 24 ? path_exit_name(r, "익절후장기압축30_삼선", "익절후장기압축30_압축", "익절후장기압축30")
+                            : v9_reason == 22 ? path_exit_name(r, "손실회복재악화30_삼선", "손실회복재악화30_압축", "손실회복재악화30")
                             : v9_reason == 23 ? path_exit_name(r, "소폭수익손실전환30_삼선", "소폭수익손실전환30_압축", "소폭수익손실전환30")
                             : v9_reason == 20 ? path_exit_name(r, "무수익시간부분청산_삼선", "무수익시간부분청산_압축", "무수익시간부분청산")
                             : v9_reason == 19 ? path_exit_name(r, "호가평탄반감30_삼선", "호가평탄반감30_압축", "호가평탄반감30")
                             : path_exit_name(r, "소폭수익보호부분청산_삼선", "소폭수익보호부분청산_압축", "소폭수익보호부분청산");
-                        if (v9_reason == 19) {
+                        if (v9_reason == 24) {
+                            r->v9_follow_done = 1;
+                        } else if (v9_reason == 19) {
                             r->v9_book_done = 1;
+                            r->v9_time_done = 1;
+                            r->v9_full_cut = 1;
                         } else {
                             r->v9_early_done = 1;
+                            r->v9_time_done = 1;
+                            r->v9_full_cut = 1;
                         }
-                        r->v9_full_cut = 1;
                         mark_order(r, TR_WPAIR_ORDER_EXIT_PART, qty, v9_reason, name);
                     }
                 } else if (!r->first_done && !rec_ok &&
@@ -781,7 +858,7 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
             r->low_pending = 0;
         }
         /* 60분 하락 저수익 또는 30분 이후 손실봉 70%의 즉시 부분청산. 이름은 같다. */
-        if (!r->exit_req && r->order_kind == TR_WPAIR_ORDER_NONE && !r->first_pending && !r->low_done && r->model_valid && synced &&
+        if (!r->exit_req && r->order_kind == TR_WPAIR_ORDER_NONE && !r->v9_time_done && !r->first_pending && !r->low_done && r->model_valid && synced &&
             r->entry_fut_bar >= 0 && r->entry_fut_date == b->sdate && d2_sync(b) &&
             ((r->entry_elapsed >= imax(0, cfg->low_wait_min) && r->low_drop_ok &&
               r->pair_pct <= cfg->low_pct) ||
@@ -811,8 +888,11 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
         if (r->low_pending && !r->exit_req) {
             mark_order(r, TR_WPAIR_ORDER_EXIT_PART, r->low_qty, 13,
                        path_exit_name(r, "시간저수익부분청산_삼선", "시간저수익부분청산_압축", "시간저수익부분청산"));
+            if (v12) {
+                r->v9_time_done = 1;
+            }
         }
-        if (!r->exit_req && !r->first_done && !r->first_pending && r->low_extra_ok &&
+        if (!v12 && !r->exit_req && !r->first_done && !r->first_pending && r->low_extra_ok &&
             !r->low_extra_done && r->order_kind == TR_WPAIR_ORDER_NONE &&
             b->d2_day_index > r->low_extra_bar && r->pair_pct <= cfg->low_pct) {
             int32_t extra = int_portion((double)r->contracts * 0.3);
@@ -892,8 +972,8 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                 b->stime < cfg->flat_time && b->next_sdate == b->sdate &&
                 b->next_stime < cfg->flat_time && cfg->capital > 0.0 && cfg->take_pct > 0.0 &&
                 (v12 || cfg->stop_pct > 0.0) &&
-                (!v12 || (long_entry_px_ok(cfg, b) && !r->high_block &&
-                          !(morning && r->morn_hi_any)))) {
+                (!v12 || (long_entry_px_ok(cfg, b) && !r->high_block && !r->range_block &&
+                          !r->range_bar_block && !(morning && r->morn_hi_any)))) {
                 meet = ranges_meet(cfg, b);
             }
         } else {
@@ -1114,6 +1194,12 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
     double gap_last = 0.0;
     int gap_has_prev = 0;
     int gap_has_today = 0;
+    double day_hi = 0.0;
+    double day_lo = 0.0;
+    double yday_hi = 0.0;
+    double yday_lo = 0.0;
+    int have_yday_range = 0;
+    int have_day_range = 0;
     tr_wsq_point_t *sq = 0;
 
     if (st == 0 || (nself > 0 && self == 0) || (nopp > 0 && opp == 0) || (nfut > 0 && fut == 0) ||
@@ -1155,11 +1241,25 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
                     gap_prev = gap_last;
                     gap_has_prev = 1;
                 }
+                if (have_day_range) {
+                    yday_hi = day_hi;
+                    yday_lo = day_lo;
+                    have_yday_range = 1;
+                }
                 gap_ymd = fut[fed].ymd;
                 gap_open = fut[fed].open;
+                day_hi = fut[fed].high;
+                day_lo = fut[fed].low;
+                have_day_range = 1;
                 gap_has_today = 1;
             }
             gap_last = fut[fed].close;
+            if (fut[fed].high > day_hi) {
+                day_hi = fut[fed].high;
+            }
+            if (fut[fed].low < day_lo) {
+                day_lo = fut[fed].low;
+            }
             memset(&in, 0, sizeof(in));
             in.bdate = fut[fed].ymd;
             in.day_index = fut[fed].day_index;
@@ -1217,6 +1317,13 @@ static int replay_body(tr_wpair_t *st, const tr_wpair_pxbar_t *self, size_t nsel
                 bar.d2_has_gap = 1;
                 bar.d2_prev_close = gap_prev;
                 bar.d2_day_open = gap_open;
+            }
+            if (have_yday_range && have_day_range && f->ymd == gap_ymd &&
+                day_hi > 0.0 && day_lo > 0.0 && yday_hi > 0.0 && yday_lo > 0.0 &&
+                day_hi >= day_lo && yday_hi >= yday_lo) {
+                bar.d2_range_valid = 1;
+                bar.d2_today_range = day_hi - day_lo;
+                bar.d2_yday_range = yday_hi - yday_lo;
             }
             if (sq != 0) {
                 bar.sq_ready = sq[fi].ready;

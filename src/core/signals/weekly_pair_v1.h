@@ -4,7 +4,8 @@
 /* 위클리 옵션 페어 주문.
  * 양매수 V9: reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매수.txt
  *   (2026-11-22). 손익은 신호 다음 1분 봉 시가. 공통손절은 -20 고정.
- *   호가·평탄 반감은 선물 호가와 WSF_KFDayFutureValuesV3_CO가 없어 내지 않는다.
+ *   호가·평탄 반감의 평탄선은 WSF_KSValues1mV1 곡선회귀선_평탄이다.
+ *   KFDayFutureValuesV3의 스윙연결 0·기세무시틱 1은 그 선을 바꾸지 않는다.
  * 양매수 V34: 같은 계열의 이전 사슬.
  * 양매도 V3:  reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매도.txt 704~1076.
  * V34와 양매도는 청산 사슬이 같고 V12 양매수는 1차 다음 봉부터 요일과 관계없이 2차 추적을 쓴다.
@@ -91,6 +92,9 @@ typedef struct {
     int d2_has_gap; /* 1이면 전일 종가와 당일 시가가 있다 */
     double d2_prev_close;
     double d2_day_open;
+    int d2_range_valid; /* 1이면 오늘·어제 고가-저가가 있다 */
+    double d2_today_range;
+    double d2_yday_range;
     int sq_ready; /* 압준비. 1이면 개장 30분 이후 매물대 폭이 있다 */
     double sq_ratio; /* 압비율. 최근 90봉 최대폭 대비 백분율 */
     int sq_release; /* 50% 미만 15봉 뒤 폭이 넓어진 30분 창 */
@@ -230,6 +234,15 @@ typedef struct {
     int v9_saw10;
     int v9_early_done;
     int v9_book_done;
+    int v9_time_done; /* 시간계열 30% 거래당 1회 */
+    int v9_saw_m10; /* 진입 후 합산 <= -10 */
+    int v9_follow_done;
+    int32_t v9_follow_min;
+    int64_t v9_follow_date;
+    int32_t v9_prev_qty;
+    int range_block;
+    int range_bar_block;
+    int64_t range_date;
     int v9_lead;
     int v9_book_with;
     int v9_book_flip;
@@ -277,6 +290,9 @@ typedef struct {
     int64_t hhmmss;
     int32_t day_index;
     double open, high, low, close, volume;
+    int book_on; /* 1이면 이 분봉의 매수·매도 잔량 합이 있다 */
+    double bid_qty;
+    double ask_qty;
 } tr_wpair_pxbar_t;
 
 /* 신호봉에서 새로 낸 주문. name은 리터럴이라 반환 뒤에도 유효하다. */

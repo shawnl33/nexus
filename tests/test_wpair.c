@@ -1646,6 +1646,7 @@ static void test_v12_width_price_and_release(void) {
 
 static void test_v9_stop_and_idle_cut(void);
 static void test_v9_book_flat_cut(void);
+static void test_v11_compress_take_and_range(void);
 
 int main(void) {
     test_defaults_and_reject();
@@ -1682,6 +1683,7 @@ int main(void) {
     test_v45_replay_long_entry();
     test_v9_stop_and_idle_cut();
     test_v9_book_flat_cut();
+    test_v11_compress_take_and_range();
     TR_TEST_SUMMARY();
 }
 
@@ -1704,7 +1706,7 @@ static void test_v9_stop_and_idle_cut(void) {
     fresh_v45(&st, TR_WPAIR_LONG);
     next = open_pos(&st, 1, TUE, 10.0, 40, &o);
     for (i = 0; i < 36; i++) {
-        b = bar_at(next + i, TUE, 100200 + (int64_t)i * 100, 42 + i, 10.0 - 0.02 * (i + 1));
+        b = bar_at(next + i, TUE, 100200 + (int64_t)i * 100, 42 + i, 8.95 - 0.01 * (i + 1));
         b.sq_ratio = 59.0;
         o = step(&st, b);
         if (o.order_kind != TR_WPAIR_ORDER_NONE) {
@@ -1743,4 +1745,35 @@ static void test_v9_book_flat_cut(void) {
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
     TR_CHECK(o.order_reason == 19);
     TR_CHECK(strcmp(o.order_name, "호가평탄반감30_삼선") == 0);
+}
+
+/* 진입 30분, 압축 50 미만, 합산 7%면 1차 익절. 갭 2%에 오늘 진폭이 더 크면 진입하지 않는다. */
+static void test_v11_compress_take_and_range(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+    int i;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, TUE, 2.5, 40, &o);
+    for (i = 0; i < 31; i++) {
+        b = bar_at(next + i, TUE, 100200 + (int64_t)i * 100, 42 + i, 2.90);
+        b.d3_close = 2.5;
+        b.sq_ratio = 49.0;
+        o = step(&st, b);
+        if (o.order_kind != TR_WPAIR_ORDER_NONE) break;
+    }
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 1);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    b = bar_at(1, TUE, 100000, 40, 2.5);
+    b.d2_prev_close = 100.0;
+    b.d2_day_open = 103.0;
+    b.d2_range_valid = 1;
+    b.d2_today_range = 12.0;
+    b.d2_yday_range = 8.0;
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
 }

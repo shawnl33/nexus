@@ -77,6 +77,24 @@ static int long_save_ok(const tr_wplot_config_t *cfg, const tr_wplot_bar_t *b) {
             return 0;
         }
     }
+    {
+        double rate = 0.0;
+        int have = 0;
+        if (b->d2_has_gap && b->d2_prev_close > 0.0 && b->d2_day_open > 0.0) {
+            rate = b->d2_day_open - b->d2_prev_close;
+            if (rate < 0.0) {
+                rate = -rate;
+            }
+            rate = rate / b->d2_prev_close * 100.0;
+            have = 1;
+        }
+        if (have && rate >= 2.0 && px < 2.15) {
+            return 0;
+        }
+        if (!(px < 4.2) && (!have || rate >= 2.0)) {
+            return 0;
+        }
+    }
     if (px < 3.0) {
         if (!(gap < sum * 0.125)) {
             return 0;
@@ -218,10 +236,28 @@ int tr_wplot_eval(tr_wplot_t *st, const tr_wplot_bar_t *bar, tr_wplot_out_t *out
             meet = bar->close - tol <= bar->d3_close && bar->close + tol >= bar->d3_close;
         }
     }
-    if (st->side == TR_WPLOT_LONG &&
-        (!long_save_ok(cfg, bar) || st->high_block ||
-         (bar->d2_day_index < imax(0, cfg->afternoon_switch) && st->morn_hi_any))) {
-        meet = 0;
+    if (st->side == TR_WPLOT_LONG) {
+        double rate = 0.0;
+        int have = bar->d2_has_gap && bar->d2_prev_close > 0.0 && bar->d2_day_open > 0.0;
+        if (st->range_date != bar->sdate) {
+            st->range_block = 0;
+            st->range_date = bar->sdate;
+        }
+        if (have) {
+            rate = bar->d2_day_open - bar->d2_prev_close;
+            if (rate < 0.0) {
+                rate = -rate;
+            }
+            rate = rate / bar->d2_prev_close * 100.0;
+            if (rate >= 2.0 && bar->d2_range_valid && bar->d2_today_range > bar->d2_yday_range) {
+                st->range_block = 1;
+            }
+        }
+        if (!long_save_ok(cfg, bar) || st->high_block || st->range_block ||
+            (have && rate >= 2.0 && !bar->d2_range_valid) ||
+            (bar->d2_day_index < imax(0, cfg->afternoon_switch) && st->morn_hi_any)) {
+            meet = 0;
+        }
     }
     if (track && !st->valid && meet && bar->close > 0.0 &&
         (st->side != TR_WPLOT_LONG || (bar->close > 1.5 && bar->d3_close > 1.5))) {

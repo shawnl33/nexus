@@ -59,6 +59,9 @@ typedef struct {
     int d2_has_gap;
     double d2_prev_close;
     double d2_day_open;
+    int d2_range_valid;
+    double d2_today_range;
+    double d2_yday_range;
     int sq_ready;
     double sq_ratio;
     int sq_release;
@@ -84,6 +87,8 @@ typedef struct {
     int32_t morn_hi_self;
     int32_t morn_hi_opp;
     int high_block;
+    int range_block;
+    int64_t range_date;
     int morn_hi_any; /* 오전 고가 20 초과가 한 봉이라도 있으면 1 */
     int32_t open_target_min; /* 만남 시각의 다음 1분. 합산수익률 분모 */
     int64_t open_date;
