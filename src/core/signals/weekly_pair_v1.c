@@ -102,6 +102,8 @@ static const char *exit_all_name(int reason, int v12) {
         return v12 ? "2차추적청산" : "만기2차추적청산";
     case 16:
         return "잔량1차절반손절";
+    case 18:
+        return "익절후압축손실청산";
     default:
         return "기타청산";
     }
@@ -180,6 +182,113 @@ static int minute_of(int64_t hhmmss) {
     int64_t hour = hhmmss / 10000;
     int64_t minute = (hhmmss / 100) % 100;
     return (int)(hour * 60 + minute);
+}
+
+/* 잔량 30% 반올림. 최소 1, 최대 잔량. 2→1, 3→1, 5→2. */
+static int32_t round_pct30(int32_t qty) {
+    int32_t rounded;
+    if (qty < 1) {
+        return 0;
+    }
+    rounded = (int32_t)((double)qty * 0.3 + 0.5);
+    if (rounded < 1) {
+        rounded = 1;
+    }
+    if (rounded > qty) {
+        rounded = qty;
+    }
+    return rounded;
+}
+
+static void v9_reset(tr_wpair_rt *r, int32_t qty, int minute, int64_t date) {
+    memset(r->v9_p, 0, sizeof(r->v9_p));
+    memset(r->v9_m, 0, sizeof(r->v9_m));
+    r->v9_saw10 = 0;
+    r->v9_early_done = 0;
+    r->v9_book_done = 0;
+    r->v9_lead = 0;
+    r->v9_book_with = 0;
+    r->v9_book_flip = 0;
+    r->v9_book_min = -1;
+    r->v9_book_date = 0;
+    r->v9_full_cut = 0;
+    r->v9_recovering = 0;
+    r->v9_full_qty = qty;
+    r->v9_entry_min = minute;
+    r->v9_entry_date = date;
+    r->v9_peak = 0.0;
+    r->v9_peak_min = -1;
+    r->v9_trough = 0.0;
+    r->v9_recover_high = 0.0;
+    r->v9_obs = 0;
+    r->v9_loss = 0;
+    r->v9_hist_n = 0;
+    r->v9_last_bar = -1;
+    r->v9_hist_date = 0;
+}
+
+/* 이전 유효봉을 [1]..[5]에 둔 뒤 이번 합산수익률을 기록한다. */
+static void v9_observe(tr_wpair_rt *r, const tr_wpair_bar_t *b, double pct) {
+    int minute = minute_of(b->stime);
+    int i;
+    if (r->v9_last_bar >= 0 && b->sdate == r->v9_hist_date && b->d2_day_index == r->v9_last_bar + 1) {
+        for (i = 5; i >= 1; i--) {
+            r->v9_p[i] = r->v9_p[i - 1];
+            r->v9_m[i] = r->v9_m[i - 1];
+        }
+        if (r->v9_hist_n < 5) {
+            r->v9_hist_n++;
+        }
+    } else if (r->v9_last_bar >= 0 && b->d2_day_index != r->v9_last_bar) {
+        r->v9_hist_n = 0;
+    }
+    r->v9_p[0] = pct;
+    r->v9_m[0] = minute;
+    r->v9_last_bar = b->d2_day_index;
+    r->v9_hist_date = b->sdate;
+    if (pct > r->v9_peak) {
+        r->v9_peak = pct;
+        r->v9_peak_min = minute;
+    }
+    if (!r->first_done && pct >= 10.0) {
+        r->v9_saw10 = 1;
+    }
+    r->v9_obs++;
+    if (pct < 0.0) {
+        r->v9_loss++;
+    }
+    if (pct < r->v9_trough) {
+        r->v9_trough = pct;
+        r->v9_recover_high = pct;
+        r->v9_recovering = 0;
+    } else if (r->v9_trough < 0.0) {
+        if (!r->v9_recovering && pct - r->v9_trough >= 5.0) {
+            r->v9_recovering = 1;
+            r->v9_recover_high = pct;
+        }
+        if (r->v9_recovering) {
+            r->v9_recover_high = dmax(r->v9_recover_high, pct);
+        }
+    }
+    if (r->v9_book_min < 0 && pct > 10.0) {
+        r->v9_book_min = minute;
+        r->v9_book_date = b->sdate;
+        if (b->close > r->rec_meet && b->close > b->d3_close) {
+            r->v9_lead = 1;
+        } else if (b->d3_close > r->rec_meet && b->d3_close > b->close) {
+            r->v9_lead = -1;
+        }
+    }
+    if (r->v9_book_min >= 0 && r->v9_book_date == b->sdate && b->book_valid) {
+        if ((r->v9_lead == 1 && b->book_score > 0.0) || (r->v9_lead == -1 && b->book_score < 0.0)) {
+            r->v9_book_with = 1;
+            r->v9_book_flip = 0;
+        }
+        if (r->v9_book_with &&
+            ((r->v9_lead == 1 && b->book_score < 0.0) || (r->v9_lead == -1 && b->book_score > 0.0))) {
+            r->v9_book_flip = 1;
+        }
+    }
 }
 
 static double meet_px(const tr_wpair_config_t *cfg, const tr_wpair_bar_t *b) {
@@ -329,6 +438,9 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
         r->holding = 1;
         r->three40_watch = 0;
         r->three40_hit = 0;
+        if (v12) {
+            v9_reset(r, r->contracts, minute_of(b->stime), b->sdate);
+        }
         r->entry_pending = 0;
         r->rec_bar = -1;
         r->rec_fire_bar = -1;
@@ -497,13 +609,12 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                     r->three40_hit = 1;
                 }
             }
+            if (v12 && d2_sync(b)) {
+                v9_observe(r, b, r->pair_pct);
+            }
             {
-                /* V14: 삼선을 봤고 40에 닿은 적이 없으며 진입 70분 미만이면 공통 손절은 -25. */
-                double stop = cfg->stop_pct;
-                if (v12 && r->three40_watch && !r->three40_hit && r->entry_fut_bar >= 0 &&
-                    r->entry_fut_date == b->sdate && d2_sync(b) && r->entry_elapsed < 70) {
-                    stop = 25.0;
-                }
+                /* V9: 양매수 공통손절은 -20 고정. 삼선 40 미도달 -25 예외는 없다. */
+                double stop = v12 ? 20.0 : cfg->stop_pct;
                 if (r->pair_pct <= -stop) {
                     r->exit_req = 1;
                     r->exit_reason = 2;
@@ -512,7 +623,29 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
             if (r->exit_req) {
                 /* 위에서 손절을 정했다. 아래 사슬은 손절이 아닐 때만 탄다. */
             } else if (v12) {
-                if (cfg->split_exit == 1 && r->first_done && !r->first_pending &&
+                const int minute = minute_of(b->stime);
+                const int sq60 = b->sq_ready == 1 && b->sq_ratio < 60.0;
+                const int since_entry = r->v9_entry_date == b->sdate && r->v9_entry_min >= 0
+                                             ? minute - r->v9_entry_min
+                                             : -1;
+                const int elapsed30 = since_entry >= 30;
+                const int hist5 = r->v9_hist_n >= 5 && minute - r->v9_m[5] == 5;
+                int full_ok;
+                int v9_reason = 0;
+                if (r->v9_full_qty > 0 && r->contracts < r->v9_full_qty) {
+                    r->v9_full_cut = 1;
+                }
+                if (r->first_done || r->low_done || r->low_extra_done || r->v9_early_done) {
+                    r->v9_full_cut = 1;
+                }
+                full_ok = r->v9_full_qty > 0 && r->contracts == r->v9_full_qty &&
+                          !r->v9_full_cut && !r->first_pending && !r->low_pending;
+                if (r->v9_saw10 && r->first_done && !r->first_pending && r->contracts > 0 &&
+                    r->contracts < r->first_prev_qty && b->sq_ready == 1 && b->sq_ratio < 40.0 &&
+                    r->pair_pct < 0.0) {
+                    r->exit_req = 1;
+                    r->exit_reason = 18;
+                } else if (cfg->split_exit == 1 && r->first_done && !r->first_pending &&
                     r->first_basis_pct > 0.0 && r->pair_pct <= -r->first_basis_pct * 0.5) {
                     r->exit_req = 1;
                     r->exit_reason = 16;
@@ -520,6 +653,51 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
                            r->trail_active && r->pair_pct <= r->trail_protect) {
                     r->exit_req = 1;
                     r->exit_reason = 14;
+                } else if (!r->v9_early_done && elapsed30 && sq60 && full_ok && r->v9_obs > 0 &&
+                           r->v9_loss * 100 >= r->v9_obs * 70 && r->v9_recovering &&
+                           r->pair_pct < 0.0 && r->v9_recover_high - r->pair_pct >= 2.0) {
+                    v9_reason = 22;
+                } else if (!r->v9_early_done && elapsed30 && sq60 && full_ok &&
+                           r->v9_peak >= 5.0 && r->v9_peak <= 10.0 && r->v9_peak_min >= 0 &&
+                           minute - r->v9_peak_min >= 10 && r->pair_pct < 0.0 &&
+                           r->v9_hist_n >= 2 && r->v9_p[1] < 0.0 && r->v9_p[2] < 0.0 &&
+                           minute - r->v9_m[1] == 1 && minute - r->v9_m[2] == 2) {
+                    v9_reason = 23;
+                } else if (!r->v9_early_done && sq60 && r->v9_entry_date == b->sdate &&
+                           r->contracts > 0 && !r->first_pending && elapsed30 &&
+                           r->v9_peak < 5.0 && r->pair_pct < 0.0 && hist5 &&
+                           r->pair_pct < r->v9_p[5]) {
+                    v9_reason = 20;
+                } else if (!r->v9_early_done && sq60 && r->v9_entry_date == b->sdate &&
+                           r->contracts > 0 && !r->first_pending && r->v9_peak >= 5.0 &&
+                           r->v9_peak <= 10.0 && r->v9_peak_min >= 0 &&
+                           minute - r->v9_peak_min >= 10 && r->pair_pct > 0.0 &&
+                           r->pair_pct < r->v9_peak * 0.5) {
+                    v9_reason = 21;
+                } else if (!r->v9_book_done && !r->first_pending && r->contracts > 0 &&
+                           r->v9_book_flip && r->v9_book_min >= 0 && r->v9_book_date == b->sdate &&
+                           minute - r->v9_book_min >= 15 && r->pair_pct < r->v9_peak * 0.5 &&
+                           b->book_valid && b->flat_valid &&
+                           ((r->v9_lead == 1 && b->book_score < 0.0 && b->flat_pos < 0 && b->flat_slope < 0) ||
+                            (r->v9_lead == -1 && b->book_score > 0.0 && b->flat_pos > 0 && b->flat_slope > 0))) {
+                    v9_reason = 19;
+                }
+                if (v9_reason != 0) {
+                    const int32_t qty = round_pct30(r->contracts);
+                    if (qty > 0) {
+                        const char *name = v9_reason == 22 ? path_exit_name(r, "손실회복재악화30_삼선", "손실회복재악화30_압축", "손실회복재악화30")
+                            : v9_reason == 23 ? path_exit_name(r, "소폭수익손실전환30_삼선", "소폭수익손실전환30_압축", "소폭수익손실전환30")
+                            : v9_reason == 20 ? path_exit_name(r, "무수익시간부분청산_삼선", "무수익시간부분청산_압축", "무수익시간부분청산")
+                            : v9_reason == 19 ? path_exit_name(r, "호가평탄반감30_삼선", "호가평탄반감30_압축", "호가평탄반감30")
+                            : path_exit_name(r, "소폭수익보호부분청산_삼선", "소폭수익보호부분청산_압축", "소폭수익보호부분청산");
+                        if (v9_reason == 19) {
+                            r->v9_book_done = 1;
+                        } else {
+                            r->v9_early_done = 1;
+                        }
+                        r->v9_full_cut = 1;
+                        mark_order(r, TR_WPAIR_ORDER_EXIT_PART, qty, v9_reason, name);
+                    }
                 } else if (!r->first_done && !rec_ok &&
                            (r->rec_fire_bar < 0 || b->d2_day_index > r->rec_fire_bar) &&
                            second_time_valid &&
@@ -603,7 +781,7 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
             r->low_pending = 0;
         }
         /* 60분 하락 저수익 또는 30분 이후 손실봉 70%의 즉시 부분청산. 이름은 같다. */
-        if (!r->exit_req && !r->first_pending && !r->low_done && r->model_valid && synced &&
+        if (!r->exit_req && r->order_kind == TR_WPAIR_ORDER_NONE && !r->first_pending && !r->low_done && r->model_valid && synced &&
             r->entry_fut_bar >= 0 && r->entry_fut_date == b->sdate && d2_sync(b) &&
             ((r->entry_elapsed >= imax(0, cfg->low_wait_min) && r->low_drop_ok &&
               r->pair_pct <= cfg->low_pct) ||
@@ -713,7 +891,7 @@ static void run_bar(tr_wpair_t *st, const tr_wpair_bar_t *b) {
             if (period_ok && synced && three_ok && b->d2_day_index >= imax(0, cfg->entry_start_bar) &&
                 b->stime < cfg->flat_time && b->next_sdate == b->sdate &&
                 b->next_stime < cfg->flat_time && cfg->capital > 0.0 && cfg->take_pct > 0.0 &&
-                cfg->stop_pct > 0.0 &&
+                (v12 || cfg->stop_pct > 0.0) &&
                 (!v12 || (long_entry_px_ok(cfg, b) && !r->high_block &&
                           !(morning && r->morn_hi_any)))) {
                 meet = ranges_meet(cfg, b);
@@ -841,6 +1019,9 @@ int tr_wpair_init(tr_wpair_t *st, int side, const tr_wpair_config_t *cfg) {
     st->now.open_target_min = -1;
     st->now.rec_bar = -1;
     st->now.rec_fire_bar = -1;
+    st->now.v9_peak_min = -1;
+    st->now.v9_entry_min = -1;
+    st->now.v9_last_bar = -1;
     st->now.order_name = "";
     return 0;
 }

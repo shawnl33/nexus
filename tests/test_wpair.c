@@ -1345,7 +1345,7 @@ static void test_v45_disables_v34_residual_exits(void) {
     o = step(&st, b);
     TR_CHECK(o.self_resid_pct < 0.0);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_NONE);
-    b = bar_at(next + 1, THU, 110300, 43, 7.9);
+    b = bar_at(next + 1, THU, 110300, 43, 6.0);
     b.d3_close = 10.0;
     o = step(&st, b);
     TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
@@ -1644,6 +1644,9 @@ static void test_v12_width_price_and_release(void) {
     TR_CHECK(o.used_today == 0);
 }
 
+static void test_v9_stop_and_idle_cut(void);
+static void test_v9_book_flat_cut(void);
+
 int main(void) {
     test_defaults_and_reject();
     test_long_entry_filters();
@@ -1677,5 +1680,67 @@ int main(void) {
     test_v45_disables_v34_residual_exits();
     test_v45_low_cut_unchanged();
     test_v45_replay_long_entry();
+    test_v9_stop_and_idle_cut();
+    test_v9_book_flat_cut();
     TR_TEST_SUMMARY();
+}
+
+/* V9: -22는 손절, -25 예외는 없다. 30분·압축 60 미만·최고 5 미만의 하락은 잔량 30%. */
+static void test_v9_stop_and_idle_cut(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+    int i;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, TUE, 10.0, 40, &o);
+    b = bar_at(next, TUE, 100200, 42, 7.8);
+    o = step(&st, b);
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_ALL);
+    TR_CHECK(o.order_reason == 2);
+    TR_CHECK(strcmp(o.order_name, "합산손절") == 0);
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, TUE, 10.0, 40, &o);
+    for (i = 0; i < 36; i++) {
+        b = bar_at(next + i, TUE, 100200 + (int64_t)i * 100, 42 + i, 10.0 - 0.02 * (i + 1));
+        b.sq_ratio = 59.0;
+        o = step(&st, b);
+        if (o.order_kind != TR_WPAIR_ORDER_NONE) {
+            break;
+        }
+    }
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 20);
+    TR_CHECK(o.order_qty == 1);
+    TR_CHECK(strcmp(o.order_name, "무수익시간부분청산_삼선") == 0);
+}
+
+/* 호가가 순방향이었다가 뒤집히고 평탄 카운트가 같이 반대로 가면 잔량 30%. */
+static void test_v9_book_flat_cut(void) {
+    tr_wpair_t st;
+    tr_wpair_bar_t b;
+    tr_wpair_out_t o;
+    int32_t next;
+    int i;
+
+    fresh_v45(&st, TR_WPAIR_LONG);
+    next = open_pos(&st, 1, TUE, 2.5, 40, &o);
+    for (i = 0; i < 16; i++) {
+        b = bar_at(next + i, TUE, 100200 + (int64_t)i * 100, 42 + i, i == 15 ? 2.7 : 3.1);
+        b.d3_close = 2.5;
+        b.book_valid = 1;
+        b.book_score = i == 15 ? -10.0 : 10.0;
+        b.flat_valid = 1;
+        b.flat_pos = i == 15 ? -1 : 1;
+        b.flat_slope = i == 15 ? -1 : 1;
+        o = step(&st, b);
+        if (o.order_kind != TR_WPAIR_ORDER_NONE) {
+            break;
+        }
+    }
+    TR_CHECK(o.order_kind == TR_WPAIR_ORDER_EXIT_PART);
+    TR_CHECK(o.order_reason == 19);
+    TR_CHECK(strcmp(o.order_name, "호가평탄반감30_삼선") == 0);
 }

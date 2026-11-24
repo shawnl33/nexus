@@ -2,9 +2,9 @@
 #define TR_WEEKLY_PAIR_V1_H
 
 /* 위클리 옵션 페어 주문.
- * 양매수 V14: reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매수.txt
- *   (WSF-WEEKLY-20261117-V14). 손익은 신호 다음 1분 봉 시가. 전구간 종가간격,
- *   삼선 40 미도달이면서 70분 미만일 때만 손절 -25, 손실봉 70% 부분청산.
+ * 양매수 V9: reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매수.txt
+ *   (2026-11-22). 손익은 신호 다음 1분 봉 시가. 공통손절은 -20 고정.
+ *   호가·평탄 반감은 선물 호가와 WSF_KFDayFutureValuesV3_CO가 없어 내지 않는다.
  * 양매수 V34: 같은 계열의 이전 사슬.
  * 양매도 V3:  reference/yeslanguage/signals/#우드스탁_위클리_페어시스템_양매도.txt 704~1076.
  * V34와 양매도는 청산 사슬이 같고 V12 양매수는 1차 다음 봉부터 요일과 관계없이 2차 추적을 쓴다.
@@ -94,6 +94,11 @@ typedef struct {
     int sq_ready; /* 압준비. 1이면 개장 30분 이후 매물대 폭이 있다 */
     double sq_ratio; /* 압비율. 최근 90봉 최대폭 대비 백분율 */
     int sq_release; /* 50% 미만 15봉 뒤 폭이 넓어진 30분 창 */
+    int flat_valid; /* 평탄 카운트 유효. 0이면 호가 반감 청산 불가 */
+    int flat_pos; /* 보호_위치Cnt */
+    int flat_slope; /* 보호_기울기Cnt */
+    int book_valid; /* 호가유효. 호가 잔량이 없는 봉은 0 */
+    double book_score; /* 호가방향점수 */
 } tr_wpair_bar_t;
 
 typedef struct {
@@ -221,6 +226,31 @@ typedef struct {
     int high_block; /* 오전 고가 20 초과가 한쪽이라도 3봉이면 그날 진입 금지 */
     int morn_hi_any; /* 오전 고가 20 초과가 한 봉이라도 있으면 오전 진입 금지, 오후 삼선 상한 70 */
     int entry_path; /* V12 양매수 1 삼선, 2 압축해제. 0이면 이전 주문명 */
+    /* V9. 호가 반감(사유 19)은 계산하지 않는다. */
+    int v9_saw10;
+    int v9_early_done;
+    int v9_book_done;
+    int v9_lead;
+    int v9_book_with;
+    int v9_book_flip;
+    int32_t v9_book_min;
+    int64_t v9_book_date;
+    int v9_full_cut;
+    int v9_recovering;
+    int32_t v9_full_qty;
+    int32_t v9_entry_min;
+    int64_t v9_entry_date;
+    double v9_peak;
+    int32_t v9_peak_min;
+    double v9_trough;
+    double v9_recover_high;
+    int32_t v9_obs;
+    int32_t v9_loss;
+    int v9_hist_n;
+    int32_t v9_last_bar;
+    int64_t v9_hist_date;
+    double v9_p[6];
+    int32_t v9_m[6];
 } tr_wpair_rt;
 
 typedef struct {
